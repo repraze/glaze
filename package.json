@@ -1,0 +1,34 @@
+{
+    "name": "@repraze/glaze",
+    "version": "0.1.0",
+    "description": "Performant WebGPU rendering engine with class-based bindings and composable render passes",
+    "type": "module",
+    "author": "Thomas Dubosc (https://repraze.com)",
+    "license": "MIT",
+    "scripts": {
+        "typecheck": "tsc --noEmit"
+    },
+    "dependencies": {
+        "gl-matrix": "^3.4.4"
+    },
+    "devDependencies": {
+        "@types/node": "^25.1.0",
+        "@webgpu/types": "^0.1.70",
+        "typescript": "^6.0.3"
+    },
+    "exports": {
+        ".": "./src/index.ts",
+        "./renderer": "./src/renderer.ts",
+        "./pass": "./src/pass.ts",
+        "./passes/shader-pass": "./src/passes/shader-pass.ts",
+        "./passes/deferred-scene-pass": "./src/passes/deferred-scene-pass.ts",
+        "./scene": "./src/scene/scene.ts",
+        "./scene/entity": "./src/scene/entity.ts",
+        "./scene/mesh": "./src/scene/mesh.ts",
+        "./scene/light": "./src/scene/light.ts",
+        "./scene/camera": "./src/scene/camera.ts",
+        "./geometry": "./src/geometry/geometry.ts",
+        "./geometry/shapes": "./src/geometry/shapes.ts",
+        "./material": "./src/material/material.ts"
+    }
+}
