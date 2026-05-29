@@ -1,14 +1,10 @@
+import {Texture} from "../texture";
+
 // ─── Base ─────────────────────────────────────────────────────────────────────
 
 export abstract class Material {
     /** Unique type tag used for pipeline sharing. */
     abstract readonly type: string;
-
-    /**
-     * Return (and cache) a GPUBindGroup for this material's uniform data.
-     * The pass supplies the `bindGroupLayout` that describes the expected bindings.
-     */
-    abstract getOrCreateBindGroup(device: GPUDevice, bindGroupLayout: GPUBindGroupLayout): GPUBindGroup;
 
     /** Release GPU resources. */
     destroy(): void {}
@@ -42,9 +38,11 @@ export class StandardMaterial extends Material {
     roughness: number;
     metallic: number;
     emissive: [number, number, number, number];
+    albedoMap: Texture | null = null;
 
     private buffer: GPUBuffer | null = null;
     private bindGroup: GPUBindGroup | null = null;
+    private _boundAlbedoMap: Texture | null = null;
     private dirty = true;
 
     constructor({
@@ -65,7 +63,12 @@ export class StandardMaterial extends Material {
         this.dirty = true;
     }
 
-    getOrCreateBindGroup(device: GPUDevice, bindGroupLayout: GPUBindGroupLayout): GPUBindGroup {
+    getOrCreateBindGroup(
+        device: GPUDevice,
+        bindGroupLayout: GPUBindGroupLayout,
+        defaultAlbedoView: GPUTextureView,
+        sampler: GPUSampler,
+    ): GPUBindGroup {
         if (!this.buffer) {
             this.buffer = device.createBuffer({
                 label: "StandardMaterial",
@@ -92,11 +95,22 @@ export class StandardMaterial extends Material {
             this.dirty = false;
         }
 
+        // Recreate bind group when albedoMap changes.
+        if (this.albedoMap !== this._boundAlbedoMap) {
+            this.bindGroup = null;
+            this._boundAlbedoMap = this.albedoMap;
+        }
+
         if (!this.bindGroup) {
+            const albedoView = this.albedoMap?.view ?? defaultAlbedoView;
             this.bindGroup = device.createBindGroup({
                 label: "StandardMaterial",
                 layout: bindGroupLayout,
-                entries: [{ binding: 0, resource: { buffer: this.buffer } }],
+                entries: [
+                    { binding: 0, resource: { buffer: this.buffer } },
+                    { binding: 1, resource: albedoView },
+                    { binding: 2, resource: sampler },
+                ],
             });
         }
 
@@ -107,5 +121,6 @@ export class StandardMaterial extends Material {
         this.buffer?.destroy();
         this.buffer = null;
         this.bindGroup = null;
+        this._boundAlbedoMap = null;
     }
 }

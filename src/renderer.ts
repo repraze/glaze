@@ -144,6 +144,7 @@ export class Renderer {
         if (this.animationId !== null) {
             cancelAnimationFrame(this.animationId);
         }
+        this.context.unconfigure();
         for (const textures of this.passTextures.values()) {
             for (const mt of textures) {
                 mt.texture.destroy();

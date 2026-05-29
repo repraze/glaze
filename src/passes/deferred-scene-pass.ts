@@ -33,7 +33,9 @@ struct MaterialUniforms {
 
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
 @group(1) @binding(0) var<uniform> model:  ModelUniforms;
-@group(2) @binding(0) var<uniform> mat:    MaterialUniforms;
+@group(2) @binding(0) var<uniform> mat:     MaterialUniforms;
+@group(2) @binding(1) var albedoMap:         texture_2d<f32>;
+@group(2) @binding(2) var albedoSampler:     sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -63,14 +65,17 @@ struct GBufferOutput {
     @location(0) albedo:   vec4<f32>,
     @location(1) normal:   vec4<f32>,
     @location(2) worldPos: vec4<f32>,
+    @location(3) emissive: vec4<f32>,
 };
 
 @fragment
 fn fs_main(input: VertexOutput) -> GBufferOutput {
+    let texAlbedo = textureSample(albedoMap, albedoSampler, input.uv).rgb;
     var out: GBufferOutput;
-    out.albedo   = vec4<f32>(mat.albedo.rgb + mat.emissive.rgb, 1.0);
-    out.normal   = vec4<f32>(normalize(input.worldNormal), 0.0);
-    out.worldPos = vec4<f32>(input.worldPos, 1.0);
+    out.albedo   = vec4<f32>(mat.albedo.rgb * texAlbedo, 1.0);
+    out.normal   = vec4<f32>(normalize(input.worldNormal), mat.roughness);
+    out.worldPos = vec4<f32>(input.worldPos, mat.metallic);
+    out.emissive = vec4<f32>(mat.emissive.rgb, 0.0);
     return out;
 }
 `;
@@ -125,10 +130,11 @@ struct LightingUniforms {
     backgroundColor:    vec4<f32>,
 };
 
-@group(0) @binding(0) var albedoTex:  texture_2d<f32>;
-@group(0) @binding(1) var normalTex:  texture_2d<f32>;
-@group(0) @binding(2) var posTex:     texture_2d<f32>;
+@group(0) @binding(0) var albedoTex:    texture_2d<f32>;
+@group(0) @binding(1) var normalTex:    texture_2d<f32>;
+@group(0) @binding(2) var posTex:       texture_2d<f32>;
 @group(0) @binding(3) var<uniform> lighting: LightingUniforms;
+@group(0) @binding(4) var emissiveTex: texture_2d<f32>;
 
 struct QuadInput {
     @builtin(position) pos: vec4<f32>,
@@ -149,56 +155,98 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> QuadInput {
     return out;
 }
 
+const PI: f32 = 3.14159265358979;
+
+fn D_GGX(NdotH: f32, roughness: f32) -> f32 {
+    let a  = roughness * roughness;
+    let a2 = a * a;
+    let d  = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
+}
+
+fn G_Smith(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
+    let r  = roughness + 1.0;
+    let k  = (r * r) / 8.0;
+    let gv = NdotV / (NdotV * (1.0 - k) + k);
+    let gl = NdotL / (NdotL * (1.0 - k) + k);
+    return gv * gl;
+}
+
+fn F_Schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
+    return F0 + (vec3<f32>(1.0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+fn brdf_direct(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, albedo: vec3<f32>, roughness: f32, metallic: f32, F0: vec3<f32>, NdotV: f32) -> vec3<f32> {
+    let H     = normalize(V + L);
+    let NdotL = max(dot(N, L), 0.0);
+    let NdotH = max(dot(N, H), 0.0);
+    let HdotV = max(dot(H, V), 0.0);
+    let D = D_GGX(NdotH, roughness);
+    let G = G_Smith(NdotV, NdotL, roughness);
+    let F = F_Schlick(HdotV, F0);
+    let specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
+    let diffuse  = (1.0 - metallic) * albedo / PI;
+    return (diffuse + specular) * NdotL;
+}
+
 @fragment
 fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
-    // textureLoad reads at exact integer pixel coords — correct for a G-buffer pass.
-    let coord    = vec2<i32>(i32(input.pos.x), i32(input.pos.y));
-    let albedo4  = textureLoad(albedoTex, coord, 0);
+    let coord   = vec2<i32>(i32(input.pos.x), i32(input.pos.y));
+    let albedo4 = textureLoad(albedoTex, coord, 0);
     // Background pixel: albedo alpha is 0 (G-buffer cleared to [0,0,0,0]).
     if (albedo4.a < 0.5) {
         return lighting.backgroundColor;
     }
-    let albedo   = albedo4.rgb;
-    let normal   = normalize(textureLoad(normalTex, coord, 0).xyz);
-    let worldPos = textureLoad(posTex, coord, 0).xyz;
+    let albedo       = albedo4.rgb;
+    let normalSample = textureLoad(normalTex, coord, 0);
+    let N            = normalize(normalSample.xyz);
+    let roughness    = clamp(normalSample.w, 0.05, 1.0);
+    let posSample    = textureLoad(posTex, coord, 0);
+    let worldPos     = posSample.xyz;
+    let metallic     = clamp(posSample.w, 0.0, 1.0);
+
+    let V    = normalize(lighting.cameraPosition.xyz - worldPos);
+    let NdotV = max(dot(N, V), 0.001);
+    let F0   = mix(vec3<f32>(0.04), albedo, metallic);
 
     var colour = lighting.ambientColor.rgb * albedo;
 
     // Directional lights
     for (var i = 0u; i < lighting.counts.x; i++) {
-        let dl      = lighting.directionalLights[i];
-        let lightDir = normalize(-dl.direction.xyz);
-        let diff    = max(dot(normal, lightDir), 0.0);
-        colour += albedo * dl.colorIntensity.rgb * (dl.colorIntensity.w * diff);
+        let dl = lighting.directionalLights[i];
+        let L  = normalize(-dl.direction.xyz);
+        colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
+                  * dl.colorIntensity.rgb * dl.colorIntensity.w;
     }
 
     // Point lights
     for (var i = 0u; i < lighting.counts.y; i++) {
-        let pl       = lighting.pointLights[i];
-        let toLight  = pl.position.xyz - worldPos;
-        let dist     = length(toLight);
-        let lightDir = toLight / dist;
-        let attn     = clamp(1.0 - (dist / pl.position.w), 0.0, 1.0);
-        let diff     = max(dot(normal, lightDir), 0.0);
-        colour += albedo * pl.colorIntensity.rgb * (pl.colorIntensity.w * diff * attn * attn);
+        let pl      = lighting.pointLights[i];
+        let toLight = pl.position.xyz - worldPos;
+        let dist    = length(toLight);
+        let L       = toLight / dist;
+        let attn    = clamp(1.0 - dist / pl.position.w, 0.0, 1.0);
+        colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
+                  * pl.colorIntensity.rgb * (pl.colorIntensity.w * attn * attn);
     }
 
     // Spot lights
     for (var i = 0u; i < lighting.counts.z; i++) {
-        let sl       = lighting.spotLights[i];
-        let toLight  = sl.position.xyz - worldPos;
-        let dist     = length(toLight);
-        let lightDir = toLight / dist;
-        let attn     = clamp(1.0 - (dist / sl.position.w), 0.0, 1.0);
-        let diff     = max(dot(normal, lightDir), 0.0);
-        let theta    = dot(lightDir, normalize(-sl.direction.xyz));
+        let sl      = lighting.spotLights[i];
+        let toLight = sl.position.xyz - worldPos;
+        let dist    = length(toLight);
+        let L       = toLight / dist;
+        let attn     = clamp(1.0 - dist / sl.position.w, 0.0, 1.0);
+        let theta    = dot(L, normalize(-sl.direction.xyz));
         let spotAttn = clamp(
             (theta - sl.angles.y) / (sl.angles.x - sl.angles.y),
             0.0, 1.0
         );
-        colour += albedo * sl.colorIntensity.rgb * (sl.colorIntensity.w * diff * attn * attn * spotAttn);
+        colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
+                  * sl.colorIntensity.rgb * (sl.colorIntensity.w * attn * attn * spotAttn);
     }
 
+    colour += textureLoad(emissiveTex, coord, 0).rgb;
     return vec4<f32>(colour, 1.0);
 }
 `;
@@ -235,6 +283,7 @@ export class DeferredScenePass extends Pass {
     private albedoTex!: GPUTexture;
     private normalTex!: GPUTexture;
     private posTex!: GPUTexture;
+    private emissiveTex!: GPUTexture;
     private depthTex!: GPUTexture;
 
     // Pipelines and layouts
@@ -253,6 +302,11 @@ export class DeferredScenePass extends Pass {
     private lightingBuffer!: GPUBuffer;
     private lightingBindGroup: GPUBindGroup | null = null;
     private lightingBindGroupLayout!: GPUBindGroupLayout;
+
+    // Default material texture resources
+    private defaultAlbedoTex!: GPUTexture;
+    private defaultAlbedoView!: GPUTextureView;
+    private texSampler!: GPUSampler;
 
     // Cached mesh GPU resources
     private meshCache = new Map<Mesh, MeshGPUResources>();
@@ -312,7 +366,9 @@ export class DeferredScenePass extends Pass {
         this.albedoTex?.destroy();
         this.normalTex?.destroy();
         this.posTex?.destroy();
+        this.emissiveTex?.destroy();
         this.depthTex?.destroy();
+        this.defaultAlbedoTex?.destroy();
         this.cameraBuffer?.destroy();
         this.lightingBuffer?.destroy();
         for (const r of this.meshCache.values()) {
@@ -340,7 +396,28 @@ export class DeferredScenePass extends Pass {
 
         this.materialBindGroupLayout = device.createBindGroupLayout({
             label: "DeferredScene:materialLayout",
-            entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }],
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+            ],
+        });
+
+        // Default 1×1 white albedo texture used when material has no albedoMap.
+        const white = new Uint8Array([255, 255, 255, 255]);
+        this.defaultAlbedoTex = device.createTexture({
+            label: "DeferredScene:defaultAlbedo",
+            size: { width: 1, height: 1 },
+            format: "rgba8unorm",
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        });
+        device.queue.writeTexture({ texture: this.defaultAlbedoTex }, white, { bytesPerRow: 4 }, { width: 1, height: 1 });
+        this.defaultAlbedoView = this.defaultAlbedoTex.createView();
+        this.texSampler = device.createSampler({
+            magFilter: "linear",
+            minFilter: "linear",
+            addressModeU: "repeat",
+            addressModeV: "repeat",
         });
 
         const gbufferLayout = device.createPipelineLayout({
@@ -377,6 +454,7 @@ export class DeferredScenePass extends Pass {
                     { format: "rgba8unorm" },   // albedo
                     { format: "rgba16float" },  // normal
                     { format: "rgba16float" },  // world position
+                    { format: "rgba16float" },  // emissive (HDR)
                 ],
             },
             primitive: { topology: "triangle-list", cullMode: "back" },
@@ -395,6 +473,7 @@ export class DeferredScenePass extends Pass {
                 { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
                 { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
                 { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float" } },
             ],
         });
 
@@ -433,6 +512,7 @@ export class DeferredScenePass extends Pass {
         this.albedoTex?.destroy();
         this.normalTex?.destroy();
         this.posTex?.destroy();
+        this.emissiveTex?.destroy();
         this.depthTex?.destroy();
 
         const { device, width, height } = this;
@@ -445,10 +525,11 @@ export class DeferredScenePass extends Pass {
                 usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
             });
 
-        this.albedoTex = makeTexture("rgba8unorm", "GBuffer:albedo");
-        this.normalTex = makeTexture("rgba16float", "GBuffer:normal");
-        this.posTex    = makeTexture("rgba16float", "GBuffer:position");
-        this.depthTex  = makeTexture("depth24plus", "GBuffer:depth");
+        this.albedoTex   = makeTexture("rgba8unorm",  "GBuffer:albedo");
+        this.normalTex   = makeTexture("rgba16float", "GBuffer:normal");
+        this.posTex      = makeTexture("rgba16float", "GBuffer:position");
+        this.emissiveTex = makeTexture("rgba16float", "GBuffer:emissive");
+        this.depthTex    = makeTexture("depth24plus", "GBuffer:depth");
 
         // Rebuild the lighting bind group with new texture views.
         this.lightingBindGroup = null;
@@ -465,6 +546,7 @@ export class DeferredScenePass extends Pass {
                 { binding: 1, resource: this.normalTex.createView() },
                 { binding: 2, resource: this.posTex.createView() },
                 { binding: 3, resource: { buffer: this.lightingBuffer } },
+                { binding: 4, resource: this.emissiveTex.createView() },
             ],
         });
 
@@ -477,9 +559,10 @@ export class DeferredScenePass extends Pass {
         const pass = encoder.beginRenderPass({
             label: "GBuffer",
             colorAttachments: [
-                { view: this.albedoTex.createView(), clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" },
-                { view: this.normalTex.createView(), clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" },
-                { view: this.posTex.createView(),    clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" },
+                { view: this.albedoTex.createView(),   clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" },
+                { view: this.normalTex.createView(),   clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" },
+                { view: this.posTex.createView(),      clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" },
+                { view: this.emissiveTex.createView(), clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" },
             ],
             depthStencilAttachment: {
                 view: this.depthTex.createView(),
@@ -499,7 +582,7 @@ export class DeferredScenePass extends Pass {
             this.uploadModelUniforms(mesh, res.modelBuffer);
 
             const matBg = mesh.material instanceof StandardMaterial
-                ? mesh.material.getOrCreateBindGroup(this.device, this.materialBindGroupLayout)
+                ? mesh.material.getOrCreateBindGroup(this.device, this.materialBindGroupLayout, this.defaultAlbedoView, this.texSampler)
                 : null;
 
             if (!matBg) continue;

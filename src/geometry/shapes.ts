@@ -388,7 +388,7 @@ export function createCylinder({
             raw.uvs.push(0.5 + Math.cos(theta) * 0.5, 0.5 + Math.sin(theta) * 0.5);
         }
         for (let i = 0; i < radialSegments; i++) {
-            raw.indices.push(topCenter, topCenter + 1 + i, topCenter + 2 + i);
+            raw.indices.push(topCenter, topCenter + 2 + i, topCenter + 1 + i);
         }
 
         // Bottom cap
@@ -403,7 +403,7 @@ export function createCylinder({
             raw.uvs.push(0.5 + Math.cos(theta) * 0.5, 0.5 + Math.sin(theta) * 0.5);
         }
         for (let i = 0; i < radialSegments; i++) {
-            raw.indices.push(botCenter, botCenter + 2 + i, botCenter + 1 + i);
+            raw.indices.push(botCenter, botCenter + 1 + i, botCenter + 2 + i);
         }
     }
 

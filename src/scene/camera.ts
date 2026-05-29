@@ -83,7 +83,7 @@ export class OrthographicCamera extends Camera {
 
     getProjectionMatrix(_aspect: number): mat4 {
         const proj = mat4.create();
-        mat4.ortho(proj, this.left, this.right, this.bottom, this.top, this.near, this.far);
+        mat4.orthoZO(proj, this.left, this.right, this.bottom, this.top, this.near, this.far);
         return proj;
     }
 }

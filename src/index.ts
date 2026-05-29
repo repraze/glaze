@@ -10,6 +10,7 @@ export {
     createTorus,
 } from "./geometry/shapes";
 export {Material, StandardMaterial} from "./material/material";
+export {Texture} from "./texture";
 export type {PassOutputSpec, PassRenderContext} from "./pass";
 export {Pass} from "./pass";
 export type {DeferredScenePassOptions} from "./passes/deferred-scene-pass";
