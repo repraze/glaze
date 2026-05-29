@@ -6,6 +6,7 @@ export type Quat = [number, number, number, number];
 export class Entity {
     readonly children: Entity[] = [];
     parent: Entity | null = null;
+    enabled: boolean = true;
 
     position: vec3 = vec3.fromValues(0, 0, 0);
     rotation: vec3 = vec3.fromValues(0, 0, 0); // Euler XYZ in radians
@@ -38,6 +39,7 @@ export class Entity {
     }
 
     updateWorldMatrix(parentWorld: mat4 | null): void {
+        if (!this.enabled) return;
         this.updateLocalMatrix();
         if (parentWorld !== null) {
             mat4.multiply(this.worldMatrix, parentWorld, this.localMatrix);

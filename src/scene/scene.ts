@@ -35,6 +35,7 @@ export class Scene {
     }
 
     private traverseEntity(entity: Entity, meshes: Mesh[]): void {
+        if (!entity.enabled) return;
         if (entity instanceof Mesh) meshes.push(entity);
         for (const child of entity.children) {
             this.traverseEntity(child, meshes);
@@ -65,6 +66,7 @@ export class Scene {
         ctor: new (...args: never[]) => T,
         out: T[],
     ): void {
+        if (!entity.enabled) return;
         if (entity instanceof ctor) out.push(entity);
         for (const child of entity.children) {
             this.traverseLight(child, ctor, out);
