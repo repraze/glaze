@@ -1,9 +1,10 @@
 import { vec3 } from "gl-matrix";
 
+import { ColorRgb } from "../color";
 import { Entity } from "./entity";
 
 export interface LightOptions {
-    color?: [number, number, number];
+    color?: ColorRgb;
     intensity?: number;
     castShadow?: boolean;
 }
@@ -15,7 +16,7 @@ export abstract class Light extends Entity {
 
     constructor({ color = [1, 1, 1], intensity = 1, castShadow = false }: LightOptions = {}) {
         super();
-        this.color = vec3.fromValues(...color);
+        this.color = vec3.clone(color as vec3);
         this.intensity = intensity;
         this.castShadow = castShadow;
     }

@@ -1,9 +1,11 @@
-import {vec3} from "gl-matrix";
+import {vec3, vec4} from "gl-matrix";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type Color3 = [number, number, number];
-export type Color4 = [number, number, number, number];
+export type ColorRgb = vec3; // [number, number, number] | IndexedCollection (e.g. Float32Array)
+export type ColorRgba = vec4; // [number, number, number, number] | IndexedCollection
+export type StrictColorRgb = [number, number, number];
+export type StrictColorRgba = [number, number, number, number];
 
 /** Describes what color space values live in.
  *  Passes that do physically-based rendering use this to decide when to
@@ -24,7 +26,7 @@ export function linearToSrgb(c: number): number {
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-function parseHex(input: string): Color4 {
+function parseHex(input: string): StrictColorRgba {
     const s = input.slice(1).toLowerCase();
     let r: number, g: number, b: number, a: number;
 
@@ -53,13 +55,12 @@ function parseHex(input: string): Color4 {
 
 /**
  * Parse a CSS hex color string into a raw sRGB [r, g, b] tuple (each channel 0–1),
- * or pass through an existing tuple unchanged.
+ * or pass through an existing ColorRgb (tuple or Float32Array) unchanged.
  *
  * Supports: #rgb  #rgba  #rrggbb  #rrggbbaa
  * No gamma conversion is applied — values map directly from hex bytes (÷ 255).
- * Tuple inputs are returned as-is.
  */
-export function color(input: string | readonly [number, number, number]): Color3 {
+export function colorRgb(input: string | ColorRgb): StrictColorRgb {
     if (typeof input === "string") {
         if (!input.startsWith("#")) throw new Error(`Unsupported color format: "${input}"`);
         const [r, g, b] = parseHex(input);
@@ -70,32 +71,31 @@ export function color(input: string | readonly [number, number, number]): Color3
 
 /**
  * Parse a CSS hex color string into a raw sRGB [r, g, b, a] tuple,
- * or pass through an existing tuple unchanged.
+ * or pass through an existing ColorRgb/ColorRgba unchanged.
  *
- * The optional `alpha` parameter overrides the parsed or tuple alpha channel.
- * For 3-component tuple inputs the default alpha is 1.
+ * The optional `alpha` parameter overrides the parsed or stored alpha.
+ * For 3-component inputs the default alpha is 1.
  */
-export function color4(
-    input: string | readonly [number, number, number] | readonly [number, number, number, number],
-    alpha?: number,
-): Color4 {
+export function colorRgba(input: string | ColorRgb | ColorRgba, alpha?: number): StrictColorRgba {
     if (typeof input === "string") {
         if (!input.startsWith("#")) throw new Error(`Unsupported color format: "${input}"`);
         const parsed = parseHex(input);
         return [parsed[0], parsed[1], parsed[2], alpha ?? parsed[3]];
     }
-    if (input.length === 4) {
-        const t = input as readonly [number, number, number, number];
-        return [t[0], t[1], t[2], alpha ?? t[3]];
+    const r = input[0];
+    const g = input[1];
+    const b = input[2];
+    if (input.length >= 4) {
+        return [r, g, b, alpha ?? (input[3] as number)];
     }
-    return [input[0], input[1], input[2], alpha ?? 1];
+    return [r, g, b, alpha ?? 1];
 }
 
 /**
- * Write a parsed sRGB color into an existing vec3 in place.
- * Zero-allocation alternative to `color()` for hot-path updates.
+ * Write a parsed sRGB color into an existing ColorRgb in place.
+ * Zero-allocation alternative to `colorRgb()` for hot-path updates.
  */
-export function setColor(out: vec3, input: string | readonly [number, number, number]): vec3 {
+export function setColorRgb(out: ColorRgb, input: string | ColorRgb): ColorRgb {
     if (typeof input === "string") {
         if (!input.startsWith("#")) throw new Error(`Unsupported color format: "${input}"`);
         const [r, g, b] = parseHex(input);
@@ -107,5 +107,30 @@ export function setColor(out: vec3, input: string | readonly [number, number, nu
     out[0] = input[0];
     out[1] = input[1];
     out[2] = input[2];
+    return out;
+}
+
+/**
+ * Write a parsed sRGB color into an existing ColorRgba in place.
+ * Zero-allocation alternative to `colorRgba()` for hot-path updates.
+ */
+export function setColorRgba(out: ColorRgba, input: string | ColorRgb | ColorRgba, alpha?: number): ColorRgba {
+    if (typeof input === "string") {
+        if (!input.startsWith("#")) throw new Error(`Unsupported color format: "${input}"`);
+        const parsed = parseHex(input);
+        out[0] = parsed[0];
+        out[1] = parsed[1];
+        out[2] = parsed[2];
+        out[3] = alpha ?? parsed[3];
+        return out;
+    }
+    out[0] = input[0];
+    out[1] = input[1];
+    out[2] = input[2];
+    if (input.length >= 4) {
+        out[3] = alpha ?? (input[3] as number);
+    } else {
+        out[3] = alpha ?? 1;
+    }
     return out;
 }

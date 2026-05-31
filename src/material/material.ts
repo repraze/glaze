@@ -1,3 +1,4 @@
+import {ColorRgb, ColorRgba} from "../color";
 import {Texture} from "../texture";
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -13,10 +14,10 @@ export abstract class Material {
 // ─── StandardMaterial ────────────────────────────────────────────────────────
 
 export interface StandardMaterialOptions {
-    color?: [number, number, number];
+    color?: ColorRgb;
     roughness?: number;
     metallic?: number;
-    emissive?: [number, number, number, number];
+    emissive?: ColorRgba;
 }
 
 /**
@@ -34,10 +35,10 @@ const MATERIAL_BUFFER_SIZE = 48;
 export class StandardMaterial extends Material {
     readonly type = "standard";
 
-    color: [number, number, number];
+    color: ColorRgb;
     roughness: number;
     metallic: number;
-    emissive: [number, number, number, number];
+    emissive: ColorRgba;
     albedoMap: Texture | null = null;
 
     private buffer: GPUBuffer | null = null;

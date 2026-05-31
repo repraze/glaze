@@ -1,5 +1,5 @@
-export type {Color3, Color4, ColorSpace} from "./color";
-export {color, color4, setColor} from "./color";
+export type {ColorRgb, ColorRgba, ColorSpace} from "./color";
+export {colorRgb, colorRgba, setColorRgb, setColorRgba} from "./color";
 export {Geometry} from "./geometry/geometry";
 export {
     createCone,
