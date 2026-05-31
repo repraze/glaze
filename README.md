@@ -15,6 +15,46 @@ Renderer
 
 ---
 
+## Color management
+
+### `color()` — parsing CSS hex to sRGB floats
+
+```ts
+import { color, color4, setColor } from "@repraze/glaze";
+
+// Hex string → raw sRGB [r, g, b] (each channel = byte ÷ 255, no gamma)
+color("#ff6b35")          // → [1.0, 0.420, 0.208]
+color("#fff")             // → [1, 1, 1]
+color4("#ff6b35", 0.5)    // → [1.0, 0.420, 0.208, 0.5]
+
+// Raw tuple → passes through unchanged
+color([0.5, 0.25, 0.75]) // → [0.5, 0.25, 0.75]
+
+// Zero-alloc mutation of an existing vec3 (hot-path / per-frame)
+setColor(scene.ambientColor, "#050508");
+```
+
+`color()` is a generic utility — it maps hex bytes to 0–1 floats with no gamma transformation. This makes it suitable for any pass: generative shaders, texture generation, UI overlays, and 3-D scenes alike.
+
+### Display behaviour
+
+The renderer is neutral — it applies no automatic gamma correction. Values written to the canvas are displayed as-is by the browser's compositor. This means:
+
+- A `ShaderPass` that outputs `color("#ff6b35")` to the canvas shows the same colour as a CSS `background-color: #ff6b35`. ✓
+- `DeferredScenePass` processes its inputs in the colour space they arrive in. For PBR to be physically correct you should feed it truly linear values. The transfer-function utilities `srgbToLinear` and `linearToSrgb` are exported for passes that need to perform explicit colour-space conversions.
+
+### Transfer-function utilities
+
+```ts
+import { srgbToLinear, linearToSrgb } from "@repraze/glaze";
+
+// Useful for passes doing physically-correct PBR in linear light space
+const linearAlbedo = srgbToLinear(0.5); // ≈ 0.214
+const srgbOut      = linearToSrgb(0.214); // ≈ 0.5
+```
+
+---
+
 ## Renderer
 
 `Renderer` initialises the WebGPU device and canvas context. Passes are executed in order; each pass can read the output textures of all previous passes and may write to its own output textures or directly to the canvas.
@@ -127,7 +167,7 @@ import { Mesh } from "@repraze/glaze/scene/mesh";
 import { createCube } from "@repraze/glaze/geometry/shapes";
 import { StandardMaterial } from "@repraze/glaze/material";
 
-const mesh = new Mesh(createCube({ size: 1 }), new StandardMaterial({ color: [1, 0.5, 0.2] }));
+const mesh = new Mesh(createCube({ size: 1 }), new StandardMaterial({ color: color("#ff8033") }));
 scene.add(mesh);
 ```
 
@@ -136,8 +176,8 @@ scene.add(mesh);
 ```ts
 import { DirectionalLight, PointLight, SpotLight } from "@repraze/glaze/scene/light";
 
-const sun = new DirectionalLight({ direction: [0.5, -1, -0.5], color: [1, 0.95, 0.8], intensity: 1.5 });
-const bulb = new PointLight({ color: [1, 0.8, 0.4], intensity: 3, range: 10 });
+const sun  = new DirectionalLight({ direction: [0.5, -1, -0.5], color: color("#f2e6cc"), intensity: 1.5 });
+const bulb = new PointLight({ color: color("#ffcc66"), intensity: 3, range: 10 });
 const spot = new SpotLight({ innerAngle: Math.PI / 8, outerAngle: Math.PI / 4 });
 ```
 
@@ -192,14 +232,16 @@ All factories accept a `flat?: boolean` option. When `true`, the geometry is exp
 import { StandardMaterial } from "@repraze/glaze/material";
 
 const mat = new StandardMaterial({
-    color: [1, 0.5, 0.2],      // albedo RGB (default [1,1,1])
+    color: color("#ff8033"),    // albedo RGB (default [1,1,1])
     roughness: 0.6,             // 0–1
     metallic: 0.0,              // 0–1
-    emissive: [0, 0, 0, 0],    // RGBA emission
+    emissive: color4("#ff4400", 0.8), // RGBA emission
 });
 ```
 
 Multiple mesh instances sharing the **same** `StandardMaterial` instance reuse the same GPU buffer and bind group — no redundant uploads.
+
+Call `mat.markDirty()` after mutating properties to force a GPU uniform update on the next frame.
 
 ---
 

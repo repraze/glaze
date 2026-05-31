@@ -6,6 +6,7 @@
     "author": "Thomas Dubosc (https://repraze.com)",
     "license": "MIT",
     "scripts": {
+        "test": "node --test",
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
@@ -29,6 +30,7 @@
         "./scene/camera": "./src/scene/camera.ts",
         "./geometry": "./src/geometry/geometry.ts",
         "./geometry/shapes": "./src/geometry/shapes.ts",
-        "./material": "./src/material/material.ts"
+        "./material": "./src/material/material.ts",
+        "./color": "./src/color.ts"
     }
 }

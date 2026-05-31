@@ -1,3 +1,5 @@
+export type {Color3, Color4, ColorSpace} from "./color";
+export {color, color4, setColor} from "./color";
 export {Geometry} from "./geometry/geometry";
 export {
     createCone,
@@ -10,7 +12,6 @@ export {
     createTorus,
 } from "./geometry/shapes";
 export {Material, StandardMaterial} from "./material/material";
-export {Texture} from "./texture";
 export type {PassOutputSpec, PassRenderContext} from "./pass";
 export {Pass} from "./pass";
 export type {DeferredScenePassOptions} from "./passes/deferred-scene-pass";
@@ -23,3 +24,4 @@ export {Entity} from "./scene/entity";
 export {DirectionalLight, Light, PointLight, SpotLight} from "./scene/light";
 export {Mesh} from "./scene/mesh";
 export {Scene} from "./scene/scene";
+export {Texture} from "./texture";

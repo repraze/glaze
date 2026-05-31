@@ -1,4 +1,4 @@
-import { Pass, PassOutputSpec } from "./pass";
+import {Pass, PassOutputSpec} from "./pass";
 
 interface ManagedTexture {
     texture: GPUTexture;
@@ -51,7 +51,7 @@ export class Renderer {
         if (!context) throw new Error("Failed to obtain WebGPU context from canvas.");
 
         const format = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({ device, format, alphaMode: "opaque" });
+        context.configure({device, format, alphaMode: "opaque"});
 
         return new Renderer(adapter, device, context, format, canvas.width, canvas.height);
     }
@@ -162,9 +162,7 @@ export class Renderer {
             this.initializedPasses.add(pass);
 
             if (pass.outputSpecs.length > 0) {
-                const textures = pass.outputSpecs.map((spec) =>
-                    this.createTexture(spec, this.width, this.height),
-                );
+                const textures = pass.outputSpecs.map((spec) => this.createTexture(spec, this.width, this.height));
                 this.passTextures.set(pass, textures);
             }
 
@@ -181,22 +179,15 @@ export class Renderer {
         const h = spec.height ?? Math.max(1, Math.ceil(canvasH / (spec.heightDivisor ?? 1)));
 
         const texture = this.device.createTexture({
-            size: { width: w, height: h },
+            size: {width: w, height: h},
             format: spec.format,
-            usage:
-                GPUTextureUsage.RENDER_ATTACHMENT |
-                GPUTextureUsage.TEXTURE_BINDING |
-                GPUTextureUsage.COPY_SRC,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
         });
 
-        return { texture, view: texture.createView(), spec, fixed };
+        return {texture, view: texture.createView(), spec, fixed};
     }
 
-    private outputDims(
-        textures: ManagedTexture[],
-        canvasW: number,
-        canvasH: number,
-    ): [number, number] {
+    private outputDims(textures: ManagedTexture[], canvasW: number, canvasH: number): [number, number] {
         if (textures.length > 0) {
             return [textures[0]!.texture.width, textures[0]!.texture.height];
         }

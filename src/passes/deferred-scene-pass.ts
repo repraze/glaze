@@ -4,10 +4,29 @@ import { Geometry } from "../geometry/geometry";
 import { StandardMaterial } from "../material/material";
 import { Pass, PassOutputSpec, PassRenderContext } from "../pass";
 import { Camera } from "../scene/camera";
+import { DirectionalLight, PointLight, SpotLight } from "../scene/light";
 import { Mesh } from "../scene/mesh";
 import { Scene } from "../scene/scene";
 
 // ─── WGSL shaders ─────────────────────────────────────────────────────────────
+
+const SHADOW_SHADER = /* wgsl */ `
+struct ShadowLightUniforms {
+    lightSpaceMatrix: mat4x4<f32>,
+};
+
+struct ShadowModelUniforms {
+    model: mat4x4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> light: ShadowLightUniforms;
+@group(1) @binding(0) var<uniform> model: ShadowModelUniforms;
+
+@vertex
+fn vs_shadow(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
+    return light.lightSpaceMatrix * model.model * vec4<f32>(position, 1.0);
+}
+`;
 
 const GBUFFER_SHADER = /* wgsl */ `
 struct CameraUniforms {
@@ -20,6 +39,7 @@ struct CameraUniforms {
 struct ModelUniforms {
     model:        mat4x4<f32>,
     normalMatrix: mat4x4<f32>,
+    flags:        vec4<f32>,   // x = receiveShadow
 };
 
 struct MaterialUniforms {
@@ -75,7 +95,7 @@ fn fs_main(input: VertexOutput) -> GBufferOutput {
     out.albedo   = vec4<f32>(mat.albedo.rgb * texAlbedo, 1.0);
     out.normal   = vec4<f32>(normalize(input.worldNormal), mat.roughness);
     out.worldPos = vec4<f32>(input.worldPos, mat.metallic);
-    out.emissive = vec4<f32>(mat.emissive.rgb, 0.0);
+    out.emissive = vec4<f32>(mat.emissive.rgb, model.flags.x);
     return out;
 }
 `;
@@ -86,55 +106,88 @@ const MAX_DIRECTIONAL = 4;
 const MAX_POINT = 8;
 const MAX_SPOT = 4;
 
+// ─── Shadow settings ─────────────────────────────────────────────────────────
+
+const SHADOW_MAP_SIZE = 1024;
+const POINT_SHADOW_MAP_SIZE = 512;
+const SHADOW_BIAS = 0.002;
+
+// 6 view-projection matrices per point light (one per cube face).
+// Face order: +X, -X, +Y, -Y, +Z, -Z.
+const POINT_SHADOW_MATRICES_SIZE = MAX_POINT * 6 * 64; // 3072 bytes
+
+const CUBE_FACE_DIRS: { dir: [number, number, number]; up: [number, number, number] }[] = [
+    { dir: [1, 0, 0], up: [0, -1, 0] },   // 0 +X
+    { dir: [-1, 0, 0], up: [0, -1, 0] },  // 1 -X
+    { dir: [0, 1, 0], up: [0, 0, 1] },    // 2 +Y
+    { dir: [0, -1, 0], up: [0, 0, -1] },  // 3 -Y
+    { dir: [0, 0, 1], up: [0, -1, 0] },   // 4 +Z
+    { dir: [0, 0, -1], up: [0, -1, 0] },  // 5 -Z
+];
+
 // ─── Lighting uniform layout ─────────────────────────────────────────────────
 //
-// ambientColor:       vec4<f32>                    offset   0   16 bytes
-// cameraPosition:     vec4<f32>                    offset  16   16 bytes
-// counts:             vec4<u32> (dir,pt,spot,pad)  offset  32   16 bytes
-// directionalLights:  array<DirectionalLight, 4>   offset  48  128 bytes  (4 * 32)
-// pointLights:        array<PointLight, 8>          offset 176  256 bytes  (8 * 32)
-// spotLights:         array<SpotLight, 4>           offset 432  256 bytes  (4 * 64)
-// Total: 688 bytes
+// ambientColor:       vec4<f32>                    offset    0   16 bytes
+// cameraPosition:     vec4<f32>                    offset   16   16 bytes
+// counts:             vec4<u32> (dir,pt,spot,pad)  offset   32   16 bytes
+// directionalLights:  array<DirLight, 4>           offset   48  384 bytes  (4 × 96)
+// pointLights:        array<PointLight, 8>          offset  432  384 bytes  (8 × 48)
+// spotLights:         array<SpotLight, 4>           offset  816  512 bytes  (4 × 128)
+// backgroundColor:    vec4<f32>                    offset 1328   16 bytes
+// Total: 1344 bytes
 //
-// DirectionalLight { direction: vec4, colorIntensity: vec4 } = 32 bytes
-// PointLight       { position:  vec4 (xyz,range), colorIntensity: vec4 } = 32 bytes
-// SpotLight        { position:  vec4 (xyz,range), direction: vec4, colorIntensity: vec4, angles: vec4 } = 64 bytes
+// DirectionalLight { direction: vec4 (w=castShadow), colorIntensity: vec4, lightSpaceMatrix: mat4 } = 96 bytes
+// PointLight       { position: vec4 (w=range), colorIntensity: vec4, flags: vec4 (x=castShadow) } = 48 bytes
+// SpotLight        { position: vec4 (w=range), direction: vec4 (w=castShadow), colorIntensity: vec4, angles: vec4, lightSpaceMatrix: mat4 } = 128 bytes
 
-const LIGHTING_BUFFER_SIZE = 704;
+const LIGHTING_BUFFER_SIZE = 1344;
 
 const LIGHTING_SHADER = /* wgsl */ `
 struct DirectionalLight {
-    direction:      vec4<f32>,  // xyz = direction, w = unused
-    colorIntensity: vec4<f32>,  // xyz = color, w = intensity
+    direction:        vec4<f32>,      // xyz = direction, w = castShadow (0/1)
+    colorIntensity:   vec4<f32>,      // xyz = color, w = intensity
+    lightSpaceMatrix: mat4x4<f32>,
 };
 
 struct PointLight {
-    position:       vec4<f32>,  // xyz = world pos, w = range
-    colorIntensity: vec4<f32>,  // xyz = color, w = intensity
+    position:       vec4<f32>,        // xyz = world pos, w = range
+    colorIntensity: vec4<f32>,        // xyz = color, w = intensity
+    flags:          vec4<f32>,        // x = castShadow (0/1)
 };
 
 struct SpotLight {
-    position:       vec4<f32>,  // xyz = world pos, w = range
-    direction:      vec4<f32>,  // xyz = direction, w = unused
-    colorIntensity: vec4<f32>,  // xyz = color, w = intensity
-    angles:         vec4<f32>,  // x = cos(innerAngle), y = cos(outerAngle), zw = unused
+    position:         vec4<f32>,      // xyz = world pos, w = range
+    direction:        vec4<f32>,      // xyz = direction, w = castShadow (0/1)
+    colorIntensity:   vec4<f32>,      // xyz = color, w = intensity
+    angles:           vec4<f32>,      // x = cos(innerAngle), y = cos(outerAngle)
+    lightSpaceMatrix: mat4x4<f32>,
 };
 
 struct LightingUniforms {
-    ambientColor:       vec4<f32>,
-    cameraPosition:     vec4<f32>,
-    counts:             vec4<u32>,  // x=dir, y=point, z=spot
-    directionalLights:  array<DirectionalLight, ${MAX_DIRECTIONAL}>,
-    pointLights:        array<PointLight, ${MAX_POINT}>,
-    spotLights:         array<SpotLight, ${MAX_SPOT}>,
-    backgroundColor:    vec4<f32>,
+    ambientColor:      vec4<f32>,
+    cameraPosition:    vec4<f32>,
+    counts:            vec4<u32>,
+    directionalLights: array<DirectionalLight, ${MAX_DIRECTIONAL}>,
+    pointLights:       array<PointLight, ${MAX_POINT}>,
+    spotLights:        array<SpotLight, ${MAX_SPOT}>,
+    backgroundColor:   vec4<f32>,
 };
 
-@group(0) @binding(0) var albedoTex:    texture_2d<f32>;
-@group(0) @binding(1) var normalTex:    texture_2d<f32>;
-@group(0) @binding(2) var posTex:       texture_2d<f32>;
+@group(0) @binding(0) var albedoTex:         texture_2d<f32>;
+@group(0) @binding(1) var normalTex:         texture_2d<f32>;
+@group(0) @binding(2) var posTex:            texture_2d<f32>;
 @group(0) @binding(3) var<uniform> lighting: LightingUniforms;
-@group(0) @binding(4) var emissiveTex: texture_2d<f32>;
+@group(0) @binding(4) var emissiveTex:       texture_2d<f32>;
+
+@group(1) @binding(0) var dirShadowMaps:   texture_depth_2d_array;
+@group(1) @binding(1) var spotShadowMaps:  texture_depth_2d_array;
+@group(1) @binding(2) var shadowSampler:   sampler_comparison;
+@group(1) @binding(3) var pointShadowMaps: texture_depth_2d_array;
+
+struct PointShadowMatrices {
+    matrices: array<mat4x4<f32>, ${MAX_POINT * 6}>,
+};
+@group(1) @binding(4) var<uniform> pointShadowMatrices: PointShadowMatrices;
 
 struct QuadInput {
     @builtin(position) pos: vec4<f32>,
@@ -189,11 +242,29 @@ fn brdf_direct(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, albedo: vec3<f32>, roug
     return (diffuse + specular) * NdotL;
 }
 
+// 3×3 PCF shadow sample — returns 1.0 if lit, 0.0 if fully in shadow.
+fn pcfShadow(shadowMap: texture_depth_2d_array, layer: i32, lsMatrix: mat4x4<f32>, worldPos: vec3<f32>) -> f32 {
+    let lsPos = lsMatrix * vec4<f32>(worldPos, 1.0);
+    let ndc   = lsPos.xyz / lsPos.w;
+    if (ndc.z <= 0.0 || ndc.z > 1.0) { return 1.0; }
+    let uv = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { return 1.0; }
+    let depth = ndc.z - ${SHADOW_BIAS};
+    let sz    = 1.0 / f32(${SHADOW_MAP_SIZE});
+    var lit   = 0.0;
+    for (var ox = -1; ox <= 1; ox++) {
+        for (var oy = -1; oy <= 1; oy++) {
+            let o = vec2<f32>(f32(ox), f32(oy)) * sz;
+            lit += textureSampleCompareLevel(shadowMap, shadowSampler, uv + o, layer, depth);
+        }
+    }
+    return lit / 9.0;
+}
+
 @fragment
 fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
     let coord   = vec2<i32>(i32(input.pos.x), i32(input.pos.y));
     let albedo4 = textureLoad(albedoTex, coord, 0);
-    // Background pixel: albedo alpha is 0 (G-buffer cleared to [0,0,0,0]).
     if (albedo4.a < 0.5) {
         return lighting.backgroundColor;
     }
@@ -205,32 +276,54 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
     let worldPos     = posSample.xyz;
     let metallic     = clamp(posSample.w, 0.0, 1.0);
 
-    let V    = normalize(lighting.cameraPosition.xyz - worldPos);
+    let emissiveSample = textureLoad(emissiveTex, coord, 0);
+    let receiveShadow  = emissiveSample.w;
+
+    let V     = normalize(lighting.cameraPosition.xyz - worldPos);
     let NdotV = max(dot(N, V), 0.001);
-    let F0   = mix(vec3<f32>(0.04), albedo, metallic);
+    let F0    = mix(vec3<f32>(0.04), albedo, metallic);
 
     var colour = lighting.ambientColor.rgb * albedo;
 
-    // Directional lights
     for (var i = 0u; i < lighting.counts.x; i++) {
         let dl = lighting.directionalLights[i];
         let L  = normalize(-dl.direction.xyz);
+        var shadow = 1.0;
+        if (dl.direction.w > 0.5) {
+            let raw = pcfShadow(dirShadowMaps, i32(i), dl.lightSpaceMatrix, worldPos);
+            shadow = mix(1.0, raw, receiveShadow);
+        }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
-                  * dl.colorIntensity.rgb * dl.colorIntensity.w;
+                  * dl.colorIntensity.rgb * dl.colorIntensity.w * shadow;
     }
 
-    // Point lights
     for (var i = 0u; i < lighting.counts.y; i++) {
         let pl      = lighting.pointLights[i];
         let toLight = pl.position.xyz - worldPos;
         let dist    = length(toLight);
         let L       = toLight / dist;
         let attn    = clamp(1.0 - dist / pl.position.w, 0.0, 1.0);
+        var shadow  = 1.0;
+        if (pl.flags.x > 0.5) {
+            let lf    = worldPos - pl.position.xyz;
+            let absLF = abs(lf);
+            var faceIdx: i32;
+            if (absLF.x >= absLF.y && absLF.x >= absLF.z) {
+                faceIdx = select(1, 0, lf.x > 0.0);
+            } else if (absLF.y >= absLF.z) {
+                faceIdx = select(3, 2, lf.y > 0.0);
+            } else {
+                faceIdx = select(5, 4, lf.z > 0.0);
+            }
+            let layer    = i32(i) * 6 + faceIdx;
+            let lsMatrix = pointShadowMatrices.matrices[layer];
+            let raw      = pcfShadow(pointShadowMaps, layer, lsMatrix, worldPos);
+            shadow       = mix(1.0, raw, receiveShadow);
+        }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
-                  * pl.colorIntensity.rgb * (pl.colorIntensity.w * attn * attn);
+                  * pl.colorIntensity.rgb * (pl.colorIntensity.w * attn * attn * shadow);
     }
 
-    // Spot lights
     for (var i = 0u; i < lighting.counts.z; i++) {
         let sl      = lighting.spotLights[i];
         let toLight = sl.position.xyz - worldPos;
@@ -242,14 +335,20 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
             (theta - sl.angles.y) / (sl.angles.x - sl.angles.y),
             0.0, 1.0
         );
+        var shadow = 1.0;
+        if (sl.direction.w > 0.5) {
+            let raw = pcfShadow(spotShadowMaps, i32(i), sl.lightSpaceMatrix, worldPos);
+            shadow = mix(1.0, raw, receiveShadow);
+        }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
-                  * sl.colorIntensity.rgb * (sl.colorIntensity.w * attn * attn * spotAttn);
+                  * sl.colorIntensity.rgb * (sl.colorIntensity.w * attn * attn * spotAttn * shadow);
     }
 
-    colour += textureLoad(emissiveTex, coord, 0).rgb;
+    colour += emissiveSample.rgb;
     return vec4<f32>(colour, 1.0);
 }
 `;
+
 
 // ─── GPU resource cache per Mesh ──────────────────────────────────────────────
 
@@ -286,13 +385,15 @@ export class DeferredScenePass extends Pass {
     private emissiveTex!: GPUTexture;
     private depthTex!: GPUTexture;
 
-    // Pipelines and layouts
+    // G-buffer and lighting pipelines
     private gbufferPipeline!: GPURenderPipeline;
     private lightingPipeline!: GPURenderPipeline;
 
     private cameraBindGroupLayout!: GPUBindGroupLayout;
     private modelBindGroupLayout!: GPUBindGroupLayout;
     private materialBindGroupLayout!: GPUBindGroupLayout;
+    private lightingBindGroupLayout!: GPUBindGroupLayout;
+    private shadowSceneBindGroupLayout!: GPUBindGroupLayout;
 
     // Camera uniforms
     private cameraBuffer!: GPUBuffer;
@@ -301,12 +402,27 @@ export class DeferredScenePass extends Pass {
     // Lighting uniforms
     private lightingBuffer!: GPUBuffer;
     private lightingBindGroup: GPUBindGroup | null = null;
-    private lightingBindGroupLayout!: GPUBindGroupLayout;
 
     // Default material texture resources
     private defaultAlbedoTex!: GPUTexture;
     private defaultAlbedoView!: GPUTextureView;
     private texSampler!: GPUSampler;
+
+    // Shadow pass
+    private shadowPipeline!: GPURenderPipeline;
+    private shadowLightBindGroupLayout!: GPUBindGroupLayout;
+    private dirShadowTex!: GPUTexture;
+    private spotShadowTex!: GPUTexture;
+    private pointShadowTex!: GPUTexture;
+    private shadowSampler!: GPUSampler;
+    private dirShadowLightBuffers: GPUBuffer[] = [];
+    private dirShadowLightBGs: GPUBindGroup[] = [];
+    private spotShadowLightBuffers: GPUBuffer[] = [];
+    private spotShadowLightBGs: GPUBindGroup[] = [];
+    private pointShadowFaceBuffers: GPUBuffer[] = [];
+    private pointShadowFaceBGs: GPUBindGroup[] = [];
+    private pointShadowMatricesBuffer!: GPUBuffer;
+    private shadowBindGroup: GPUBindGroup | null = null;
 
     // Cached mesh GPU resources
     private meshCache = new Map<Mesh, MeshGPUResources>();
@@ -323,8 +439,7 @@ export class DeferredScenePass extends Pass {
 
         this.cameraBuffer = device.createBuffer({
             label: "DeferredScene:camera",
-            // view(64) + proj(64) + vp(64) + pos(16) = 208 bytes
-            size: 208,
+            size: 208, // view(64) + proj(64) + vp(64) + pos(16)
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -335,6 +450,8 @@ export class DeferredScenePass extends Pass {
         });
 
         this.buildPipelines();
+        this.buildShadowPipeline();
+        this.initShadowMaps();
     }
 
     resize(width: number, height: number): void {
@@ -345,19 +462,38 @@ export class DeferredScenePass extends Pass {
 
     render(ctx: PassRenderContext): void {
         const { encoder, outputs, canvasView } = ctx;
-        const camera = this.scene.activeCamera;
 
         this.scene.updateWorldMatrices();
-        this.uploadCameraUniforms(camera, ctx.width, ctx.height);
-        this.uploadLightingUniforms();
 
-        const meshes = this.scene.collectMeshes();
+        const meshes      = this.scene.collectMeshes();
+        const dirLights   = this.scene.collectDirectionalLights().slice(0, MAX_DIRECTIONAL);
+        const pointLights = this.scene.collectPointLights().slice(0, MAX_POINT);
+        const spotLights  = this.scene.collectSpotLights().slice(0, MAX_SPOT);
+
+        // Compute light-space matrices once per frame for shadow-casting lights.
+        const dirMatrices   = dirLights.map(l =>
+            l.castShadow ? this.computeDirectionalLightMatrix(l) : null,
+        );
+        const spotMatrices  = spotLights.map(l =>
+            l.castShadow ? this.computeSpotLightMatrix(l) : null,
+        );
+        const pointMatrices = pointLights.map(l =>
+            l.castShadow ? this.computePointLightFaceMatrices(l) : null,
+        );
+
+        this.uploadCameraUniforms(this.scene.activeCamera, ctx.width, ctx.height);
+        this.uploadLightingUniforms(dirLights, pointLights, spotLights, dirMatrices, spotMatrices);
+        this.uploadPointShadowMatrices(pointLights, pointMatrices);
+
         this.ensureMeshResources(meshes);
+        for (const mesh of meshes) {
+            const res = this.meshCache.get(mesh);
+            if (res) this.uploadModelUniforms(mesh, res.modelBuffer);
+        }
 
-        // G-buffer pass
+        this.renderShadowMaps(encoder, meshes, dirLights, pointLights, spotLights, dirMatrices, pointMatrices, spotMatrices);
         this.renderGBuffer(encoder, meshes);
 
-        // Lighting / composite pass
         const outputView = outputs ? outputs[0]! : canvasView!;
         this.renderLighting(encoder, outputView);
     }
@@ -371,6 +507,13 @@ export class DeferredScenePass extends Pass {
         this.defaultAlbedoTex?.destroy();
         this.cameraBuffer?.destroy();
         this.lightingBuffer?.destroy();
+        this.dirShadowTex?.destroy();
+        this.spotShadowTex?.destroy();
+        this.pointShadowTex?.destroy();
+        this.pointShadowMatricesBuffer?.destroy();
+        for (const b of this.dirShadowLightBuffers) b.destroy();
+        for (const b of this.spotShadowLightBuffers) b.destroy();
+        for (const b of this.pointShadowFaceBuffers) b.destroy();
         for (const r of this.meshCache.values()) {
             r.vertexBuffer.destroy();
             r.indexBuffer.destroy();
@@ -389,9 +532,14 @@ export class DeferredScenePass extends Pass {
             entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } }],
         });
 
+        // Visible to both VERTEX (transforms) and FRAGMENT (receiveShadow flag).
         this.modelBindGroupLayout = device.createBindGroupLayout({
             label: "DeferredScene:modelLayout",
-            entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } }],
+            entries: [{
+                binding: 0,
+                visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                buffer: { type: "uniform" },
+            }],
         });
 
         this.materialBindGroupLayout = device.createBindGroupLayout({
@@ -403,7 +551,6 @@ export class DeferredScenePass extends Pass {
             ],
         });
 
-        // Default 1×1 white albedo texture used when material has no albedoMap.
         const white = new Uint8Array([255, 255, 255, 255]);
         this.defaultAlbedoTex = device.createTexture({
             label: "DeferredScene:defaultAlbedo",
@@ -438,11 +585,11 @@ export class DeferredScenePass extends Pass {
                 entryPoint: "vs_main",
                 buffers: [
                     {
-                        arrayStride: 32, // 8 floats × 4 bytes
+                        arrayStride: 32,
                         attributes: [
-                            { shaderLocation: 0, offset: 0,  format: "float32x3" }, // position
-                            { shaderLocation: 1, offset: 12, format: "float32x3" }, // normal
-                            { shaderLocation: 2, offset: 24, format: "float32x2" }, // uv
+                            { shaderLocation: 0, offset: 0,  format: "float32x3" },
+                            { shaderLocation: 1, offset: 12, format: "float32x3" },
+                            { shaderLocation: 2, offset: 24, format: "float32x2" },
                         ],
                     },
                 ],
@@ -451,10 +598,10 @@ export class DeferredScenePass extends Pass {
                 module: gbufferModule,
                 entryPoint: "fs_main",
                 targets: [
-                    { format: "rgba8unorm" },   // albedo
-                    { format: "rgba16float" },  // normal
-                    { format: "rgba16float" },  // world position
-                    { format: "rgba16float" },  // emissive (HDR)
+                    { format: "rgba8unorm" },
+                    { format: "rgba16float" },
+                    { format: "rgba16float" },
+                    { format: "rgba16float" },
                 ],
             },
             primitive: { topology: "triangle-list", cullMode: "back" },
@@ -465,7 +612,6 @@ export class DeferredScenePass extends Pass {
             },
         });
 
-        // Lighting pipeline bind group layout
         this.lightingBindGroupLayout = device.createBindGroupLayout({
             label: "DeferredScene:lightingLayout",
             entries: [
@@ -477,13 +623,23 @@ export class DeferredScenePass extends Pass {
             ],
         });
 
+        this.shadowSceneBindGroupLayout = device.createBindGroupLayout({
+            label: "DeferredScene:shadowSceneLayout",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth", viewDimension: "2d-array" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth", viewDimension: "2d-array" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } },
+                { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth", viewDimension: "2d-array" } },
+                { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+            ],
+        });
+
         const lightingLayout = device.createPipelineLayout({
-            bindGroupLayouts: [this.lightingBindGroupLayout],
+            bindGroupLayouts: [this.lightingBindGroupLayout, this.shadowSceneBindGroupLayout],
         });
 
         const lightingModule = device.createShaderModule({ label: "Lighting", code: LIGHTING_SHADER });
 
-        // Output format: either the user-specified texture format or canvas format
         const outputFormat = this.outputSpecs.length > 0 ? this.outputSpecs[0]!.format : this.canvasFormat;
 
         this.lightingPipeline = device.createRenderPipeline({
@@ -498,11 +654,142 @@ export class DeferredScenePass extends Pass {
             primitive: { topology: "triangle-list" },
         });
 
-        // Build camera bind group now (buffer already created)
         this.cameraBindGroup = device.createBindGroup({
             label: "DeferredScene:camera",
             layout: this.cameraBindGroupLayout,
             entries: [{ binding: 0, resource: { buffer: this.cameraBuffer } }],
+        });
+    }
+
+    private buildShadowPipeline(): void {
+        const { device } = this;
+
+        this.shadowLightBindGroupLayout = device.createBindGroupLayout({
+            label: "DeferredScene:shadowLightLayout",
+            entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } }],
+        });
+
+        const shadowLayout = device.createPipelineLayout({
+            bindGroupLayouts: [this.shadowLightBindGroupLayout, this.modelBindGroupLayout],
+        });
+
+        const shadowModule = device.createShaderModule({ label: "Shadow", code: SHADOW_SHADER });
+
+        this.shadowPipeline = device.createRenderPipeline({
+            label: "DeferredScene:shadow",
+            layout: shadowLayout,
+            vertex: {
+                module: shadowModule,
+                entryPoint: "vs_shadow",
+                buffers: [{
+                    arrayStride: 32,
+                    attributes: [
+                        { shaderLocation: 0, offset: 0, format: "float32x3" },
+                    ],
+                }],
+            },
+            depthStencil: {
+                format: "depth32float",
+                depthWriteEnabled: true,
+                depthCompare: "less",
+                depthBias: 2,
+                depthBiasSlopeScale: 1.5,
+            },
+            primitive: { topology: "triangle-list", cullMode: "back" },
+        });
+    }
+
+    private initShadowMaps(): void {
+        const { device } = this;
+
+        const makeDepthArray = (layers: number, size: number, label: string) =>
+            device.createTexture({
+                label,
+                size: { width: size, height: size, depthOrArrayLayers: layers },
+                format: "depth32float",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+            });
+
+        this.dirShadowTex   = makeDepthArray(MAX_DIRECTIONAL,  SHADOW_MAP_SIZE,       "Shadow:directional");
+        this.spotShadowTex  = makeDepthArray(MAX_SPOT,          SHADOW_MAP_SIZE,       "Shadow:spot");
+        this.pointShadowTex = makeDepthArray(MAX_POINT * 6,     POINT_SHADOW_MAP_SIZE, "Shadow:point");
+
+        this.shadowSampler = device.createSampler({
+            label: "DeferredScene:shadowSampler",
+            compare: "less",
+            magFilter: "linear",
+            minFilter: "linear",
+            addressModeU: "clamp-to-edge",
+            addressModeV: "clamp-to-edge",
+        });
+
+        this.dirShadowLightBuffers = [];
+        this.dirShadowLightBGs     = [];
+        for (let i = 0; i < MAX_DIRECTIONAL; i++) {
+            const buf = device.createBuffer({
+                label: `Shadow:dirLight${i}`,
+                size: 64,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            const bg = device.createBindGroup({
+                label: `Shadow:dirLightBG${i}`,
+                layout: this.shadowLightBindGroupLayout,
+                entries: [{ binding: 0, resource: { buffer: buf } }],
+            });
+            this.dirShadowLightBuffers.push(buf);
+            this.dirShadowLightBGs.push(bg);
+        }
+
+        this.spotShadowLightBuffers = [];
+        this.spotShadowLightBGs     = [];
+        for (let i = 0; i < MAX_SPOT; i++) {
+            const buf = device.createBuffer({
+                label: `Shadow:spotLight${i}`,
+                size: 64,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            const bg = device.createBindGroup({
+                label: `Shadow:spotLightBG${i}`,
+                layout: this.shadowLightBindGroupLayout,
+                entries: [{ binding: 0, resource: { buffer: buf } }],
+            });
+            this.spotShadowLightBuffers.push(buf);
+            this.spotShadowLightBGs.push(bg);
+        }
+
+        this.pointShadowFaceBuffers = [];
+        this.pointShadowFaceBGs     = [];
+        for (let i = 0; i < MAX_POINT * 6; i++) {
+            const buf = device.createBuffer({
+                label: `Shadow:pointFace${i}`,
+                size: 64,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            const bg = device.createBindGroup({
+                label: `Shadow:pointFaceBG${i}`,
+                layout: this.shadowLightBindGroupLayout,
+                entries: [{ binding: 0, resource: { buffer: buf } }],
+            });
+            this.pointShadowFaceBuffers.push(buf);
+            this.pointShadowFaceBGs.push(bg);
+        }
+
+        this.pointShadowMatricesBuffer = device.createBuffer({
+            label: "Shadow:pointMatrices",
+            size: POINT_SHADOW_MATRICES_SIZE,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        this.shadowBindGroup = device.createBindGroup({
+            label: "DeferredScene:shadowBindGroup",
+            layout: this.shadowSceneBindGroupLayout,
+            entries: [
+                { binding: 0, resource: this.dirShadowTex.createView({ dimension: "2d-array" }) },
+                { binding: 1, resource: this.spotShadowTex.createView({ dimension: "2d-array" }) },
+                { binding: 2, resource: this.shadowSampler },
+                { binding: 3, resource: this.pointShadowTex.createView({ dimension: "2d-array" }) },
+                { binding: 4, resource: { buffer: this.pointShadowMatricesBuffer } },
+            ],
         });
     }
 
@@ -531,7 +818,6 @@ export class DeferredScenePass extends Pass {
         this.emissiveTex = makeTexture("rgba16float", "GBuffer:emissive");
         this.depthTex    = makeTexture("depth24plus", "GBuffer:depth");
 
-        // Rebuild the lighting bind group with new texture views.
         this.lightingBindGroup = null;
     }
 
@@ -554,6 +840,96 @@ export class DeferredScenePass extends Pass {
     }
 
     // ─── Private: render steps ───────────────────────────────────────────────
+
+    private renderShadowMaps(
+        encoder: GPUCommandEncoder,
+        meshes: Mesh[],
+        dirLights: DirectionalLight[],
+        pointLights: PointLight[],
+        spotLights: SpotLight[],
+        dirMatrices: (mat4 | null)[],
+        pointMatrices: (mat4[] | null)[],
+        spotMatrices: (mat4 | null)[],
+    ): void {
+        const shadowMeshes = meshes.filter(m => m.castShadow);
+
+        const drawShadowMeshes = (pass: GPURenderPassEncoder) => {
+            for (const mesh of shadowMeshes) {
+                const res = this.meshCache.get(mesh);
+                if (!res) continue;
+                pass.setBindGroup(1, res.modelBindGroup);
+                pass.setVertexBuffer(0, res.vertexBuffer);
+                pass.setIndexBuffer(res.indexBuffer, "uint32");
+                pass.drawIndexed(res.indexCount);
+            }
+        };
+
+        for (let i = 0; i < dirLights.length; i++) {
+            const lsMatrix = dirMatrices[i];
+            if (!lsMatrix) continue;
+
+            this.device.queue.writeBuffer(this.dirShadowLightBuffers[i]!, 0, lsMatrix as Float32Array);
+            const pass = encoder.beginRenderPass({
+                label: `Shadow:dir${i}`,
+                colorAttachments: [],
+                depthStencilAttachment: {
+                    view: this.dirShadowTex.createView({ dimension: "2d", baseArrayLayer: i, arrayLayerCount: 1 }),
+                    depthClearValue: 1.0,
+                    depthLoadOp: "clear",
+                    depthStoreOp: "store",
+                },
+            });
+            pass.setPipeline(this.shadowPipeline);
+            pass.setBindGroup(0, this.dirShadowLightBGs[i]!);
+            drawShadowMeshes(pass);
+            pass.end();
+        }
+
+        for (let i = 0; i < pointLights.length; i++) {
+            const faceMatrices = pointMatrices[i];
+            if (!faceMatrices) continue;
+
+            for (let f = 0; f < 6; f++) {
+                const slot = i * 6 + f;
+                this.device.queue.writeBuffer(this.pointShadowFaceBuffers[slot]!, 0, faceMatrices[f] as Float32Array);
+                const pass = encoder.beginRenderPass({
+                    label: `Shadow:point${i}f${f}`,
+                    colorAttachments: [],
+                    depthStencilAttachment: {
+                        view: this.pointShadowTex.createView({ dimension: "2d", baseArrayLayer: slot, arrayLayerCount: 1 }),
+                        depthClearValue: 1.0,
+                        depthLoadOp: "clear",
+                        depthStoreOp: "store",
+                    },
+                });
+                pass.setPipeline(this.shadowPipeline);
+                pass.setBindGroup(0, this.pointShadowFaceBGs[slot]!);
+                drawShadowMeshes(pass);
+                pass.end();
+            }
+        }
+
+        for (let i = 0; i < spotLights.length; i++) {
+            const lsMatrix = spotMatrices[i];
+            if (!lsMatrix) continue;
+
+            this.device.queue.writeBuffer(this.spotShadowLightBuffers[i]!, 0, lsMatrix as Float32Array);
+            const pass = encoder.beginRenderPass({
+                label: `Shadow:spot${i}`,
+                colorAttachments: [],
+                depthStencilAttachment: {
+                    view: this.spotShadowTex.createView({ dimension: "2d", baseArrayLayer: i, arrayLayerCount: 1 }),
+                    depthClearValue: 1.0,
+                    depthLoadOp: "clear",
+                    depthStoreOp: "store",
+                },
+            });
+            pass.setPipeline(this.shadowPipeline);
+            pass.setBindGroup(0, this.spotShadowLightBGs[i]!);
+            drawShadowMeshes(pass);
+            pass.end();
+        }
+    }
 
     private renderGBuffer(encoder: GPUCommandEncoder, meshes: Mesh[]): void {
         const pass = encoder.beginRenderPass({
@@ -578,8 +954,6 @@ export class DeferredScenePass extends Pass {
         for (const mesh of meshes) {
             const res = this.meshCache.get(mesh);
             if (!res) continue;
-
-            this.uploadModelUniforms(mesh, res.modelBuffer);
 
             const matBg = mesh.material instanceof StandardMaterial
                 ? mesh.material.getOrCreateBindGroup(this.device, this.materialBindGroupLayout, this.defaultAlbedoView, this.texSampler)
@@ -607,6 +981,7 @@ export class DeferredScenePass extends Pass {
 
         pass.setPipeline(this.lightingPipeline);
         pass.setBindGroup(0, this.getLightingBindGroup());
+        pass.setBindGroup(1, this.shadowBindGroup!);
         pass.draw(3);
         pass.end();
     }
@@ -620,7 +995,6 @@ export class DeferredScenePass extends Pass {
         const vpMatrix   = camera ? camera.getViewProjectionMatrix(aspect) : mat4.create();
         const camPos     = camera ? camera.getCameraPosition() : vec3.create();
 
-        // Layout: view(64) + proj(64) + vp(64) + pos(16) = 208 bytes
         const data = new Float32Array(208 / 4);
         data.set(viewMatrix, 0);
         data.set(projMatrix, 16);
@@ -639,13 +1013,20 @@ export class DeferredScenePass extends Pass {
         mat4.invert(normalMatrix, model);
         mat4.transpose(normalMatrix, normalMatrix);
 
-        const data = new Float32Array(32); // 2 × mat4
+        const data = new Float32Array(36); // model(16) + normalMatrix(16) + flags(4) = 144 bytes
         data.set(model, 0);
         data.set(normalMatrix, 16);
+        data[32] = mesh.receiveShadow ? 1.0 : 0.0;
         this.device.queue.writeBuffer(buffer, 0, data);
     }
 
-    private uploadLightingUniforms(): void {
+    private uploadLightingUniforms(
+        dirLights: DirectionalLight[],
+        pointLights: PointLight[],
+        spotLights: SpotLight[],
+        dirMatrices: (mat4 | null)[],
+        spotMatrices: (mat4 | null)[],
+    ): void {
         const data = new ArrayBuffer(LIGHTING_BUFFER_SIZE);
         const f32  = new Float32Array(data);
         const u32  = new Uint32Array(data);
@@ -657,47 +1038,126 @@ export class DeferredScenePass extends Pass {
         const cp  = cam ? cam.getCameraPosition() : vec3.create();
         f32[4] = cp[0]; f32[5] = cp[1]; f32[6] = cp[2]; f32[7] = 1.0;
 
-        const dirLights   = this.scene.collectDirectionalLights().slice(0, MAX_DIRECTIONAL);
-        const pointLights = this.scene.collectPointLights().slice(0, MAX_POINT);
-        const spotLights  = this.scene.collectSpotLights().slice(0, MAX_SPOT);
-
         u32[8]  = dirLights.length;
         u32[9]  = pointLights.length;
         u32[10] = spotLights.length;
         u32[11] = 0;
 
-        // Directional lights (offset 48 bytes = float index 12), each 32 bytes = 8 floats
+        // DirectionalLights: offset 48 bytes = f32[12], each 96 bytes = 24 floats
         for (let i = 0; i < dirLights.length; i++) {
-            const li = 12 + i * 8;
-            const l  = dirLights[i]!;
-            f32[li + 0] = l.direction[0]; f32[li + 1] = l.direction[1]; f32[li + 2] = l.direction[2]; f32[li + 3] = 0.0;
-            f32[li + 4] = l.color[0];     f32[li + 5] = l.color[1];     f32[li + 6] = l.color[2];     f32[li + 7] = l.intensity;
+            const base = 12 + i * 24;
+            const l    = dirLights[i]!;
+            const lm   = dirMatrices[i];
+            f32[base + 0] = l.direction[0]; f32[base + 1] = l.direction[1]; f32[base + 2] = l.direction[2];
+            f32[base + 3] = l.castShadow ? 1.0 : 0.0;
+            f32[base + 4] = l.color[0]; f32[base + 5] = l.color[1]; f32[base + 6] = l.color[2]; f32[base + 7] = l.intensity;
+            if (lm) f32.set(lm, base + 8);
         }
 
-        // Point lights (offset 176 bytes = float index 44), each 32 bytes = 8 floats
+        // PointLights: offset 432 bytes = f32[108], each 48 bytes = 12 floats
         for (let i = 0; i < pointLights.length; i++) {
-            const li = 44 + i * 8;
-            const l  = pointLights[i]!;
-            const wp = l.worldMatrix;
-            f32[li + 0] = wp[12]!;    f32[li + 1] = wp[13]!;    f32[li + 2] = wp[14]!;    f32[li + 3] = l.range;
-            f32[li + 4] = l.color[0]; f32[li + 5] = l.color[1]; f32[li + 6] = l.color[2]; f32[li + 7] = l.intensity;
+            const base = 108 + i * 12;
+            const l    = pointLights[i]!;
+            const wp   = l.worldMatrix;
+            f32[base + 0] = wp[12]!; f32[base + 1] = wp[13]!; f32[base + 2] = wp[14]!; f32[base + 3] = l.range;
+            f32[base + 4] = l.color[0]; f32[base + 5] = l.color[1]; f32[base + 6] = l.color[2]; f32[base + 7] = l.intensity;
+            f32[base + 8] = l.castShadow ? 1.0 : 0.0;
         }
 
-        // Spot lights (offset 432 bytes = float index 108), each 64 bytes = 16 floats
+        // SpotLights: offset 816 bytes = f32[204], each 128 bytes = 32 floats
         for (let i = 0; i < spotLights.length; i++) {
-            const li = 108 + i * 16;
-            const l  = spotLights[i]!;
-            const wp = l.worldMatrix;
-            f32[li + 0]  = wp[12]!;         f32[li + 1]  = wp[13]!;         f32[li + 2]  = wp[14]!;         f32[li + 3]  = l.range;
-            f32[li + 4]  = l.direction[0];  f32[li + 5]  = l.direction[1];  f32[li + 6]  = l.direction[2];  f32[li + 7]  = 0.0;
-            f32[li + 8]  = l.color[0];      f32[li + 9]  = l.color[1];      f32[li + 10] = l.color[2];      f32[li + 11] = l.intensity;
-            f32[li + 12] = Math.cos(l.innerAngle); f32[li + 13] = Math.cos(l.outerAngle); f32[li + 14] = 0.0; f32[li + 15] = 0.0;
+            const base = 204 + i * 32;
+            const l    = spotLights[i]!;
+            const lm   = spotMatrices[i];
+            const wp   = l.worldMatrix;
+            f32[base + 0]  = wp[12]!;         f32[base + 1]  = wp[13]!;         f32[base + 2]  = wp[14]!;         f32[base + 3]  = l.range;
+            f32[base + 4]  = l.direction[0];  f32[base + 5]  = l.direction[1];  f32[base + 6]  = l.direction[2];
+            f32[base + 7]  = l.castShadow ? 1.0 : 0.0;
+            f32[base + 8]  = l.color[0];      f32[base + 9]  = l.color[1];      f32[base + 10] = l.color[2];      f32[base + 11] = l.intensity;
+            f32[base + 12] = Math.cos(l.innerAngle); f32[base + 13] = Math.cos(l.outerAngle); f32[base + 14] = 0.0; f32[base + 15] = 0.0;
+            if (lm) f32.set(lm, base + 16);
         }
 
+        // backgroundColor: offset 1328 bytes = f32[332]
         const bg = this.scene.backgroundColor;
-        f32[172] = bg[0]; f32[173] = bg[1]; f32[174] = bg[2]; f32[175] = 1.0;
+        f32[332] = bg[0]; f32[333] = bg[1]; f32[334] = bg[2]; f32[335] = 1.0;
 
         this.device.queue.writeBuffer(this.lightingBuffer, 0, data);
+    }
+
+    // ─── Private: shadow matrix helpers ─────────────────────────────────────
+
+    private computeDirectionalLightMatrix(light: DirectionalLight): mat4 {
+        const dir = light.direction;
+        const up  = Math.abs(dir[1]) > 0.9
+            ? vec3.fromValues(1, 0, 0)
+            : vec3.fromValues(0, 1, 0);
+        const eye = vec3.scale(vec3.create(), dir, -20);
+
+        const view = mat4.create();
+        mat4.lookAt(view, eye, [0, 0, 0], up);
+
+        const proj = mat4.create();
+        mat4.orthoZO(proj, -12, 12, -12, 12, 0.1, 50);
+
+        const lsMatrix = mat4.create();
+        mat4.multiply(lsMatrix, proj, view);
+        return lsMatrix;
+    }
+
+    private computeSpotLightMatrix(light: SpotLight): mat4 {
+        const wp  = light.worldMatrix;
+        const eye = vec3.fromValues(wp[12]!, wp[13]!, wp[14]!);
+        const dir = light.direction;
+        const up  = Math.abs(dir[1]) > 0.9
+            ? vec3.fromValues(1, 0, 0)
+            : vec3.fromValues(0, 1, 0);
+        const center = vec3.add(vec3.create(), eye, dir);
+
+        const view = mat4.create();
+        mat4.lookAt(view, eye, center, up);
+
+        const proj = mat4.create();
+        mat4.perspectiveZO(proj, light.outerAngle * 2, 1.0, 0.1, light.range);
+
+        const lsMatrix = mat4.create();
+        mat4.multiply(lsMatrix, proj, view);
+        return lsMatrix;
+    }
+
+    private computePointLightFaceMatrices(light: PointLight): mat4[] {
+        const wp  = light.worldMatrix;
+        const eye = vec3.fromValues(wp[12]!, wp[13]!, wp[14]!);
+
+        return CUBE_FACE_DIRS.map(({ dir, up }) => {
+            const center = vec3.fromValues(eye[0] + dir[0], eye[1] + dir[1], eye[2] + dir[2]);
+            const viewUp = vec3.fromValues(up[0], up[1], up[2]);
+
+            const view = mat4.create();
+            mat4.lookAt(view, eye, center, viewUp);
+
+            const proj = mat4.create();
+            mat4.perspectiveZO(proj, Math.PI / 2, 1.0, 0.1, light.range);
+
+            const vp = mat4.create();
+            mat4.multiply(vp, proj, view);
+            return vp;
+        });
+    }
+
+    private uploadPointShadowMatrices(
+        pointLights: PointLight[],
+        pointMatrices: (mat4[] | null)[],
+    ): void {
+        const data = new Float32Array(POINT_SHADOW_MATRICES_SIZE / 4);
+        for (let i = 0; i < pointLights.length; i++) {
+            const faceMatrices = pointMatrices[i];
+            if (!faceMatrices) continue;
+            for (let f = 0; f < 6; f++) {
+                data.set(faceMatrices[f] as Float32Array, (i * 6 + f) * 16);
+            }
+        }
+        this.device.queue.writeBuffer(this.pointShadowMatricesBuffer, 0, data);
     }
 
     // ─── Private: mesh GPU resource management ───────────────────────────────
@@ -729,7 +1189,7 @@ export class DeferredScenePass extends Pass {
 
         const modelBuffer = device.createBuffer({
             label: "Mesh:model",
-            size: 128, // 2 × mat4
+            size: 144, // model(64) + normalMatrix(64) + flags(16)
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 

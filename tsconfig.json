@@ -3,7 +3,8 @@
     "compilerOptions": {
         "target": "ES2022",
         "lib": ["ES2022", "DOM", "DOM.Iterable"],
-        "types": ["@webgpu/types"],
+        "types": ["@webgpu/types", "node"],
+        "allowImportingTsExtensions": true,
         "module": "esnext",
         "moduleResolution": "bundler",
         "declaration": true,
