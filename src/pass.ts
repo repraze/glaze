@@ -16,34 +16,42 @@ export interface PassOutputSpec {
     heightDivisor?: number;
 }
 
+export interface PassInputSlot {
+    /** Name used to look up this input in PassRenderContext.inputs. */
+    name: string;
+    /** If true, the pass tolerates a missing view for this slot. */
+    optional?: boolean;
+}
+
+export interface PassOutputSlot {
+    /** Name used in PassRenderContext.outputs and as TextureHandle slot identifier. */
+    name: string;
+    spec: PassOutputSpec;
+}
+
 export interface PassRenderContext {
     device: GPUDevice;
     encoder: GPUCommandEncoder;
-    /** Texture views produced by the previous pass, in declaration order. */
-    inputs: GPUTextureView[];
     /**
-     * Views to render into. Non-null when `outputSpecs.length > 0`.
-     * Each view corresponds to one entry in `outputSpecs`.
+     * Texture views wired from upstream passes, keyed by input slot name.
+     * For depth-format textures the view has aspect "depth-only".
      */
-    outputs: GPUTextureView[] | null;
+    inputs: Record<string, GPUTextureView>;
     /**
-     * View of the current canvas frame. Non-null when this is the last pass
-     * (`outputSpecs` is empty), meaning the pass renders to the swap chain.
+     * Render-attachment views for this pass's outputs, keyed by output slot name.
+     * For a slot designated as the canvas output the view is the swap-chain texture view.
      */
-    canvasView: GPUTextureView | null;
+    outputs: Record<string, GPUTextureView>;
     width: number;
     height: number;
 }
 
 export abstract class Pass {
-    /**
-     * Textures this pass will write to. An empty array means the pass writes
-     * directly to the canvas swap chain (must be the last pass in the chain).
-     */
-    abstract readonly outputSpecs: PassOutputSpec[];
+    /** Named input texture slots this pass reads from. */
+    abstract readonly inputSlots: PassInputSlot[];
 
-    /** Number of input texture views this pass expects from the previous pass. */
-    abstract readonly inputCount: number;
+    /** Named output texture slots this pass writes to. */
+    abstract readonly outputSlots: PassOutputSlot[];
 
     /** Called once when the GPU device is ready. */
     abstract initialize(device: GPUDevice, canvasFormat: GPUTextureFormat): void;

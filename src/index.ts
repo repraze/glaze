@@ -1,6 +1,6 @@
 export type {ColorRgb, ColorRgba, ColorSpace} from "./color";
 export {colorRgb, colorRgba, setColorRgb, setColorRgba} from "./color";
-export {Geometry} from "./geometry/geometry";
+export {Geometry, computeTangents} from "./geometry/geometry";
 export {
     createCone,
     createCube,
@@ -11,12 +11,17 @@ export {
     createSphere,
     createTorus,
 } from "./geometry/shapes";
-export {Material, StandardMaterial} from "./material/material";
-export type {PassOutputSpec, PassRenderContext} from "./pass";
+export {parseGLB, loadGLBFromURL} from "./loaders/glb";
+export {parseOBJ, loadOBJFromURL} from "./loaders/obj";
+export {Material, PBRMaterial, StandardMaterial} from "./material/material";
+export type {PBRMaterialOptions, StandardMaterialOptions} from "./material/material";
+export type {PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "./pass";
 export {Pass} from "./pass";
+export {RenderGraph} from "./render-graph";
+export type {TextureHandle, RenderGraphNode} from "./render-graph";
 export type {DeferredScenePassOptions} from "./passes/deferred-scene-pass";
 export {DeferredScenePass} from "./passes/deferred-scene-pass";
-export type {ShaderPassOptions} from "./passes/shader-pass";
+export type {ShaderPassOptions, ShaderPassInputSlot} from "./passes/shader-pass";
 export {ShaderPass} from "./passes/shader-pass";
 export {Renderer} from "./renderer";
 export {Camera, OrthographicCamera, PerspectiveCamera} from "./scene/camera";

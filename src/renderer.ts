@@ -1,11 +1,25 @@
 import {Pass, PassOutputSpec} from "./pass";
+import {RenderGraph} from "./render-graph";
 
 interface ManagedTexture {
     texture: GPUTexture;
+    /** Full view for use as a render attachment (ctx.outputs). */
     view: GPUTextureView;
+    /** View for use as a shader texture input. Depth-only view for depth formats; same as view otherwise. */
+    bindingView: GPUTextureView;
     spec: PassOutputSpec;
-    /** True if dimensions are fixed (spec.width and spec.height both set). */
+    /** True when dimensions are fixed (spec.width and spec.height both set). */
     fixed: boolean;
+}
+
+function isDepthFormat(format: GPUTextureFormat): boolean {
+    return (
+        format === "depth16unorm" ||
+        format === "depth24plus" ||
+        format === "depth24plus-stencil8" ||
+        format === "depth32float" ||
+        format === "depth32float-stencil8"
+    );
 }
 
 export class Renderer {
@@ -18,10 +32,12 @@ export class Renderer {
     private height: number;
     private animationId: number | null = null;
 
-    /** Cached output textures per pass, keyed by pass instance. */
-    private passTextures = new Map<Pass, ManagedTexture[]>();
-    /** Tracks which passes have been initialized. */
+    /** Managed output textures keyed by "<nodeId>:<slotName>". */
+    private textureCache = new Map<string, ManagedTexture>();
+    /** Tracks which passes have been initialized (keyed by Pass instance). */
     private initializedPasses = new Set<Pass>();
+    /** Current graph — needed to know which nodes/passes to resize. */
+    private currentGraph: RenderGraph | null = null;
 
     private constructor(
         adapter: GPUAdapter,
@@ -61,53 +77,87 @@ export class Renderer {
         this.width = width;
         this.height = height;
 
-        for (const [pass, textures] of this.passTextures) {
-            const fresh: ManagedTexture[] = [];
-            for (const mt of textures) {
+        if (!this.currentGraph) return;
+
+        for (const node of this.currentGraph.getNodes()) {
+            let passW = width, passH = height;
+
+            for (const slot of node.pass.outputSlots) {
+                if (slot.name === node.canvasSlot) continue;
+                const key = `${node.id}:${slot.name}`;
+                const mt = this.textureCache.get(key);
+                if (!mt) continue;
+
                 if (mt.fixed) {
-                    fresh.push(mt);
+                    passW = mt.texture.width;
+                    passH = mt.texture.height;
                 } else {
                     mt.texture.destroy();
-                    fresh.push(this.createTexture(mt.spec, width, height));
+                    const fresh = this.createTexture(slot.spec, width, height);
+                    this.textureCache.set(key, fresh);
+                    passW = fresh.texture.width;
+                    passH = fresh.texture.height;
                 }
             }
-            this.passTextures.set(pass, fresh);
-            const [outW, outH] = this.outputDims(fresh, width, height);
-            pass.resize(outW, outH);
-        }
 
-        // Canvas-rendering passes have no entry in passTextures — resize them too.
-        for (const pass of this.initializedPasses) {
-            if (!this.passTextures.has(pass)) {
-                pass.resize(width, height);
-            }
+            node.pass.resize(passW, passH);
         }
     }
 
-    renderFrame(passes: Pass[]): void {
-        this.ensurePasses(passes);
+    renderFrame(graph: RenderGraph): void {
+        this.ensureGraph(graph);
 
         const encoder = this.device.createCommandEncoder();
         const canvasView = this.context.getCurrentTexture().createView();
 
-        let inputs: GPUTextureView[] = [];
-        for (let i = 0; i < passes.length; i++) {
-            const pass = passes[i]!;
-            const isLast = i === passes.length - 1;
-            const textures = this.passTextures.get(pass) ?? [];
-            const outputs = textures.length > 0 ? textures.map((t) => t.view) : null;
+        for (const node of graph.getNodes()) {
+            const {pass, inputs: inputHandles, canvasSlot} = node;
+
+            // Resolve named input views from the texture cache (use bindingView).
+            const inputViews: Record<string, GPUTextureView> = {};
+            for (const slot of pass.inputSlots) {
+                const handle = inputHandles[slot.name];
+                if (handle) {
+                    const mt = this.textureCache.get(`${handle._nodeId}:${handle._slot}`);
+                    if (mt) {
+                        inputViews[slot.name] = mt.bindingView;
+                    } else if (!slot.optional) {
+                        throw new Error(`RenderGraph: missing required input '${slot.name}'`);
+                    }
+                } else if (!slot.optional) {
+                    throw new Error(`RenderGraph: input '${slot.name}' not wired`);
+                }
+            }
+
+            // Resolve named output views.
+            const outputViews: Record<string, GPUTextureView> = {};
+            let passW = this.width, passH = this.height;
+            for (const slot of pass.outputSlots) {
+                if (slot.name === canvasSlot) {
+                    outputViews[slot.name] = canvasView;
+                } else {
+                    const mt = this.textureCache.get(`${node.id}:${slot.name}`);
+                    if (mt) {
+                        outputViews[slot.name] = mt.view;
+                        passW = mt.texture.width;
+                        passH = mt.texture.height;
+                    }
+                }
+            }
+            // Inject canvas view for canvasSlot even when it doesn't match an output slot
+            // (supports passes with no declared output slots that render directly to canvas).
+            if (canvasSlot !== null && !(canvasSlot in outputViews)) {
+                outputViews[canvasSlot] = canvasView;
+            }
 
             pass.render({
                 device: this.device,
                 encoder,
-                inputs,
-                outputs,
-                canvasView: isLast && outputs === null ? canvasView : null,
-                width: this.width,
-                height: this.height,
+                inputs: inputViews,
+                outputs: outputViews,
+                width: passW,
+                height: passH,
             });
-
-            inputs = outputs ?? [];
         }
 
         this.device.queue.submit([encoder.finish()]);
@@ -116,15 +166,15 @@ export class Renderer {
     /**
      * Start an animation loop.
      *
-     * @param passes - Either a fixed `Pass[]` array or a per-frame callback that
-     *   returns the passes to render (useful for updating scene state each frame).
+     * @param graph - Either a fixed `RenderGraph` or a per-frame callback that
+     *   returns the graph to render (useful for updating scene state each frame).
      */
-    startAnimation(passes: Pass[] | (() => Pass[])): () => void {
+    startAnimation(graph: RenderGraph | (() => RenderGraph)): () => void {
         let stopped = false;
 
         const loop = () => {
             if (stopped) return;
-            const resolved = typeof passes === "function" ? passes() : passes;
+            const resolved = typeof graph === "function" ? graph() : graph;
             this.renderFrame(resolved);
             this.animationId = requestAnimationFrame(loop);
         };
@@ -145,31 +195,35 @@ export class Renderer {
             cancelAnimationFrame(this.animationId);
         }
         this.context.unconfigure();
-        for (const textures of this.passTextures.values()) {
-            for (const mt of textures) {
-                mt.texture.destroy();
-            }
+        for (const mt of this.textureCache.values()) {
+            mt.texture.destroy();
         }
-        this.passTextures.clear();
+        this.textureCache.clear();
         this.device.destroy();
     }
 
-    private ensurePasses(passes: Pass[]): void {
-        for (const pass of passes) {
-            if (this.initializedPasses.has(pass)) continue;
+    private ensureGraph(graph: RenderGraph): void {
+        if (this.currentGraph !== graph) {
+            this.currentGraph = graph;
+        }
 
-            pass.initialize(this.device, this.format);
-            this.initializedPasses.add(pass);
+        for (const node of graph.getNodes()) {
+            if (this.initializedPasses.has(node.pass)) continue;
 
-            if (pass.outputSpecs.length > 0) {
-                const textures = pass.outputSpecs.map((spec) => this.createTexture(spec, this.width, this.height));
-                this.passTextures.set(pass, textures);
+            node.pass.initialize(this.device, this.format);
+            this.initializedPasses.add(node.pass);
+
+            let passW = this.width, passH = this.height;
+            for (const slot of node.pass.outputSlots) {
+                if (slot.name === node.canvasSlot) continue;
+                const key = `${node.id}:${slot.name}`;
+                const mt = this.createTexture(slot.spec, this.width, this.height);
+                this.textureCache.set(key, mt);
+                passW = mt.texture.width;
+                passH = mt.texture.height;
             }
 
-            // Call resize with the pass's actual render-target dimensions, not always canvas.
-            const textures = this.passTextures.get(pass) ?? [];
-            const [outW, outH] = this.outputDims(textures, this.width, this.height);
-            pass.resize(outW, outH);
+            node.pass.resize(passW, passH);
         }
     }
 
@@ -177,20 +231,20 @@ export class Renderer {
         const fixed = spec.width !== undefined && spec.height !== undefined;
         const w = spec.width ?? Math.max(1, Math.ceil(canvasW / (spec.widthDivisor ?? 1)));
         const h = spec.height ?? Math.max(1, Math.ceil(canvasH / (spec.heightDivisor ?? 1)));
+        const depth = isDepthFormat(spec.format);
 
         const texture = this.device.createTexture({
             size: {width: w, height: h},
             format: spec.format,
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+            usage:
+                GPUTextureUsage.RENDER_ATTACHMENT |
+                GPUTextureUsage.TEXTURE_BINDING |
+                (depth ? 0 : GPUTextureUsage.COPY_SRC),
         });
 
-        return {texture, view: texture.createView(), spec, fixed};
-    }
+        const view = texture.createView();
+        const bindingView = depth ? texture.createView({aspect: "depth-only"}) : view;
 
-    private outputDims(textures: ManagedTexture[], canvasW: number, canvasH: number): [number, number] {
-        if (textures.length > 0) {
-            return [textures[0]!.texture.width, textures[0]!.texture.height];
-        }
-        return [canvasW, canvasH];
+        return {texture, view, bindingView, spec, fixed};
     }
 }

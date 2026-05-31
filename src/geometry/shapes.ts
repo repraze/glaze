@@ -1,4 +1,4 @@
-import { Geometry } from "./geometry";
+import {Geometry, computeTangents} from "./geometry";
 
 // ─── Internal builder helpers ─────────────────────────────────────────────────
 
@@ -10,12 +10,12 @@ interface RawGeometry {
 }
 
 function toGeometry(raw: RawGeometry): Geometry {
-    return new Geometry({
-        positions: new Float32Array(raw.positions),
-        normals: new Float32Array(raw.normals),
-        uvs: new Float32Array(raw.uvs),
-        indices: new Uint32Array(raw.indices),
-    });
+    const positions = new Float32Array(raw.positions);
+    const normals   = new Float32Array(raw.normals);
+    const uvs       = new Float32Array(raw.uvs);
+    const indices   = new Uint32Array(raw.indices);
+    const tangents  = computeTangents(positions, normals, uvs, indices, positions.length / 3);
+    return new Geometry({positions, normals, uvs, indices, tangents});
 }
 
 /**
@@ -23,7 +23,7 @@ function toGeometry(raw: RawGeometry): Geometry {
  * Expands the geometry so no vertices are shared between triangles.
  */
 function applyFlatShading(raw: RawGeometry): RawGeometry {
-    const out: RawGeometry = { positions: [], normals: [], uvs: [], indices: [] };
+    const out: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
 
     for (let tri = 0; tri < raw.indices.length / 3; tri++) {
         const ia = raw.indices[tri * 3 + 0]!;
@@ -34,11 +34,9 @@ function applyFlatShading(raw: RawGeometry): RawGeometry {
         const bx = raw.positions[ib * 3]!, by = raw.positions[ib * 3 + 1]!, bz = raw.positions[ib * 3 + 2]!;
         const cx = raw.positions[ic * 3]!, cy = raw.positions[ic * 3 + 1]!, cz = raw.positions[ic * 3 + 2]!;
 
-        // Edge vectors
         const ux = bx - ax, uy = by - ay, uz = bz - az;
         const vx = cx - ax, vy = cy - ay, vz = cz - az;
 
-        // Cross product = face normal
         let nx = uy * vz - uz * vy;
         let ny = uz * vx - ux * vz;
         let nz = ux * vy - uy * vx;
@@ -77,10 +75,9 @@ export function createCube({
     depthSegments = 1,
     flat = false,
 }: CubeOptions = {}): Geometry {
-    const raw: RawGeometry = { positions: [], normals: [], uvs: [], indices: [] };
+    const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
     const hw = size / 2;
 
-    // Each face defined by: u-axis, v-axis, normal, origin
     const faces: Array<{
         u: [number, number, number];
         v: [number, number, number];
@@ -89,16 +86,16 @@ export function createCube({
         su: number;
         sv: number;
     }> = [
-        { u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1], o: [-hw, -hw, hw], su: widthSegments, sv: heightSegments },
-        { u: [-1, 0, 0], v: [0, 1, 0], n: [0, 0, -1], o: [hw, -hw, -hw], su: widthSegments, sv: heightSegments },
-        { u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0], o: [-hw, hw, hw], su: widthSegments, sv: depthSegments },
-        { u: [1, 0, 0], v: [0, 0, 1], n: [0, -1, 0], o: [-hw, -hw, -hw], su: widthSegments, sv: depthSegments },
-        { u: [0, 0, -1], v: [0, 1, 0], n: [1, 0, 0], o: [hw, -hw, hw], su: depthSegments, sv: heightSegments },
-        { u: [0, 0, 1], v: [0, 1, 0], n: [-1, 0, 0], o: [-hw, -hw, -hw], su: depthSegments, sv: heightSegments },
+        {u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1],  o: [-hw, -hw, hw],  su: widthSegments, sv: heightSegments},
+        {u: [-1, 0, 0], v: [0, 1, 0], n: [0, 0, -1], o: [hw, -hw, -hw],  su: widthSegments, sv: heightSegments},
+        {u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0],  o: [-hw, hw, hw],   su: widthSegments, sv: depthSegments},
+        {u: [1, 0, 0], v: [0, 0, 1],  n: [0, -1, 0], o: [-hw, -hw, -hw], su: widthSegments, sv: depthSegments},
+        {u: [0, 0, -1], v: [0, 1, 0], n: [1, 0, 0],  o: [hw, -hw, hw],   su: depthSegments, sv: heightSegments},
+        {u: [0, 0, 1],  v: [0, 1, 0], n: [-1, 0, 0], o: [-hw, -hw, -hw], su: depthSegments, sv: heightSegments},
     ];
 
     for (const face of faces) {
-        const { u, v, n, o, su, sv } = face;
+        const {u, v, n, o, su, sv} = face;
         const base = raw.positions.length / 3;
 
         for (let j = 0; j <= sv; j++) {
@@ -146,7 +143,7 @@ export function createPlane({
     heightSegments = 1,
     flat = false,
 }: PlaneOptions = {}): Geometry {
-    const raw: RawGeometry = { positions: [], normals: [], uvs: [], indices: [] };
+    const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
     const hw = width / 2, hh = height / 2;
 
     for (let j = 0; j <= heightSegments; j++) {
@@ -180,8 +177,8 @@ export interface QuadOptions {
     flat?: boolean;
 }
 
-export function createQuad({ width = 1, height = 1, flat = false }: QuadOptions = {}): Geometry {
-    return createPlane({ width, height, widthSegments: 1, heightSegments: 1, flat });
+export function createQuad({width = 1, height = 1, flat = false}: QuadOptions = {}): Geometry {
+    return createPlane({width, height, widthSegments: 1, heightSegments: 1, flat});
 }
 
 // ─── Sphere (UV sphere) ───────────────────────────────────────────────────────
@@ -199,7 +196,7 @@ export function createSphere({
     heightSegments = 16,
     flat = false,
 }: SphereOptions = {}): Geometry {
-    const raw: RawGeometry = { positions: [], normals: [], uvs: [], indices: [] };
+    const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
 
     for (let j = 0; j <= heightSegments; j++) {
         const polar = (j / heightSegments) * Math.PI;
@@ -248,7 +245,6 @@ export function createIcosphere({
     subdivisions = 2,
     flat = false,
 }: IcosphereOptions = {}): Geometry {
-    // Golden ratio
     const t = (1 + Math.sqrt(5)) / 2;
 
     let verts: [number, number, number][] = [
@@ -257,7 +253,6 @@ export function createIcosphere({
         [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1],
     ];
 
-    // Normalise to unit sphere
     verts = verts.map(([x, y, z]) => {
         const l = Math.sqrt(x * x + y * y + z * z);
         return [x / l, y / l, z / l];
@@ -302,7 +297,7 @@ export function createIcosphere({
         faces = next;
     }
 
-    const raw: RawGeometry = { positions: [], normals: [], uvs: [], indices: [] };
+    const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
 
     for (const [x, y, z] of verts) {
         raw.positions.push(x * radius, y * radius, z * radius);
@@ -340,10 +335,9 @@ export function createCylinder({
     openEnded = false,
     flat = false,
 }: CylinderOptions = {}): Geometry {
-    const raw: RawGeometry = { positions: [], normals: [], uvs: [], indices: [] };
+    const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
     const hh = height / 2;
 
-    // Side
     const slope = (radiusBottom - radiusTop) / height;
     for (let j = 0; j <= heightSegments; j++) {
         const t = j / heightSegments;
@@ -357,7 +351,6 @@ export function createCylinder({
 
             raw.positions.push(r * cosT, y, r * sinT);
 
-            // Outward normal (accounts for taper)
             const nl = Math.sqrt(1 + slope * slope);
             raw.normals.push(cosT / nl, slope / nl, sinT / nl);
             raw.uvs.push(i / radialSegments, t);
@@ -376,7 +369,6 @@ export function createCylinder({
     }
 
     if (!openEnded) {
-        // Top cap
         const topCenter = raw.positions.length / 3;
         raw.positions.push(0, hh, 0);
         raw.normals.push(0, 1, 0);
@@ -391,7 +383,6 @@ export function createCylinder({
             raw.indices.push(topCenter, topCenter + 2 + i, topCenter + 1 + i);
         }
 
-        // Bottom cap
         const botCenter = raw.positions.length / 3;
         raw.positions.push(0, -hh, 0);
         raw.normals.push(0, -1, 0);
@@ -459,7 +450,7 @@ export function createTorus({
     arc = 2 * Math.PI,
     flat = false,
 }: TorusOptions = {}): Geometry {
-    const raw: RawGeometry = { positions: [], normals: [], uvs: [], indices: [] };
+    const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
 
     for (let j = 0; j <= radialSegments; j++) {
         const phi = (j / radialSegments) * 2 * Math.PI;
