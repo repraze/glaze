@@ -1,8 +1,9 @@
-import { Camera } from "./camera";
-import { DirectionalLight, Light, PointLight, SpotLight } from "./light";
-import { Entity } from "./entity";
-import { Mesh } from "./mesh";
 import { vec3 } from "gl-matrix";
+
+import { Camera } from "./camera";
+import { Entity } from "./entity";
+import { DirectionalLight, Light, PointLight, SpotLight } from "./light";
+import { Mesh } from "./mesh";
 
 export class Scene {
     readonly root = new Entity();
