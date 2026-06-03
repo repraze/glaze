@@ -43,12 +43,12 @@ struct ModelUniforms {
 };
 
 struct MaterialUniforms {
-    albedo:    vec4<f32>,
-    roughness: f32,
-    metallic:  f32,
-    _pad0:     f32,
-    _pad1:     f32,
-    emissive:  vec4<f32>,
+    albedo:      vec4<f32>,
+    roughness:   f32,
+    metallic:    f32,
+    heightScale: f32,
+    _pad1:       f32,
+    emissive:    vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera:     CameraUniforms;
@@ -59,6 +59,7 @@ struct MaterialUniforms {
 @group(2) @binding(3) var normalMap:           texture_2d<f32>;
 @group(2) @binding(4) var emissiveMap:         texture_2d<f32>;
 @group(2) @binding(5) var ormMap:              texture_2d<f32>;
+@group(2) @binding(6) var heightMap:           texture_2d<f32>;
 
 struct VertexInput {
     @location(0) position: vec3<f32>, // object-space position
@@ -89,6 +90,27 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     return output;
 }
 
+fn parallaxOcclusionMapping(uv: vec2<f32>, viewDirT: vec3<f32>, scale: f32) -> vec2<f32> {
+    let numLayers = mix(8.0, 32.0, abs(dot(vec3(0.0, 0.0, 1.0), normalize(viewDirT))));
+    let layerDepth = 1.0 / numLayers;
+    let deltaUV = (viewDirT.xy / viewDirT.z) * scale / numLayers;
+    var depth = 0.0;
+    var cuv = uv;
+    // Height map: 1=raised (flush with surface), 0=recessed. Convert to depth (0=flush, 1=deep).
+    var cd = 1.0 - textureSampleLevel(heightMap, matSampler, cuv, 0.0).r;
+    for (var i: i32 = 0; i < 32; i++) {
+        if (depth >= cd) { break; }
+        cuv   -= deltaUV;
+        cd     = 1.0 - textureSampleLevel(heightMap, matSampler, cuv, 0.0).r;
+        depth += layerDepth;
+    }
+    let prevUV     = cuv + deltaUV;
+    let afterDiff  = cd - depth;
+    let beforeDiff = (1.0 - textureSampleLevel(heightMap, matSampler, prevUV, 0.0).r) - (depth - layerDepth);
+    let w = afterDiff / (afterDiff - beforeDiff);
+    return mix(cuv, prevUV, w);
+}
+
 struct GBufferOutput {
     @location(0) albedo:   vec4<f32>,  // rgb = albedo, a = ambient occlusion
     @location(1) normal:   vec4<f32>,  // rgb = world normal, a = roughness
@@ -98,13 +120,19 @@ struct GBufferOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> GBufferOutput {
-    let uv = input.uv;
-
-    // TBN matrix for normal mapping
+    // TBN matrix for normal mapping and POM
     let N = normalize(input.worldNormal);
     let T = normalize(input.worldTangent.xyz);
     let B = cross(N, T) * input.worldTangent.w;
     let tbn = mat3x3<f32>(T, B, N);
+
+    // Parallax occlusion mapping: offset UVs to simulate surface depth
+    var uv = input.uv;
+    if (mat.heightScale > 0.001) {
+        let viewDir  = normalize(camera.position.xyz - input.worldPos);
+        let viewDirT = transpose(tbn) * viewDir;
+        uv = parallaxOcclusionMapping(uv, viewDirT, mat.heightScale);
+    }
 
     // Normal map: always sample; default flat normal decodes to (0,0,1) → N unchanged
     let normalSample = textureSample(normalMap, matSampler, uv).rgb * 2.0 - 1.0;
@@ -606,7 +634,7 @@ export class DeferredScenePass extends Pass {
 
         this.cameraBindGroupLayout = device.createBindGroupLayout({
             label: "DeferredScene:cameraLayout",
-            entries: [{binding: 0, visibility: GPUShaderStage.VERTEX, buffer: {type: "uniform"}}],
+            entries: [{binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}}],
         });
 
         this.modelBindGroupLayout = device.createBindGroupLayout({
@@ -627,6 +655,7 @@ export class DeferredScenePass extends Pass {
                 {binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
                 {binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
                 {binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
+                {binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
             ],
         });
 
