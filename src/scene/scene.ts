@@ -1,5 +1,6 @@
 import { vec3 } from "gl-matrix";
 
+import { Texture } from "../texture";
 import { Camera } from "./camera";
 import { Entity } from "./entity";
 import { DirectionalLight, Light, PointLight, SpotLight } from "./light";
@@ -8,8 +9,11 @@ import { Mesh } from "./mesh";
 export class Scene {
     readonly root = new Entity();
     activeCamera: Camera | null = null;
-    ambientColor: vec3 = vec3.fromValues(0.05, 0.05, 0.05);
-    backgroundColor: vec3 = vec3.fromValues(0, 0, 0);
+    ambientColor:      vec3 = vec3.fromValues(0.05, 0.05, 0.05);
+    backgroundColor:   vec3 = vec3.fromValues(0, 0, 0);
+    environmentColor:  vec3 = vec3.fromValues(1.0, 1.0, 1.0);
+    environmentMap:    Texture | null = null;
+    backgroundMap:     Texture | null = null;
 
     add(entity: Entity): this {
         this.root.add(entity);

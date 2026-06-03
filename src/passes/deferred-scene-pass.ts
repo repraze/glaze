@@ -165,9 +165,11 @@ const CUBE_FACE_DIRS: {dir: [number, number, number]; up: [number, number, numbe
 // pointLights:        array<PointLight, 8>          offset  432  384 bytes  (8 × 48)
 // spotLights:         array<SpotLight, 4>           offset  816  512 bytes  (4 × 128)
 // backgroundColor:    vec4<f32>                    offset 1328   16 bytes
-// Total: 1344 bytes
+// environmentColor:   vec4<f32>                    offset 1344   16 bytes
+// invViewProjection:  mat4x4<f32>                  offset 1360   64 bytes
+// Total: 1424 bytes
 
-const LIGHTING_BUFFER_SIZE = 1344;
+const LIGHTING_BUFFER_SIZE = 1424;
 
 const LIGHTING_SHADER = /* wgsl */ `
 struct DirectionalLight {
@@ -191,13 +193,15 @@ struct SpotLight {
 };
 
 struct LightingUniforms {
-    ambientColor:      vec4<f32>,
-    cameraPosition:    vec4<f32>,
-    counts:            vec4<u32>,
-    directionalLights: array<DirectionalLight, ${MAX_DIRECTIONAL}>,
-    pointLights:       array<PointLight, ${MAX_POINT}>,
-    spotLights:        array<SpotLight, ${MAX_SPOT}>,
-    backgroundColor:   vec4<f32>,
+    ambientColor:       vec4<f32>,
+    cameraPosition:     vec4<f32>,
+    counts:             vec4<u32>,
+    directionalLights:  array<DirectionalLight, ${MAX_DIRECTIONAL}>,
+    pointLights:        array<PointLight, ${MAX_POINT}>,
+    spotLights:         array<SpotLight, ${MAX_SPOT}>,
+    backgroundColor:    vec4<f32>,
+    environmentColor:   vec4<f32>,
+    invViewProjection:  mat4x4<f32>,
 };
 
 @group(0) @binding(0) var albedoTex:         texture_2d<f32>;
@@ -205,6 +209,9 @@ struct LightingUniforms {
 @group(0) @binding(2) var posTex:            texture_2d<f32>;
 @group(0) @binding(3) var<uniform> lighting: LightingUniforms;
 @group(0) @binding(4) var emissiveTex:       texture_2d<f32>;
+@group(0) @binding(5) var environmentMap:    texture_2d<f32>;
+@group(0) @binding(6) var envSampler:        sampler;
+@group(0) @binding(7) var backgroundMap:     texture_2d<f32>;
 
 @group(1) @binding(0) var dirShadowMaps:   texture_depth_2d_array;
 @group(1) @binding(1) var spotShadowMaps:  texture_depth_2d_array;
@@ -256,6 +263,27 @@ fn F_Schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
     return F0 + (vec3<f32>(1.0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+fn F_SchlickRoughness(cosTheta: f32, F0: vec3<f32>, roughness: f32) -> vec3<f32> {
+    return F0 + (max(vec3<f32>(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+const INV_TWO_PI: f32 = 0.15915494;
+const INV_PI:     f32 = 0.31830988;
+
+fn sampleEquirect(dir: vec3<f32>) -> vec2<f32> {
+    let phi   = atan2(dir.z, dir.x);
+    let theta = asin(clamp(dir.y, -1.0, 1.0));
+    return vec2<f32>(phi * INV_TWO_PI + 0.5, 0.5 - theta * INV_PI);
+}
+
+fn sampleEnvMap(dir: vec3<f32>) -> vec3<f32> {
+    return textureSampleLevel(environmentMap, envSampler, sampleEquirect(dir), 0.0).rgb;
+}
+
+fn sampleBgMap(dir: vec3<f32>) -> vec3<f32> {
+    return textureSampleLevel(backgroundMap, envSampler, sampleEquirect(dir), 0.0).rgb;
+}
+
 fn brdf_direct(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, albedo: vec3<f32>, roughness: f32, metallic: f32, F0: vec3<f32>, NdotV: f32) -> vec3<f32> {
     let H     = normalize(V + L);
     let NdotL = max(dot(N, L), 0.0);
@@ -293,7 +321,14 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
     let coord   = vec2<i32>(i32(input.pos.x), i32(input.pos.y));
     let albedo4 = textureLoad(albedoTex, coord, 0);
     if (albedo4.a < 0.01) {
-        return lighting.backgroundColor;
+        let dims = vec2<f32>(textureDimensions(albedoTex));
+        let ndc  = vec2<f32>(
+            input.pos.x / dims.x * 2.0 - 1.0,
+            1.0 - input.pos.y / dims.y * 2.0,
+        );
+        let wp4 = lighting.invViewProjection * vec4<f32>(ndc, 1.0, 1.0);
+        let ray = normalize(wp4.xyz / wp4.w - lighting.cameraPosition.xyz);
+        return vec4<f32>(sampleBgMap(ray) * lighting.backgroundColor.rgb, 1.0);
     }
     let albedo       = albedo4.rgb;
     let ao           = albedo4.a;
@@ -314,7 +349,12 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
     let NdotV = max(dot(N, V), 0.001);
     let F0    = mix(vec3<f32>(0.04), albedo, metallic);
 
-    var colour = lighting.ambientColor.rgb * albedo * ao;
+    let F_ibl = F_SchlickRoughness(NdotV, F0, roughness);
+    let kD    = (1.0 - F_ibl) * (1.0 - metallic);
+    let R     = reflect(-V, N);
+    let indirect_diffuse  = lighting.ambientColor.rgb    * albedo * ao * kD;
+    let indirect_specular = sampleEnvMap(R) * lighting.environmentColor.rgb * F_ibl * ao;
+    var colour = indirect_diffuse + indirect_specular;
 
     for (var i = 0u; i < lighting.counts.x; i++) {
         let dl = lighting.directionalLights[i];
@@ -438,6 +478,7 @@ export class DeferredScenePass extends Pass {
 
     // Lighting uniforms
     private lightingBuffer!: GPUBuffer;
+    private readonly currentInvVP = mat4.create();
 
     // Default material texture resources
     private defaultWhiteTex!: GPUTexture;
@@ -670,6 +711,9 @@ export class DeferredScenePass extends Pass {
                 {binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "unfilterable-float"}},
                 {binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}},
                 {binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "unfilterable-float"}},
+                {binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
+                {binding: 6, visibility: GPUShaderStage.FRAGMENT, sampler: {type: "filtering"}},
+                {binding: 7, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
             ],
         });
 
@@ -950,6 +994,8 @@ export class DeferredScenePass extends Pass {
         const {outputs} = ctx;
 
         // Build lighting bind group each frame so G-buffer views are always current.
+        const envView = this.scene.environmentMap?.view ?? this.defaultWhiteView;
+        const bgView  = this.scene.backgroundMap?.view  ?? this.defaultWhiteView;
         const lightingBG = this.device.createBindGroup({
             label: "DeferredScene:lightingBindGroup",
             layout: this.lightingBindGroupLayout,
@@ -959,6 +1005,9 @@ export class DeferredScenePass extends Pass {
                 {binding: 2, resource: outputs["worldPos"]!},
                 {binding: 3, resource: {buffer: this.lightingBuffer}},
                 {binding: 4, resource: outputs["emissive"]!},
+                {binding: 5, resource: envView},
+                {binding: 6, resource: this.texSampler},
+                {binding: 7, resource: bgView},
             ],
         });
 
@@ -984,6 +1033,8 @@ export class DeferredScenePass extends Pass {
         const projMatrix = camera ? camera.getProjectionMatrix(aspect) : mat4.create();
         const vpMatrix   = camera ? camera.getViewProjectionMatrix(aspect) : mat4.create();
         const camPos     = camera ? camera.getCameraPosition() : vec3.create();
+
+        mat4.invert(this.currentInvVP, vpMatrix);
 
         const data = new Float32Array(208 / 4);
         data.set(viewMatrix, 0);
@@ -1061,6 +1112,11 @@ export class DeferredScenePass extends Pass {
 
         const bg = this.scene.backgroundColor;
         f32[332] = bg[0]; f32[333] = bg[1]; f32[334] = bg[2]; f32[335] = 1.0;
+
+        const env = this.scene.environmentColor;
+        f32[336] = env[0]; f32[337] = env[1]; f32[338] = env[2]; f32[339] = 1.0;
+
+        f32.set(this.currentInvVP, 340);
 
         this.device.queue.writeBuffer(this.lightingBuffer, 0, data);
     }
