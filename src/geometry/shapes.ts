@@ -297,20 +297,79 @@ export function createIcosphere({
         faces = next;
     }
 
-    const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const uvs: number[] = [];
 
     for (const [x, y, z] of verts) {
-        raw.positions.push(x * radius, y * radius, z * radius);
-        raw.normals.push(x, y, z);
+        positions.push(x * radius, y * radius, z * radius);
+        normals.push(x, y, z);
         const u = 0.5 + Math.atan2(z, x) / (2 * Math.PI);
         const v = 0.5 - Math.asin(y) / Math.PI;
-        raw.uvs.push(u, v);
+        uvs.push(u, v);
     }
+
+    // Seam fix: triangles crossing the antimeridian (u≈0 on one side, u≈1 on the other) get
+    // the low-u vertex duplicated with u+1 so the GPU interpolates the short way around.
+    const seamDuplicates = new Map<number, number>();
+
+    function getSeamDuplicate(origIdx: number): number {
+        const cached = seamDuplicates.get(origIdx);
+        if (cached !== undefined) return cached;
+        const newIdx = positions.length / 3;
+        positions.push(positions[origIdx * 3]!, positions[origIdx * 3 + 1]!, positions[origIdx * 3 + 2]!);
+        normals.push(normals[origIdx * 3]!, normals[origIdx * 3 + 1]!, normals[origIdx * 3 + 2]!);
+        uvs.push(uvs[origIdx * 2]! + 1, uvs[origIdx * 2 + 1]!);
+        seamDuplicates.set(origIdx, newIdx);
+        return newIdx;
+    }
+
+    // Pole fix: subdivision produces an exact north/south pole vertex (0,±1,0) whose atan2
+    // is indeterminate, landing at u=0.5.  That vertex is shared by faces spanning all
+    // longitudes, so all faces pull it toward u=0.5 causing a converging distortion.
+    // Fix: give each face its own copy of the pole vertex with u = midpoint of its neighbors.
+    const poleDuplicates = new Map<string, number>();
+
+    function getPoleDuplicate(idx: number, targetU: number): number {
+        const key = `${idx}_${Math.round(targetU * 1000)}`;
+        const cached = poleDuplicates.get(key);
+        if (cached !== undefined) return cached;
+        const newIdx = positions.length / 3;
+        positions.push(positions[idx * 3]!, positions[idx * 3 + 1]!, positions[idx * 3 + 2]!);
+        normals.push(normals[idx * 3]!, normals[idx * 3 + 1]!, normals[idx * 3 + 2]!);
+        uvs.push(targetU, uvs[idx * 2 + 1]!);
+        poleDuplicates.set(key, newIdx);
+        return newIdx;
+    }
+
+    const isPole = (idx: number) => Math.abs(normals[idx * 3 + 1]!) > 1 - 1e-6;
+
+    const indices: number[] = [];
 
     for (const [a, b, c] of faces) {
-        raw.indices.push(a, b, c);
+        let ia = a, ib = b, ic = c;
+
+        const ua = uvs[a * 2]!;
+        const ub = uvs[b * 2]!;
+        const uc = uvs[c * 2]!;
+
+        // Seam fix (first, so pole fix can use the corrected u values)
+        if (Math.min(ua, ub, uc) < 0.2 && Math.max(ua, ub, uc) > 0.8) {
+            if (ua < 0.5) ia = getSeamDuplicate(a);
+            if (ub < 0.5) ib = getSeamDuplicate(b);
+            if (uc < 0.5) ic = getSeamDuplicate(c);
+        }
+
+        // Pole fix (reads seam-corrected u values from the potentially updated indices)
+        const ua2 = uvs[ia * 2]!, ub2 = uvs[ib * 2]!, uc2 = uvs[ic * 2]!;
+        if (isPole(ia)) ia = getPoleDuplicate(ia, (ub2 + uc2) * 0.5);
+        if (isPole(ib)) ib = getPoleDuplicate(ib, (ua2 + uc2) * 0.5);
+        if (isPole(ic)) ic = getPoleDuplicate(ic, (ua2 + ub2) * 0.5);
+
+        indices.push(ia, ib, ic);
     }
 
+    const raw: RawGeometry = {positions, normals, uvs, indices};
     return toGeometry(flat ? applyFlatShading(raw) : raw);
 }
 
@@ -336,65 +395,92 @@ export function createCylinder({
     flat = false,
 }: CylinderOptions = {}): Geometry {
     const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
-    const hh = height / 2;
-
+    const hh    = height / 2;
     const slope = (radiusBottom - radiusTop) / height;
+    const nl    = Math.sqrt(1 + slope * slope);
+
+    // Track the start index of each horizontal ring.
+    // When a ring's radius is 0 (cone apex/nadir) we emit a single shared vertex
+    // with an axis-aligned normal instead of a full ring of coincident vertices
+    // with diverging lateral normals — the latter causes banding in smooth shading.
+    const ringStart: number[] = [];
+
     for (let j = 0; j <= heightSegments; j++) {
         const t = j / heightSegments;
         const y = hh - t * height;
         const r = radiusTop + t * (radiusBottom - radiusTop);
 
-        for (let i = 0; i <= radialSegments; i++) {
-            const theta = (i / radialSegments) * 2 * Math.PI;
-            const cosT = Math.cos(theta);
-            const sinT = Math.sin(theta);
+        ringStart.push(raw.positions.length / 3);
 
-            raw.positions.push(r * cosT, y, r * sinT);
-
-            const nl = Math.sqrt(1 + slope * slope);
-            raw.normals.push(cosT / nl, slope / nl, sinT / nl);
-            raw.uvs.push(i / radialSegments, t);
+        if (r === 0) {
+            // Apex/nadir: one vertex, axis-facing normal.
+            raw.positions.push(0, y, 0);
+            raw.normals.push(0, j === 0 ? 1 : -1, 0);
+            raw.uvs.push(0.5, t);
+        } else {
+            for (let i = 0; i <= radialSegments; i++) {
+                const theta = (i / radialSegments) * 2 * Math.PI;
+                const cosT  = Math.cos(theta);
+                const sinT  = Math.sin(theta);
+                raw.positions.push(r * cosT, y, r * sinT);
+                raw.normals.push(cosT / nl, slope / nl, sinT / nl);
+                raw.uvs.push(i / radialSegments, t);
+            }
         }
     }
 
-    const ringVerts = radialSegments + 1;
     for (let j = 0; j < heightSegments; j++) {
+        const tR = radiusTop + (j       / heightSegments) * (radiusBottom - radiusTop);
+        const bR = radiusTop + ((j + 1) / heightSegments) * (radiusBottom - radiusTop);
+        const tb = ringStart[j]!;
+        const bb = ringStart[j + 1]!;
+
         for (let i = 0; i < radialSegments; i++) {
-            const a = j * ringVerts + i;
-            const b = a + 1;
-            const c = (j + 1) * ringVerts + i;
-            const d = c + 1;
-            raw.indices.push(a, b, c, b, d, c);
+            if (tR === 0) {
+                // Fan down from top apex — reversed i order for outward winding.
+                raw.indices.push(tb, bb + i + 1, bb + i);
+            } else if (bR === 0) {
+                // Fan up to bottom nadir.
+                raw.indices.push(tb + i, tb + i + 1, bb);
+            } else {
+                const a = tb + i, b = tb + i + 1;
+                const c = bb + i, d = bb + i + 1;
+                raw.indices.push(a, b, c, b, d, c);
+            }
         }
     }
 
     if (!openEnded) {
-        const topCenter = raw.positions.length / 3;
-        raw.positions.push(0, hh, 0);
-        raw.normals.push(0, 1, 0);
-        raw.uvs.push(0.5, 0.5);
-        for (let i = 0; i <= radialSegments; i++) {
-            const theta = (i / radialSegments) * 2 * Math.PI;
-            raw.positions.push(radiusTop * Math.cos(theta), hh, radiusTop * Math.sin(theta));
+        if (radiusTop > 0) {
+            const topCenter = raw.positions.length / 3;
+            raw.positions.push(0, hh, 0);
             raw.normals.push(0, 1, 0);
-            raw.uvs.push(0.5 + Math.cos(theta) * 0.5, 0.5 + Math.sin(theta) * 0.5);
-        }
-        for (let i = 0; i < radialSegments; i++) {
-            raw.indices.push(topCenter, topCenter + 2 + i, topCenter + 1 + i);
+            raw.uvs.push(0.5, 0.5);
+            for (let i = 0; i <= radialSegments; i++) {
+                const theta = (i / radialSegments) * 2 * Math.PI;
+                raw.positions.push(radiusTop * Math.cos(theta), hh, radiusTop * Math.sin(theta));
+                raw.normals.push(0, 1, 0);
+                raw.uvs.push(0.5 + Math.cos(theta) * 0.5, 0.5 + Math.sin(theta) * 0.5);
+            }
+            for (let i = 0; i < radialSegments; i++) {
+                raw.indices.push(topCenter, topCenter + 2 + i, topCenter + 1 + i);
+            }
         }
 
-        const botCenter = raw.positions.length / 3;
-        raw.positions.push(0, -hh, 0);
-        raw.normals.push(0, -1, 0);
-        raw.uvs.push(0.5, 0.5);
-        for (let i = 0; i <= radialSegments; i++) {
-            const theta = (i / radialSegments) * 2 * Math.PI;
-            raw.positions.push(radiusBottom * Math.cos(theta), -hh, radiusBottom * Math.sin(theta));
+        if (radiusBottom > 0) {
+            const botCenter = raw.positions.length / 3;
+            raw.positions.push(0, -hh, 0);
             raw.normals.push(0, -1, 0);
-            raw.uvs.push(0.5 + Math.cos(theta) * 0.5, 0.5 + Math.sin(theta) * 0.5);
-        }
-        for (let i = 0; i < radialSegments; i++) {
-            raw.indices.push(botCenter, botCenter + 1 + i, botCenter + 2 + i);
+            raw.uvs.push(0.5, 0.5);
+            for (let i = 0; i <= radialSegments; i++) {
+                const theta = (i / radialSegments) * 2 * Math.PI;
+                raw.positions.push(radiusBottom * Math.cos(theta), -hh, radiusBottom * Math.sin(theta));
+                raw.normals.push(0, -1, 0);
+                raw.uvs.push(0.5 + Math.cos(theta) * 0.5, 0.5 + Math.sin(theta) * 0.5);
+            }
+            for (let i = 0; i < radialSegments; i++) {
+                raw.indices.push(botCenter, botCenter + 1 + i, botCenter + 2 + i);
+            }
         }
     }
 
