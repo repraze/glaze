@@ -1,5 +1,5 @@
-import {ColorRgb, ColorRgba} from "../color";
-import {Texture} from "../texture";
+import type {ColorRgb, ColorRgba} from "../color.ts";
+import {Texture} from "../texture.ts";
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
 

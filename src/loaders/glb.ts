@@ -1,4 +1,6 @@
-import {Geometry, computeTangents} from "../geometry/geometry";
+import {computeTangents, Geometry} from "../geometry/geometry.ts";
+import {PBRMaterial} from "../material/material.ts";
+import {Texture} from "../texture.ts";
 
 // ─── GLTF types (minimal subset) ─────────────────────────────────────────────
 
@@ -17,10 +19,31 @@ interface GltfBufferView {
     byteStride?: number;
 }
 
+interface GltfTextureRef { index: number; texCoord?: number; }
+
+interface GltfMaterialDef {
+    name?: string;
+    pbrMetallicRoughness?: {
+        baseColorFactor?: [number, number, number, number];
+        baseColorTexture?: GltfTextureRef;
+        metallicFactor?: number;
+        roughnessFactor?: number;
+        metallicRoughnessTexture?: GltfTextureRef;
+    };
+    normalTexture?: GltfTextureRef & {scale?: number};
+    occlusionTexture?: GltfTextureRef & {strength?: number};
+    emissiveTexture?: GltfTextureRef;
+    emissiveFactor?: [number, number, number];
+}
+
+interface GltfTextureDef { source?: number; sampler?: number; }
+interface GltfImageDef { uri?: string; bufferView?: number; mimeType?: string; }
+
 interface GltfMeshPrimitive {
     attributes: Record<string, number>;
     indices?: number;
     mode?: number;
+    material?: number;
 }
 
 interface GltfMesh {
@@ -32,6 +55,9 @@ interface GltfJson {
     bufferViews?: GltfBufferView[];
     buffers?: {byteLength: number}[];
     meshes?: GltfMesh[];
+    materials?: GltfMaterialDef[];
+    textures?: GltfTextureDef[];
+    images?: GltfImageDef[];
 }
 
 // ─── Component type constants ─────────────────────────────────────────────────
@@ -49,6 +75,41 @@ const TYPE_ELEMENT_COUNT: Record<string, number> = {
     SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4,
     MAT2: 4, MAT3: 9, MAT4: 16,
 };
+
+// ─── Public types ─────────────────────────────────────────────────────────────
+
+/** Describes where image data lives — either an external file or inline bytes. */
+export type GltfTextureSource =
+    | {type: "uri"; uri: string}
+    | {type: "embedded"; data: Uint8Array<ArrayBuffer>; mimeType: string};
+
+/**
+ * GPU-free material descriptor extracted from a GLTF primitive.
+ * Scalar defaults follow the GLTF 2.0 spec.
+ */
+export interface GltfMaterialDescriptor {
+    name: string;
+    /** RGBA base color factor (default [1,1,1,1]). */
+    baseColorFactor: [number, number, number, number];
+    /** Default 1.0 per GLTF spec. */
+    metallicFactor: number;
+    /** Default 1.0 per GLTF spec. */
+    roughnessFactor: number;
+    emissiveFactor: [number, number, number];
+    baseColorTexture: GltfTextureSource | null;
+    normalTexture: GltfTextureSource | null;
+    emissiveTexture: GltfTextureSource | null;
+    occlusionTexture: GltfTextureSource | null;
+    /** ORM texture: R=occlusion, G=roughness, B=metallic. */
+    metallicRoughnessTexture: GltfTextureSource | null;
+}
+
+/** One mesh primitive returned by {@link parseGLB}. */
+export interface GLBPrimitive {
+    geometry: Geometry;
+    /** Null when the primitive has no material in the GLTF JSON. */
+    material: GltfMaterialDescriptor | null;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -99,13 +160,69 @@ function toUint32(data: ArrayLike<number>): Uint32Array {
     return Uint32Array.from(data);
 }
 
+function extractTextureSource(
+    json: GltfJson,
+    bin: ArrayBuffer,
+    textureIndex: number,
+): GltfTextureSource | null {
+    const texture = json.textures?.[textureIndex];
+    if (!texture || texture.source === undefined) return null;
+    const image = json.images?.[texture.source];
+    if (!image) return null;
+
+    if (image.uri !== undefined) {
+        return {type: "uri", uri: image.uri};
+    }
+
+    if (image.bufferView !== undefined) {
+        const bv = json.bufferViews?.[image.bufferView];
+        if (!bv) return null;
+        const src = new Uint8Array(bin, bv.byteOffset ?? 0, bv.byteLength);
+        return {
+            type: "embedded",
+            data: src.slice(), // own copy, not a view into bin
+            mimeType: image.mimeType ?? "image/png",
+        };
+    }
+
+    return null;
+}
+
+function extractMaterial(
+    json: GltfJson,
+    bin: ArrayBuffer,
+    materialIndex: number,
+): GltfMaterialDescriptor {
+    const mat = json.materials?.[materialIndex];
+    const pbr = mat?.pbrMetallicRoughness ?? {};
+    const tex = (ref: GltfTextureRef | undefined) =>
+        ref !== undefined ? extractTextureSource(json, bin, ref.index) : null;
+
+    return {
+        name:                     mat?.name ?? "",
+        baseColorFactor:          pbr.baseColorFactor ?? [1, 1, 1, 1],
+        metallicFactor:           pbr.metallicFactor ?? 1.0,
+        roughnessFactor:          pbr.roughnessFactor ?? 1.0,
+        emissiveFactor:           mat?.emissiveFactor ?? [0, 0, 0],
+        baseColorTexture:         tex(pbr.baseColorTexture),
+        normalTexture:            tex(mat?.normalTexture),
+        emissiveTexture:          tex(mat?.emissiveTexture),
+        occlusionTexture:         tex(mat?.occlusionTexture),
+        metallicRoughnessTexture: tex(pbr.metallicRoughnessTexture),
+    };
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Parse a GLB (Binary GLTF 2.0) buffer and return one Geometry per mesh primitive.
+ * Parse a GLB (Binary GLTF 2.0) buffer and return one {@link GLBPrimitive} per
+ * mesh primitive, each carrying a {@link Geometry} and an optional
+ * {@link GltfMaterialDescriptor}.
+ *
  * Tangents are read from the TANGENT attribute when present, otherwise computed.
+ * The material descriptor is `null` when the primitive has no material index.
  */
-export function parseGLB(buffer: ArrayBuffer): Geometry[] {
+export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
     const view = new DataView(buffer);
 
     // GLB header (12 bytes)
@@ -132,7 +249,7 @@ export function parseGLB(buffer: ArrayBuffer): Geometry[] {
         }
     }
 
-    const geometries: Geometry[] = [];
+    const primitives: GLBPrimitive[] = [];
 
     for (const mesh of json.meshes ?? []) {
         for (const prim of mesh.primitives) {
@@ -174,19 +291,72 @@ export function parseGLB(buffer: ArrayBuffer): Geometry[] {
                 tangents = computeTangents(positions, normals, uvs, indices, vertexCount);
             }
 
-            geometries.push(new Geometry({positions, normals, uvs, indices, tangents}));
+            const geometry = new Geometry({positions, normals, uvs, indices, tangents});
+            const material = prim.material !== undefined
+                ? extractMaterial(json, bin, prim.material)
+                : null;
+
+            primitives.push({geometry, material});
         }
     }
 
-    return geometries;
+    return primitives;
 }
 
 /**
- * Fetch a GLB file from a URL and parse it into Geometry instances.
+ * Fetch a GLB file from a URL and parse it into {@link GLBPrimitive} instances.
  */
-export async function loadGLBFromURL(url: string): Promise<Geometry[]> {
+export async function loadGLBFromURL(url: string): Promise<GLBPrimitive[]> {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`GLB: failed to fetch '${url}' (${response.status})`);
     const buffer = await response.arrayBuffer();
     return parseGLB(buffer);
+}
+
+/**
+ * Build a {@link PBRMaterial} from a {@link GltfMaterialDescriptor}.
+ *
+ * @param device      WebGPU device used to create textures.
+ * @param descriptor  Material descriptor from {@link parseGLB}.
+ * @param resolveUri  Maps a relative URI (from the GLTF file) to a URL that can
+ *                    be fetched. Defaults to the identity (URI used as-is), which
+ *                    works when the GLB is served from the same directory.
+ */
+export async function createPBRMaterialFromGltf(
+    device: GPUDevice,
+    descriptor: GltfMaterialDescriptor,
+    resolveUri: (uri: string) => string = uri => uri,
+): Promise<PBRMaterial> {
+    const [r, g, b] = descriptor.baseColorFactor;
+    const mat = new PBRMaterial({
+        color:    [r!, g!, b!],
+        metallic: descriptor.metallicFactor,
+        roughness: descriptor.roughnessFactor,
+        emissive: [
+            descriptor.emissiveFactor[0],
+            descriptor.emissiveFactor[1],
+            descriptor.emissiveFactor[2],
+            0,
+        ],
+    });
+
+    async function loadTex(source: GltfTextureSource | null): Promise<Texture | null> {
+        if (!source) return null;
+        if (source.type === "uri") return Texture.fromURL(device, resolveUri(source.uri));
+        return Texture.fromBlob(device, new Blob([source.data], {type: source.mimeType}));
+    }
+
+    const [albedo, normal, emissive, orm] = await Promise.all([
+        loadTex(descriptor.baseColorTexture),
+        loadTex(descriptor.normalTexture),
+        loadTex(descriptor.emissiveTexture),
+        loadTex(descriptor.metallicRoughnessTexture),
+    ]);
+
+    if (albedo)   mat.albedoMap   = albedo;
+    if (normal)   mat.normalMap   = normal;
+    if (emissive) mat.emissiveMap = emissive;
+    if (orm)      mat.ormMap      = orm;
+
+    return mat;
 }

@@ -1,6 +1,6 @@
 export type {ColorRgb, ColorRgba, ColorSpace} from "./color";
 export {colorRgb, colorRgba, setColorRgb, setColorRgba} from "./color";
-export {Geometry, computeTangents} from "./geometry/geometry";
+export {computeTangents,Geometry} from "./geometry/geometry";
 export {
     createCone,
     createCube,
@@ -11,18 +11,24 @@ export {
     createSphere,
     createTorus,
 } from "./geometry/shapes";
-export {parseGLB, loadGLBFromURL} from "./loaders/glb";
-export {parseOBJ, loadOBJFromURL} from "./loaders/obj";
-export {Material, PBRMaterial, StandardMaterial} from "./material/material";
+export type {GLBPrimitive, GltfMaterialDescriptor, GltfTextureSource} from "./loaders/glb";
+export {createPBRMaterialFromGltf, loadGLBFromURL, parseGLB} from "./loaders/glb";
+export {loadOBJFromURL,parseOBJ} from "./loaders/obj";
 export type {PBRMaterialOptions, StandardMaterialOptions} from "./material/material";
+export {Material, PBRMaterial, StandardMaterial} from "./material/material";
+export {bounce, clamp, easeIn, easeInOut, easeOut, lerp, oscillate, pingpong, smootherstep, smoothstep} from "./math/animation";
 export type {PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "./pass";
 export {Pass} from "./pass";
-export {RenderGraph} from "./render-graph";
-export type {TextureHandle, RenderGraphNode} from "./render-graph";
+export type {BlitPassOptions, ToneMapping} from "./passes/blit-pass";
+export {BlitPass} from "./passes/blit-pass";
 export type {DeferredScenePassOptions} from "./passes/deferred-scene-pass";
 export {DeferredScenePass} from "./passes/deferred-scene-pass";
-export type {ShaderPassOptions, ShaderPassInputSlot} from "./passes/shader-pass";
+export type {ShaderPassInputSlot,ShaderPassOptions} from "./passes/shader-pass";
 export {ShaderPass} from "./passes/shader-pass";
+export type {SplitViewPassOptions, SplitViewSlot, ViewportRect} from "./passes/split-view-pass";
+export {SplitViewPass} from "./passes/split-view-pass";
+export type {RenderGraphNode,TextureHandle} from "./render-graph";
+export {RenderGraph} from "./render-graph";
 export {Renderer} from "./renderer";
 export {Camera, OrthographicCamera, PerspectiveCamera} from "./scene/camera";
 export {Entity} from "./scene/entity";

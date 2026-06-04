@@ -19,6 +19,10 @@ export class Texture {
 
     static async fromURL(device: GPUDevice, url: string): Promise<Texture> {
         const blob = await fetch(url).then((r) => r.blob());
+        return Texture.fromBlob(device, blob);
+    }
+
+    static async fromBlob(device: GPUDevice, blob: Blob): Promise<Texture> {
         const bitmap = await createImageBitmap(blob);
         const tex = device.createTexture({
             size: { width: bitmap.width, height: bitmap.height },

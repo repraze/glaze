@@ -1,4 +1,4 @@
-import {Geometry, computeTangents} from "./geometry";
+import {computeTangents,Geometry} from "./geometry";
 
 // ─── Internal builder helpers ─────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-import {Geometry, computeTangents} from "../geometry/geometry";
+import {computeTangents, Geometry} from "../geometry/geometry.ts";
 
 // ─── OBJ parser ───────────────────────────────────────────────────────────────
 
