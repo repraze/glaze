@@ -14,6 +14,7 @@ export {
 export type {GLBPrimitive, GltfMaterialDescriptor, GltfTextureSource} from "./loaders/glb";
 export {createPBRMaterialFromGltf, loadGLBFromURL, parseGLB} from "./loaders/glb";
 export {loadOBJFromURL,parseOBJ} from "./loaders/obj";
+export {loadSTLFromURL,parseSTL} from "./loaders/stl";
 export type {PBRMaterialOptions, StandardMaterialOptions} from "./material/material";
 export {Material, PBRMaterial, StandardMaterial} from "./material/material";
 export {bounce, clamp, easeIn, easeInOut, easeOut, lerp, oscillate, pingpong, smootherstep, smoothstep} from "./math/animation";
