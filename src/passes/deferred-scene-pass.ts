@@ -10,7 +10,8 @@ import {Scene} from "../scene/scene";
 
 // ─── WGSL shaders ─────────────────────────────────────────────────────────────
 
-const SHADOW_SHADER = /* wgsl */ `
+function buildShadowShader(): string {
+    return /* wgsl */ `
 struct ShadowLightUniforms {
     lightSpaceMatrix: mat4x4<f32>,
 };
@@ -27,8 +28,27 @@ fn vs_shadow(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
     return light.lightSpaceMatrix * model.model * vec4<f32>(position, 1.0);
 }
 `;
+}
 
-const GBUFFER_SHADER = /* wgsl */ `
+export interface GBufferFeatures {
+    parallaxMapping: boolean; // heightMap is assigned
+    normalMapping:   boolean; // normalMap is assigned
+}
+
+function getGBufferFeatures(mat: PBRMaterial): GBufferFeatures {
+    return {
+        parallaxMapping: mat.heightMap != null,
+        normalMapping:   mat.normalMap  != null,
+    };
+}
+
+function featureKey(f: GBufferFeatures): string {
+    return (f.parallaxMapping ? "P" : "") + (f.normalMapping ? "N" : "");
+}
+
+function buildGBufferShader(f: GBufferFeatures): string {
+    const needsTbn = f.parallaxMapping || f.normalMapping;
+    return /* wgsl */ `
 struct CameraUniforms {
     view:           mat4x4<f32>,
     projection:     mat4x4<f32>,
@@ -62,18 +82,18 @@ struct MaterialUniforms {
 @group(2) @binding(6) var heightMap:           texture_2d<f32>;
 
 struct VertexInput {
-    @location(0) position: vec3<f32>, // object-space position
-    @location(1) normal:   vec3<f32>, // object-space vertex normal
-    @location(2) uv:       vec2<f32>, // texture coordinates
-    @location(3) tangent:  vec4<f32>, // object-space tangent (xyz) + handedness (w)
+    @location(0) position: vec3<f32>,
+    @location(1) normal:   vec3<f32>,
+    @location(2) uv:       vec2<f32>,
+    @location(3) tangent:  vec4<f32>,
 };
 
 struct VertexOutput {
-    @builtin(position) clipPos:      vec4<f32>, // clip-space position
-    @location(0)       worldPos:     vec3<f32>, // world-space position
-    @location(1)       worldNormal:  vec3<f32>, // world-space vertex normal
-    @location(2)       uv:           vec2<f32>, // texture coordinates
-    @location(3)       worldTangent: vec4<f32>, // world-space tangent (xyz) + handedness (w)
+    @builtin(position) clipPos:      vec4<f32>,
+    @location(0)       worldPos:     vec3<f32>,
+    @location(1)       worldNormal:  vec3<f32>,
+    @location(2)       uv:           vec2<f32>,
+    @location(3)       worldTangent: vec4<f32>,
 };
 
 @vertex
@@ -84,20 +104,19 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.worldPos    = worldPos.xyz;
     output.worldNormal = normalize((model.normalMatrix * vec4<f32>(input.normal, 0.0)).xyz);
     output.uv          = input.uv;
-    // Transform tangent through the normal matrix (same rotation as normal)
     let worldTangentXYZ = normalize((model.normalMatrix * vec4<f32>(input.tangent.xyz, 0.0)).xyz);
     output.worldTangent = vec4<f32>(worldTangentXYZ, input.tangent.w);
     return output;
 }
 
+${f.parallaxMapping ? `
 fn parallaxOcclusionMapping(uv: vec2<f32>, viewDirT: vec3<f32>, scale: f32) -> vec2<f32> {
-    let numLayers = mix(8.0, 32.0, abs(dot(vec3(0.0, 0.0, 1.0), normalize(viewDirT))));
+    let numLayers  = mix(8.0, 32.0, abs(dot(vec3(0.0, 0.0, 1.0), normalize(viewDirT))));
     let layerDepth = 1.0 / numLayers;
-    let deltaUV = (viewDirT.xy / viewDirT.z) * scale / numLayers;
+    let deltaUV    = (viewDirT.xy / viewDirT.z) * scale / numLayers;
     var depth = 0.0;
-    var cuv = uv;
-    // Height map: 1=raised (flush with surface), 0=recessed. Convert to depth (0=flush, 1=deep).
-    var cd = 1.0 - textureSampleLevel(heightMap, matSampler, cuv, 0.0).r;
+    var cuv   = uv;
+    var cd    = 1.0 - textureSampleLevel(heightMap, matSampler, cuv, 0.0).r;
     for (var i: i32 = 0; i < 32; i++) {
         if (depth >= cd) { break; }
         cuv   -= deltaUV;
@@ -110,45 +129,45 @@ fn parallaxOcclusionMapping(uv: vec2<f32>, viewDirT: vec3<f32>, scale: f32) -> v
     let w = afterDiff / (afterDiff - beforeDiff);
     return mix(cuv, prevUV, w);
 }
+` : ""}
 
 struct GBufferOutput {
-    @location(0) albedo:   vec4<f32>,  // rgb = albedo, a = ambient occlusion
-    @location(1) normal:   vec4<f32>,  // rgb = world normal, a = roughness
-    @location(2) worldPos: vec4<f32>,  // rgb = world position, a = metallic
-    @location(3) emissive: vec4<f32>,  // rgb = emissive, a = receiveShadow
+    @location(0) albedo:   vec4<f32>,
+    @location(1) normal:   vec4<f32>,
+    @location(2) worldPos: vec4<f32>,
+    @location(3) emissive: vec4<f32>,
 };
 
 @fragment
 fn fs_main(input: VertexOutput) -> GBufferOutput {
-    // TBN matrix for normal mapping and POM
     let N = normalize(input.worldNormal);
-    let T = normalize(input.worldTangent.xyz);
-    let B = cross(N, T) * input.worldTangent.w;
+${needsTbn ? `
+    let T   = normalize(input.worldTangent.xyz);
+    let B   = cross(N, T) * input.worldTangent.w;
     let tbn = mat3x3<f32>(T, B, N);
-
-    // Parallax occlusion mapping: offset UVs to simulate surface depth
+` : ""}
     var uv = input.uv;
+${f.parallaxMapping ? `
     if (mat.heightScale > 0.001) {
         let viewDir  = normalize(camera.position.xyz - input.worldPos);
         let viewDirT = transpose(tbn) * viewDir;
         uv = parallaxOcclusionMapping(uv, viewDirT, mat.heightScale);
     }
-
-    // Normal map: always sample; default flat normal decodes to (0,0,1) → N unchanged
-    let normalSample = textureSample(normalMap, matSampler, uv).rgb * 2.0 - 1.0;
+` : ""}
+${f.normalMapping ? `
+    let normalSample  = textureSample(normalMap, matSampler, uv).rgb * 2.0 - 1.0;
     let shadingNormal = normalize(tbn * normalSample);
-
-    // Albedo
+` : `
+    let shadingNormal = N;
+`}
     let texAlbedo = textureSample(albedoMap, matSampler, uv).rgb;
     let albedo    = texAlbedo * mat.albedo.rgb;
 
-    // ORM: default white → AO=1, roughness/metallic scale from material uniforms
     let orm       = textureSample(ormMap, matSampler, uv);
     let ao        = orm.r;
     let roughness = clamp(orm.g * mat.roughness, 0.0, 1.0);
     let metallic  = clamp(orm.b * mat.metallic,  0.0, 1.0);
 
-    // Emissive
     let texEmissive = textureSample(emissiveMap, matSampler, uv).rgb;
     let emissive    = texEmissive * mat.emissive.rgb;
 
@@ -160,6 +179,7 @@ fn fs_main(input: VertexOutput) -> GBufferOutput {
     return out;
 }
 `;
+}
 
 // ─── Max lights ──────────────────────────────────────────────────────────────
 
@@ -199,7 +219,8 @@ const CUBE_FACE_DIRS: {dir: [number, number, number]; up: [number, number, numbe
 
 const LIGHTING_BUFFER_SIZE = 1424;
 
-const LIGHTING_SHADER = /* wgsl */ `
+function buildLightingShader(): string {
+    return /* wgsl */ `
 struct DirectionalLight {
     direction:        vec4<f32>,      // xyz = direction, w = castShadow (0/1)
     colorIntensity:   vec4<f32>,      // xyz = color, w = intensity
@@ -447,7 +468,7 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
     return vec4<f32>(colour, 1.0);
 }
 `;
-
+}
 
 // ─── GPU resource cache per Mesh ──────────────────────────────────────────────
 
@@ -490,8 +511,9 @@ export class DeferredScenePass extends Pass {
 
     private device!: GPUDevice;
 
-    // G-buffer and lighting pipelines
-    private gbufferPipeline!: GPURenderPipeline;
+    // G-buffer pipeline cache (one compiled variant per GBufferFeatures combination)
+    private gbufferPipelineLayout!: GPUPipelineLayout;
+    private gbufferPipelineCache = new Map<string, GPURenderPipeline>();
     private lightingPipeline!: GPURenderPipeline;
 
     private cameraBindGroupLayout!: GPUBindGroupLayout;
@@ -511,7 +533,7 @@ export class DeferredScenePass extends Pass {
     // Default material texture resources
     private defaultWhiteTex!: GPUTexture;
     private defaultWhiteView!: GPUTextureView;
-    private defaultNormalTex!: GPUTexture;
+private defaultNormalTex!: GPUTexture;
     private defaultNormalView!: GPUTextureView;
     private texSampler!: GPUSampler;
 
@@ -608,6 +630,7 @@ export class DeferredScenePass extends Pass {
     }
 
     destroy(): void {
+        this.gbufferPipelineCache.clear();
         this.defaultWhiteTex?.destroy();
         this.defaultNormalTex?.destroy();
         this.cameraBuffer?.destroy();
@@ -670,7 +693,7 @@ export class DeferredScenePass extends Pass {
         device.queue.writeTexture({texture: this.defaultWhiteTex}, white, {bytesPerRow: 4}, {width: 1, height: 1});
         this.defaultWhiteView = this.defaultWhiteTex.createView();
 
-        // Default flat normal 1×1 texture: (128,128,255) → (0,0,1) after decode
+// Default flat normal 1×1 texture: (128,128,255) → (0,0,1) after decode
         const flatNormal = new Uint8Array([128, 128, 255, 255]);
         this.defaultNormalTex = device.createTexture({
             label: "DeferredScene:defaultNormal",
@@ -688,48 +711,12 @@ export class DeferredScenePass extends Pass {
             addressModeV: "repeat",
         });
 
-        const gbufferLayout = device.createPipelineLayout({
+        this.gbufferPipelineLayout = device.createPipelineLayout({
             bindGroupLayouts: [
                 this.cameraBindGroupLayout,
                 this.modelBindGroupLayout,
                 this.materialBindGroupLayout,
             ],
-        });
-
-        const gbufferModule = device.createShaderModule({label: "GBuffer", code: GBUFFER_SHADER});
-
-        this.gbufferPipeline = device.createRenderPipeline({
-            label: "DeferredScene:gbuffer",
-            layout: gbufferLayout,
-            vertex: {
-                module: gbufferModule,
-                entryPoint: "vs_main",
-                buffers: [{
-                    arrayStride: 48,
-                    attributes: [
-                        {shaderLocation: 0, offset:  0, format: "float32x3"}, // position
-                        {shaderLocation: 1, offset: 12, format: "float32x3"}, // normal
-                        {shaderLocation: 2, offset: 24, format: "float32x2"}, // uv
-                        {shaderLocation: 3, offset: 32, format: "float32x4"}, // tangent
-                    ],
-                }],
-            },
-            fragment: {
-                module: gbufferModule,
-                entryPoint: "fs_main",
-                targets: [
-                    {format: "rgba8unorm"},   // albedo + AO
-                    {format: "rgba16float"},  // normal + roughness
-                    {format: "rgba16float"},  // worldPos + metallic
-                    {format: "rgba16float"},  // emissive + receiveShadow
-                ],
-            },
-            primitive: {topology: "triangle-list", cullMode: "back"},
-            depthStencil: {
-                format: "depth24plus",
-                depthWriteEnabled: true,
-                depthCompare: "less",
-            },
         });
 
         this.lightingBindGroupLayout = device.createBindGroupLayout({
@@ -761,7 +748,7 @@ export class DeferredScenePass extends Pass {
             bindGroupLayouts: [this.lightingBindGroupLayout, this.shadowSceneBindGroupLayout],
         });
 
-        const lightingModule = device.createShaderModule({label: "Lighting", code: LIGHTING_SHADER});
+        const lightingModule = device.createShaderModule({label: "Lighting", code: buildLightingShader()});
 
         this.lightingPipeline = device.createRenderPipeline({
             label: "DeferredScene:lighting",
@@ -794,7 +781,7 @@ export class DeferredScenePass extends Pass {
             bindGroupLayouts: [this.shadowLightBindGroupLayout, this.modelBindGroupLayout],
         });
 
-        const shadowModule = device.createShaderModule({label: "Shadow", code: SHADOW_SHADER});
+        const shadowModule = device.createShaderModule({label: "Shadow", code: buildShadowShader()});
 
         this.shadowPipeline = device.createRenderPipeline({
             label: "DeferredScene:shadow",
@@ -818,6 +805,64 @@ export class DeferredScenePass extends Pass {
             },
             primitive: {topology: "triangle-list", cullMode: "back"},
         });
+    }
+
+    private getOrCreateGBufferPipeline(features: GBufferFeatures): GPURenderPipeline {
+        const key = featureKey(features);
+        let pipeline = this.gbufferPipelineCache.get(key);
+        if (!pipeline) {
+            const module = this.device.createShaderModule({
+                label: `GBuffer[${key || "flat"}]`,
+                code: buildGBufferShader(features),
+            });
+            pipeline = this.device.createRenderPipeline({
+                label: `DeferredScene:gbuffer[${key || "flat"}]`,
+                layout: this.gbufferPipelineLayout,
+                vertex: {
+                    module,
+                    entryPoint: "vs_main",
+                    buffers: [{
+                        arrayStride: 48,
+                        attributes: [
+                            {shaderLocation: 0, offset:  0, format: "float32x3"},
+                            {shaderLocation: 1, offset: 12, format: "float32x3"},
+                            {shaderLocation: 2, offset: 24, format: "float32x2"},
+                            {shaderLocation: 3, offset: 32, format: "float32x4"},
+                        ],
+                    }],
+                },
+                fragment: {
+                    module,
+                    entryPoint: "fs_main",
+                    targets: [
+                        {format: "rgba8unorm"},
+                        {format: "rgba16float"},
+                        {format: "rgba16float"},
+                        {format: "rgba16float"},
+                    ],
+                },
+                primitive: {topology: "triangle-list", cullMode: "back"},
+                depthStencil: {
+                    format: "depth24plus",
+                    depthWriteEnabled: true,
+                    depthCompare: "less",
+                },
+            });
+            this.gbufferPipelineCache.set(key, pipeline);
+        }
+        return pipeline;
+    }
+
+    precompile(featureSets?: GBufferFeatures[]): void {
+        const sets = featureSets ?? [
+            {parallaxMapping: false, normalMapping: false},
+            {parallaxMapping: false, normalMapping: true},
+            {parallaxMapping: true,  normalMapping: false},
+            {parallaxMapping: true,  normalMapping: true},
+        ];
+        for (const f of sets) {
+            this.getOrCreateGBufferPipeline(f);
+        }
     }
 
     private initShadowMaps(): void {
@@ -992,14 +1037,21 @@ export class DeferredScenePass extends Pass {
             },
         });
 
-        pass.setPipeline(this.gbufferPipeline);
         pass.setBindGroup(0, this.cameraBindGroup);
 
+        let activePipelineKey: string | null = null;
         for (const mesh of meshes) {
             const res = this.meshCache.get(mesh);
             if (!res) continue;
 
             if (!(mesh.material instanceof PBRMaterial)) continue;
+
+            const features = getGBufferFeatures(mesh.material);
+            const key = featureKey(features);
+            if (key !== activePipelineKey) {
+                pass.setPipeline(this.getOrCreateGBufferPipeline(features));
+                activePipelineKey = key;
+            }
 
             const matBg = mesh.material.getOrCreateBindGroup(
                 this.device,
