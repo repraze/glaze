@@ -55,7 +55,10 @@ export class Renderer {
         this.height = height;
     }
 
-    static async init(canvas: HTMLCanvasElement): Promise<Renderer> {
+    static async init(
+        canvas: HTMLCanvasElement,
+        options?: {alphaMode?: GPUCanvasAlphaMode},
+    ): Promise<Renderer> {
         if (!navigator.gpu) throw new Error("WebGPU is not supported in this environment.");
 
         const adapter = await navigator.gpu.requestAdapter();
@@ -67,7 +70,7 @@ export class Renderer {
         if (!context) throw new Error("Failed to obtain WebGPU context from canvas.");
 
         const format = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({device, format, alphaMode: "opaque"});
+        context.configure({device, format, alphaMode: options?.alphaMode ?? "opaque"});
 
         return new Renderer(adapter, device, context, format, canvas.width, canvas.height);
     }
