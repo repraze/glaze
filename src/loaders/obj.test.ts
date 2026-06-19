@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {describe, test} from "node:test";
 
-import {parseOBJ} from "./obj.ts";
+import {parseOBJ} from "./obj";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-import {Geometry} from "../geometry/geometry.ts";
+import {Geometry} from "../geometry/geometry";
 
 // ─── Detection ────────────────────────────────────────────────────────────────
 
@@ -17,23 +17,23 @@ function parseBinarySTL(buffer: ArrayBuffer): Geometry {
     const triangleCount = view.getUint32(80, true);
 
     const positions = new Float32Array(triangleCount * 9);
-    const normals   = new Float32Array(triangleCount * 9);
-    const uvs       = new Float32Array(triangleCount * 6);
-    const indices   = new Uint32Array(triangleCount * 3);
+    const normals = new Float32Array(triangleCount * 9);
+    const uvs = new Float32Array(triangleCount * 6);
+    const indices = new Uint32Array(triangleCount * 3);
 
     let offset = 84;
     for (let i = 0; i < triangleCount; i++) {
-        const nx = view.getFloat32(offset,      true);
-        const ny = view.getFloat32(offset +  4, true);
-        const nz = view.getFloat32(offset +  8, true);
+        const nx = view.getFloat32(offset, true);
+        const ny = view.getFloat32(offset + 4, true);
+        const nz = view.getFloat32(offset + 8, true);
         offset += 12;
 
         for (let v = 0; v < 3; v++) {
             const base = i * 9 + v * 3;
-            positions[base]     = view.getFloat32(offset,      true);
-            positions[base + 1] = view.getFloat32(offset +  4, true);
-            positions[base + 2] = view.getFloat32(offset +  8, true);
-            normals[base]     = nx;
+            positions[base] = view.getFloat32(offset, true);
+            positions[base + 1] = view.getFloat32(offset + 4, true);
+            positions[base + 2] = view.getFloat32(offset + 8, true);
+            normals[base] = nx;
             normals[base + 1] = ny;
             normals[base + 2] = nz;
             offset += 12;
@@ -41,7 +41,7 @@ function parseBinarySTL(buffer: ArrayBuffer): Geometry {
 
         offset += 2; // attribute byte count
 
-        indices[i * 3]     = i * 3;
+        indices[i * 3] = i * 3;
         indices[i * 3 + 1] = i * 3 + 1;
         indices[i * 3 + 2] = i * 3 + 2;
     }
@@ -58,10 +58,8 @@ function parseAsciiSTL(buffer: ArrayBuffer): Geometry {
     const nrmArr: number[] = [];
 
     // Match each facet block including its three vertices.
-    const facetRe =
-        /facet\s+normal\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)([\s\S]*?)endfacet/g;
-    const vertexRe =
-        /vertex\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)/g;
+    const facetRe = /facet\s+normal\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)([\s\S]*?)endfacet/g;
+    const vertexRe = /vertex\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)\s+([\d.eE+\-]+)/g;
 
     let facetMatch: RegExpExecArray | null;
     while ((facetMatch = facetRe.exec(text)) !== null) {
@@ -72,22 +70,18 @@ function parseAsciiSTL(buffer: ArrayBuffer): Geometry {
         vertexRe.lastIndex = 0;
         let vertexMatch: RegExpExecArray | null;
         while ((vertexMatch = vertexRe.exec(facetMatch[4]!)) !== null) {
-            posArr.push(
-                parseFloat(vertexMatch[1]!),
-                parseFloat(vertexMatch[2]!),
-                parseFloat(vertexMatch[3]!),
-            );
+            posArr.push(parseFloat(vertexMatch[1]!), parseFloat(vertexMatch[2]!), parseFloat(vertexMatch[3]!));
             nrmArr.push(nx, ny, nz);
         }
     }
 
-    const vertexCount  = posArr.length / 3;
+    const vertexCount = posArr.length / 3;
     const triangleCount = vertexCount / 3;
 
     const positions = new Float32Array(posArr);
-    const normals   = new Float32Array(nrmArr);
-    const uvs       = new Float32Array(triangleCount * 6);
-    const indices   = new Uint32Array(vertexCount);
+    const normals = new Float32Array(nrmArr);
+    const uvs = new Float32Array(triangleCount * 6);
+    const indices = new Uint32Array(vertexCount);
     for (let i = 0; i < vertexCount; i++) indices[i] = i;
 
     return new Geometry({positions, normals, uvs, indices});
@@ -110,6 +104,6 @@ export function parseSTL(buffer: ArrayBuffer): Geometry {
  */
 export async function loadSTLFromURL(url: string): Promise<Geometry> {
     const response = await fetch(url);
-    const buffer   = await response.arrayBuffer();
+    const buffer = await response.arrayBuffer();
     return parseSTL(buffer);
 }

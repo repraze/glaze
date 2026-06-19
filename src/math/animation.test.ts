@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {describe, test} from "node:test";
 
-import {bounce, clamp, easeIn, easeInOut, easeOut, lerp, oscillate, pingpong, smootherstep, smoothstep} from "./animation.ts";
+import {bounce, clamp, easeIn, easeInOut, easeOut, lerp, oscillate, pingpong, smootherstep, smoothstep} from "./animation";
 
 const EPS = 1e-9;
 

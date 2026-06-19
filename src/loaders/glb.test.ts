@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {describe, test} from "node:test";
 
-import {parseGLB} from "./glb.ts";
+import {parseGLB} from "./glb";
 
 // ─── Test binary builder ──────────────────────────────────────────────────────
 

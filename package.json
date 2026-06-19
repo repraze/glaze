@@ -6,7 +6,7 @@
     "author": "Thomas Dubosc (https://repraze.com)",
     "license": "MIT",
     "scripts": {
-        "test": "node --test",
+        "test": "node --import tsx --test",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
         "typecheck": "tsc --noEmit"

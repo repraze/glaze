@@ -1,5 +1,5 @@
-import type {ColorRgb, ColorRgba} from "../color.ts";
-import {Texture} from "../texture.ts";
+import type {ColorRgb, ColorRgba} from "../color";
+import {Texture} from "../texture";
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
 
@@ -68,7 +68,13 @@ export class PBRMaterial extends Material {
 
     private buffer: GPUBuffer | null = null;
     private bindGroup: GPUBindGroup | null = null;
-    private _boundMaps: [Texture | null, Texture | null, Texture | null, Texture | null, Texture | null] = [null, null, null, null, null];
+    private _boundMaps: [Texture | null, Texture | null, Texture | null, Texture | null, Texture | null] = [
+        null,
+        null,
+        null,
+        null,
+        null,
+    ];
     private dirty = true;
 
     constructor({
@@ -115,8 +121,8 @@ export class PBRMaterial extends Material {
             data[5] = this.metallic;
             data[6] = this.heightScale;
             // data[7] = padding
-            data[8]  = this.emissive[0];
-            data[9]  = this.emissive[1];
+            data[8] = this.emissive[0];
+            data[9] = this.emissive[1];
             data[10] = this.emissive[2];
             data[11] = this.emissive[3];
             device.queue.writeBuffer(this.buffer, 0, data);
@@ -125,7 +131,11 @@ export class PBRMaterial extends Material {
 
         // Recreate bind group when any map changes.
         const maps: [Texture | null, Texture | null, Texture | null, Texture | null, Texture | null] = [
-            this.albedoMap, this.normalMap, this.emissiveMap, this.ormMap, this.heightMap,
+            this.albedoMap,
+            this.normalMap,
+            this.emissiveMap,
+            this.ormMap,
+            this.heightMap,
         ];
         if (
             maps[0] !== this._boundMaps[0] ||
@@ -144,12 +154,12 @@ export class PBRMaterial extends Material {
                 layout: bindGroupLayout,
                 entries: [
                     {binding: 0, resource: {buffer: this.buffer}},
-                    {binding: 1, resource: this.albedoMap?.view   ?? defaultWhiteView},
+                    {binding: 1, resource: this.albedoMap?.view ?? defaultWhiteView},
                     {binding: 2, resource: sampler},
-                    {binding: 3, resource: this.normalMap?.view   ?? defaultNormalView},
+                    {binding: 3, resource: this.normalMap?.view ?? defaultNormalView},
                     {binding: 4, resource: this.emissiveMap?.view ?? defaultWhiteView},
-                    {binding: 5, resource: this.ormMap?.view      ?? defaultWhiteView},
-                    {binding: 6, resource: this.heightMap?.view   ?? defaultWhiteView},
+                    {binding: 5, resource: this.ormMap?.view ?? defaultWhiteView},
+                    {binding: 6, resource: this.heightMap?.view ?? defaultWhiteView},
                 ],
             });
         }

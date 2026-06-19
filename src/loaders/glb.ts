@@ -1,6 +1,6 @@
-import {computeTangents, Geometry} from "../geometry/geometry.ts";
-import {PBRMaterial} from "../material/material.ts";
-import {Texture} from "../texture.ts";
+import {computeTangents, Geometry} from "../geometry/geometry";
+import {PBRMaterial} from "../material/material";
+import {Texture} from "../texture";
 
 // ─── GLTF types (minimal subset) ─────────────────────────────────────────────
 
@@ -9,7 +9,7 @@ interface GltfAccessor {
     byteOffset?: number;
     componentType: number; // 5120=i8, 5121=u8, 5122=i16, 5123=u16, 5125=u32, 5126=f32
     count: number;
-    type: string;          // "SCALAR", "VEC2", "VEC3", "VEC4"
+    type: string; // "SCALAR", "VEC2", "VEC3", "VEC4"
 }
 
 interface GltfBufferView {
@@ -19,7 +19,10 @@ interface GltfBufferView {
     byteStride?: number;
 }
 
-interface GltfTextureRef { index: number; texCoord?: number; }
+interface GltfTextureRef {
+    index: number;
+    texCoord?: number;
+}
 
 interface GltfMaterialDef {
     name?: string;
@@ -36,8 +39,15 @@ interface GltfMaterialDef {
     emissiveFactor?: [number, number, number];
 }
 
-interface GltfTextureDef { source?: number; sampler?: number; }
-interface GltfImageDef { uri?: string; bufferView?: number; mimeType?: string; }
+interface GltfTextureDef {
+    source?: number;
+    sampler?: number;
+}
+interface GltfImageDef {
+    uri?: string;
+    bufferView?: number;
+    mimeType?: string;
+}
 
 interface GltfMeshPrimitive {
     attributes: Record<string, number>;
@@ -62,18 +72,26 @@ interface GltfJson {
 
 // ─── Component type constants ─────────────────────────────────────────────────
 
-const COMPONENT_TYPES: Record<number, {ctor: new (b: ArrayBuffer, o: number, l: number) => ArrayLike<number>; size: number}> = {
-    5120: {ctor: Int8Array,    size: 1},
-    5121: {ctor: Uint8Array,   size: 1},
-    5122: {ctor: Int16Array,   size: 2},
-    5123: {ctor: Uint16Array,  size: 2},
-    5125: {ctor: Uint32Array,  size: 4},
+const COMPONENT_TYPES: Record<
+    number,
+    {ctor: new (b: ArrayBuffer, o: number, l: number) => ArrayLike<number>; size: number}
+> = {
+    5120: {ctor: Int8Array, size: 1},
+    5121: {ctor: Uint8Array, size: 1},
+    5122: {ctor: Int16Array, size: 2},
+    5123: {ctor: Uint16Array, size: 2},
+    5125: {ctor: Uint32Array, size: 4},
     5126: {ctor: Float32Array, size: 4},
 };
 
 const TYPE_ELEMENT_COUNT: Record<string, number> = {
-    SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4,
-    MAT2: 4, MAT3: 9, MAT4: 16,
+    SCALAR: 1,
+    VEC2: 2,
+    VEC3: 3,
+    VEC4: 4,
+    MAT2: 4,
+    MAT3: 9,
+    MAT4: 16,
 };
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -113,15 +131,11 @@ export interface GLBPrimitive {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function readAccessor(
-    json: GltfJson,
-    bin: ArrayBuffer,
-    accessorIndex: number,
-): ArrayLike<number> {
-    const accessor    = json.accessors![accessorIndex]!;
-    const elemCount   = TYPE_ELEMENT_COUNT[accessor.type] ?? 1;
-    const totalCount  = accessor.count * elemCount;
-    const ct          = COMPONENT_TYPES[accessor.componentType];
+function readAccessor(json: GltfJson, bin: ArrayBuffer, accessorIndex: number): ArrayLike<number> {
+    const accessor = json.accessors![accessorIndex]!;
+    const elemCount = TYPE_ELEMENT_COUNT[accessor.type] ?? 1;
+    const totalCount = accessor.count * elemCount;
+    const ct = COMPONENT_TYPES[accessor.componentType];
     if (!ct) throw new Error(`GLB: unsupported componentType ${accessor.componentType}`);
 
     if (accessor.bufferView === undefined) {
@@ -129,7 +143,7 @@ function readAccessor(
         return new Float32Array(totalCount);
     }
 
-    const bv        = json.bufferViews![accessor.bufferView]!;
+    const bv = json.bufferViews![accessor.bufferView]!;
     const byteStride = bv.byteStride;
     const baseOffset = (bv.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
 
@@ -160,11 +174,7 @@ function toUint32(data: ArrayLike<number>): Uint32Array {
     return Uint32Array.from(data);
 }
 
-function extractTextureSource(
-    json: GltfJson,
-    bin: ArrayBuffer,
-    textureIndex: number,
-): GltfTextureSource | null {
+function extractTextureSource(json: GltfJson, bin: ArrayBuffer, textureIndex: number): GltfTextureSource | null {
     const texture = json.textures?.[textureIndex];
     if (!texture || texture.source === undefined) return null;
     const image = json.images?.[texture.source];
@@ -188,26 +198,22 @@ function extractTextureSource(
     return null;
 }
 
-function extractMaterial(
-    json: GltfJson,
-    bin: ArrayBuffer,
-    materialIndex: number,
-): GltfMaterialDescriptor {
+function extractMaterial(json: GltfJson, bin: ArrayBuffer, materialIndex: number): GltfMaterialDescriptor {
     const mat = json.materials?.[materialIndex];
     const pbr = mat?.pbrMetallicRoughness ?? {};
     const tex = (ref: GltfTextureRef | undefined) =>
         ref !== undefined ? extractTextureSource(json, bin, ref.index) : null;
 
     return {
-        name:                     mat?.name ?? "",
-        baseColorFactor:          pbr.baseColorFactor ?? [1, 1, 1, 1],
-        metallicFactor:           pbr.metallicFactor ?? 1.0,
-        roughnessFactor:          pbr.roughnessFactor ?? 1.0,
-        emissiveFactor:           mat?.emissiveFactor ?? [0, 0, 0],
-        baseColorTexture:         tex(pbr.baseColorTexture),
-        normalTexture:            tex(mat?.normalTexture),
-        emissiveTexture:          tex(mat?.emissiveTexture),
-        occlusionTexture:         tex(mat?.occlusionTexture),
+        name: mat?.name ?? "",
+        baseColorFactor: pbr.baseColorFactor ?? [1, 1, 1, 1],
+        metallicFactor: pbr.metallicFactor ?? 1.0,
+        roughnessFactor: pbr.roughnessFactor ?? 1.0,
+        emissiveFactor: mat?.emissiveFactor ?? [0, 0, 0],
+        baseColorTexture: tex(pbr.baseColorTexture),
+        normalTexture: tex(mat?.normalTexture),
+        emissiveTexture: tex(mat?.emissiveTexture),
+        occlusionTexture: tex(mat?.occlusionTexture),
         metallicRoughnessTexture: tex(pbr.metallicRoughnessTexture),
     };
 }
@@ -226,14 +232,14 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
     const view = new DataView(buffer);
 
     // GLB header (12 bytes)
-    const magic   = view.getUint32(0, true);
+    const magic = view.getUint32(0, true);
     const version = view.getUint32(4, true);
     if (magic !== 0x46546c67) throw new Error("GLB: invalid magic number");
-    if (version !== 2)        throw new Error(`GLB: unsupported version ${version}`);
+    if (version !== 2) throw new Error(`GLB: unsupported version ${version}`);
 
     // JSON chunk
     const jsonChunkLength = view.getUint32(12, true);
-    const jsonChunkType   = view.getUint32(16, true);
+    const jsonChunkType = view.getUint32(16, true);
     if (jsonChunkType !== 0x4e4f534a) throw new Error("GLB: first chunk is not JSON");
     const jsonText = new TextDecoder().decode(new Uint8Array(buffer, 20, jsonChunkLength));
     const json: GltfJson = JSON.parse(jsonText);
@@ -243,7 +249,7 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
     const binOffset = 20 + jsonChunkLength;
     if (binOffset + 8 <= buffer.byteLength) {
         const binChunkLength = view.getUint32(binOffset, true);
-        const binChunkType   = view.getUint32(binOffset + 4, true);
+        const binChunkType = view.getUint32(binOffset + 4, true);
         if (binChunkType === 0x004e4942) {
             bin = buffer.slice(binOffset + 8, binOffset + 8 + binChunkLength);
         }
@@ -256,22 +262,24 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
             // Only support TRIANGLES (mode 4, which is also the default)
             if (prim.mode !== undefined && prim.mode !== 4) continue;
 
-            const posIdx  = prim.attributes["POSITION"];
+            const posIdx = prim.attributes["POSITION"];
             const normIdx = prim.attributes["NORMAL"];
-            const uvIdx   = prim.attributes["TEXCOORD_0"];
-            const tanIdx  = prim.attributes["TANGENT"];
+            const uvIdx = prim.attributes["TEXCOORD_0"];
+            const tanIdx = prim.attributes["TANGENT"];
 
             if (posIdx === undefined) continue;
 
             const positions = toFloat32(readAccessor(json, bin, posIdx));
 
-            const normals = normIdx !== undefined
-                ? toFloat32(readAccessor(json, bin, normIdx))
-                : new Float32Array((positions.length / 3) * 3); // zeros
+            const normals =
+                normIdx !== undefined
+                    ? toFloat32(readAccessor(json, bin, normIdx))
+                    : new Float32Array((positions.length / 3) * 3); // zeros
 
-            const uvs = uvIdx !== undefined
-                ? toFloat32(readAccessor(json, bin, uvIdx))
-                : new Float32Array((positions.length / 3) * 2);
+            const uvs =
+                uvIdx !== undefined
+                    ? toFloat32(readAccessor(json, bin, uvIdx))
+                    : new Float32Array((positions.length / 3) * 2);
 
             let indices: Uint32Array;
             if (prim.indices !== undefined) {
@@ -292,9 +300,7 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
             }
 
             const geometry = new Geometry({positions, normals, uvs, indices, tangents});
-            const material = prim.material !== undefined
-                ? extractMaterial(json, bin, prim.material)
-                : null;
+            const material = prim.material !== undefined ? extractMaterial(json, bin, prim.material) : null;
 
             primitives.push({geometry, material});
         }
@@ -325,19 +331,14 @@ export async function loadGLBFromURL(url: string): Promise<GLBPrimitive[]> {
 export async function createPBRMaterialFromGltf(
     device: GPUDevice,
     descriptor: GltfMaterialDescriptor,
-    resolveUri: (uri: string) => string = uri => uri,
+    resolveUri: (uri: string) => string = (uri) => uri,
 ): Promise<PBRMaterial> {
     const [r, g, b] = descriptor.baseColorFactor;
     const mat = new PBRMaterial({
-        color:    [r!, g!, b!],
+        color: [r!, g!, b!],
         metallic: descriptor.metallicFactor,
         roughness: descriptor.roughnessFactor,
-        emissive: [
-            descriptor.emissiveFactor[0],
-            descriptor.emissiveFactor[1],
-            descriptor.emissiveFactor[2],
-            0,
-        ],
+        emissive: [descriptor.emissiveFactor[0], descriptor.emissiveFactor[1], descriptor.emissiveFactor[2], 0],
     });
 
     async function loadTex(source: GltfTextureSource | null): Promise<Texture | null> {
@@ -353,10 +354,10 @@ export async function createPBRMaterialFromGltf(
         loadTex(descriptor.metallicRoughnessTexture),
     ]);
 
-    if (albedo)   mat.albedoMap   = albedo;
-    if (normal)   mat.normalMap   = normal;
+    if (albedo) mat.albedoMap = albedo;
+    if (normal) mat.normalMap = normal;
     if (emissive) mat.emissiveMap = emissive;
-    if (orm)      mat.ormMap      = orm;
+    if (orm) mat.ormMap = orm;
 
     return mat;
 }

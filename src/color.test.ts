@@ -3,7 +3,7 @@ import {describe, test} from "node:test";
 
 import {vec3, vec4} from "gl-matrix";
 
-import {colorRgb, colorRgba, linearToSrgb, setColorRgb, setColorRgba, srgbToLinear} from "./color.ts";
+import {colorRgb, colorRgba, linearToSrgb, setColorRgb, setColorRgba, srgbToLinear} from "./color";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
