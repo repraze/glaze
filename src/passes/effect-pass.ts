@@ -1,5 +1,6 @@
-import {Pass, PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "../pass";
-import {TextureUniform,Uniform} from "../uniform";
+import type { PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "../pass";
+import {Pass} from "../pass";
+import type {TextureUniform,Uniform} from "../uniform";
 
 // ─── WGSL boilerplate ─────────────────────────────────────────────────────────
 

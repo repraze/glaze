@@ -1,12 +1,13 @@
 import {mat4, vec3} from "gl-matrix";
 
-import {Geometry} from "../geometry/geometry";
+import type {Geometry} from "../geometry/geometry";
 import {PBRMaterial} from "../material/material";
-import {Pass, PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
-import {Camera} from "../scene/camera";
-import {DirectionalLight, PointLight, SpotLight} from "../scene/light";
-import {Mesh} from "../scene/mesh";
-import {Scene} from "../scene/scene";
+import type { PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
+import {Pass} from "../pass";
+import type {Camera} from "../scene/camera";
+import type {DirectionalLight, PointLight, SpotLight} from "../scene/light";
+import type {Mesh} from "../scene/mesh";
+import type {Scene} from "../scene/scene";
 
 // ─── WGSL shaders ─────────────────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 import { vec3 } from "gl-matrix";
 
-import { ColorRgb } from "../color";
+import type { ColorRgb } from "../color";
 import { Entity } from "./entity";
 
 export interface LightOptions {

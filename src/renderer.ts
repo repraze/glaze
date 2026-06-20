@@ -1,5 +1,5 @@
-import {Pass, PassOutputSpec} from "./pass";
-import {RenderGraph} from "./render-graph";
+import type {Pass, PassOutputSpec} from "./pass";
+import type {RenderGraph} from "./render-graph";
 
 interface ManagedTexture {
     texture: GPUTexture;

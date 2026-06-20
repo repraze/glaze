@@ -1,4 +1,4 @@
-import {Pass} from "./pass";
+import type {Pass} from "./pass";
 
 /** Opaque reference to a named output slot of a specific pass in a RenderGraph. */
 export interface TextureHandle {

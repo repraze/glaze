@@ -1,9 +1,10 @@
 import { vec3 } from "gl-matrix";
 
-import { Texture } from "../texture";
-import { Camera } from "./camera";
+import type { Texture } from "../texture";
+import type { Camera } from "./camera";
 import { Entity } from "./entity";
-import { DirectionalLight, Light, PointLight, SpotLight } from "./light";
+import type { Light} from "./light";
+import { DirectionalLight, PointLight, SpotLight } from "./light";
 import { Mesh } from "./mesh";
 
 export class Scene {

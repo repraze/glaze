@@ -1,5 +1,5 @@
 import type {ColorRgb, ColorRgba} from "../color";
-import {Texture} from "../texture";
+import type {Texture} from "../texture";
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
 

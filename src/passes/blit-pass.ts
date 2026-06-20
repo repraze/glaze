@@ -1,4 +1,5 @@
-import {Pass, PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
+import type { PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
+import {Pass} from "../pass";
 
 // ─── WGSL ─────────────────────────────────────────────────────────────────────
 
