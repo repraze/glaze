@@ -1,4 +1,4 @@
-import type { PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "../pass";
+import type {PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 
 // ─── WGSL helpers ────────────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ export class ShaderPass extends Pass {
         super();
         this.fragmentShaderSource = options.fragmentShader;
         this.inputDefs = options.inputs ?? [];
-        this.inputSlots = this.inputDefs.map(s => ({name: s.name}));
+        this.inputSlots = this.inputDefs.map((s) => ({name: s.name}));
         this.outputSlots = options.outputs ?? [];
     }
 
@@ -124,7 +124,7 @@ export class ShaderPass extends Pass {
         this.updateGlobals(ctx.device);
 
         // Rebuild input bind group when upstream views change.
-        const inputViews = this.inputDefs.map(s => ctx.inputs[s.name]!);
+        const inputViews = this.inputDefs.map((s) => ctx.inputs[s.name]!);
         if (!this.inputBindGroupIsCurrent(inputViews)) {
             this.lastInputViews = inputViews;
             this.inputBindGroup = this.buildInputBindGroup(inputViews);
@@ -135,7 +135,9 @@ export class ShaderPass extends Pass {
         const pass = ctx.encoder.beginRenderPass({colorAttachments: outputTargets});
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.globalsBindGroup);
-        if (this.inputBindGroup) pass.setBindGroup(1, this.inputBindGroup);
+        if (this.inputBindGroup) {
+            pass.setBindGroup(1, this.inputBindGroup);
+        }
         pass.draw(3);
         pass.end();
     }
@@ -147,11 +149,13 @@ export class ShaderPass extends Pass {
 
         const globalsLayout = this.device.createBindGroupLayout({
             label: "ShaderPass:globals",
-            entries: [{
-                binding: 0,
-                visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.VERTEX,
-                buffer: {type: "uniform"},
-            }],
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.VERTEX,
+                    buffer: {type: "uniform"},
+                },
+            ],
         });
 
         const bindGroupLayouts: GPUBindGroupLayout[] = [globalsLayout];
@@ -165,14 +169,10 @@ export class ShaderPass extends Pass {
                 entries.push({
                     binding: i + 1,
                     visibility: GPUShaderStage.FRAGMENT,
-                    texture: def.depth
-                        ? {sampleType: "depth"}
-                        : {sampleType: "float"},
+                    texture: def.depth ? {sampleType: "depth"} : {sampleType: "float"},
                 });
             }
-            bindGroupLayouts.push(
-                this.device.createBindGroupLayout({label: "ShaderPass:inputs", entries}),
-            );
+            bindGroupLayouts.push(this.device.createBindGroupLayout({label: "ShaderPass:inputs", entries}));
         }
 
         const pipelineLayout = this.device.createPipelineLayout({bindGroupLayouts});
@@ -185,7 +185,7 @@ export class ShaderPass extends Pass {
             fragment: {
                 module: shaderModule,
                 entryPoint: "fs_main",
-                targets: outputFormats.map(fmt => ({format: fmt})),
+                targets: outputFormats.map((fmt) => ({format: fmt})),
             },
             primitive: {topology: "triangle-list"},
         });
@@ -197,7 +197,9 @@ export class ShaderPass extends Pass {
     }
 
     private buildInputTextureDecls(): string {
-        if (this.inputDefs.length === 0) return "";
+        if (this.inputDefs.length === 0) {
+            return "";
+        }
         const lines: string[] = ["@group(1) @binding(0) var inputSampler: sampler;"];
         for (let i = 0; i < this.inputDefs.length; i++) {
             const def = this.inputDefs[i]!;
@@ -209,44 +211,57 @@ export class ShaderPass extends Pass {
 
     private resolveOutputFormats(): GPUTextureFormat[] {
         if (this.outputSlots.length > 0) {
-            return this.outputSlots.map(s => s.spec.format);
+            return this.outputSlots.map((s) => s.spec.format);
         }
         return [this.canvasFormat];
     }
 
     private inputBindGroupIsCurrent(views: GPUTextureView[]): boolean {
-        if (!this.inputBindGroup) return false;
-        if (views.length !== this.lastInputViews.length) return false;
+        if (!this.inputBindGroup) {
+            return false;
+        }
+        if (views.length !== this.lastInputViews.length) {
+            return false;
+        }
         return views.every((v, i) => v === this.lastInputViews[i]);
     }
 
     private buildInputBindGroup(views: GPUTextureView[]): GPUBindGroup | null {
-        if (this.inputDefs.length === 0) return null;
+        if (this.inputDefs.length === 0) {
+            return null;
+        }
         const layout = this.pipeline.getBindGroupLayout(1);
         const entries: GPUBindGroupEntry[] = [{binding: 0, resource: this.sampler}];
         for (let i = 0; i < this.inputDefs.length; i++) {
             const view = views[i];
-            if (!view) throw new Error(`ShaderPass: missing input '${this.inputDefs[i]!.name}'`);
+            if (!view) {
+                throw new Error(`ShaderPass: missing input '${this.inputDefs[i]!.name}'`);
+            }
             entries.push({binding: i + 1, resource: view});
         }
         return this.device.createBindGroup({layout, entries});
     }
 
     private resolveOutputTargets(ctx: PassRenderContext): GPURenderPassColorAttachment[] {
-        const views = this.outputSlots.length > 0
-            ? this.outputSlots.map(s => {
-                const v = ctx.outputs[s.name];
-                if (!v) throw new Error(`ShaderPass: output '${s.name}' not available`);
-                return v;
-            })
-            : (() => {
-                // canvas output: look for any output view (canvasSlot wired by graph)
-                const views = Object.values(ctx.outputs);
-                if (views.length === 0) throw new Error("ShaderPass: no render target available");
-                return views as GPUTextureView[];
-            })();
+        const views =
+            this.outputSlots.length > 0
+                ? this.outputSlots.map((s) => {
+                      const v = ctx.outputs[s.name];
+                      if (!v) {
+                          throw new Error(`ShaderPass: output '${s.name}' not available`);
+                      }
+                      return v;
+                  })
+                : (() => {
+                      // canvas output: look for any output view (canvasSlot wired by graph)
+                      const views = Object.values(ctx.outputs);
+                      if (views.length === 0) {
+                          throw new Error("ShaderPass: no render target available");
+                      }
+                      return views as GPUTextureView[];
+                  })();
 
-        return views.map(view => ({
+        return views.map((view) => ({
             view,
             clearValue: {r: 0, g: 0, b: 0, a: 1},
             loadOp: "clear" as GPULoadOp,

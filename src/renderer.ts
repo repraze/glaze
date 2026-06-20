@@ -55,19 +55,22 @@ export class Renderer {
         this.height = height;
     }
 
-    static async init(
-        canvas: HTMLCanvasElement,
-        options?: {alphaMode?: GPUCanvasAlphaMode},
-    ): Promise<Renderer> {
-        if (!navigator.gpu) throw new Error("WebGPU is not supported in this environment.");
+    static async init(canvas: HTMLCanvasElement, options?: {alphaMode?: GPUCanvasAlphaMode}): Promise<Renderer> {
+        if (!navigator.gpu) {
+            throw new Error("WebGPU is not supported in this environment.");
+        }
 
         const adapter = await navigator.gpu.requestAdapter();
-        if (!adapter) throw new Error("No suitable GPU adapter found.");
+        if (!adapter) {
+            throw new Error("No suitable GPU adapter found.");
+        }
 
         const device = await adapter.requestDevice();
 
         const context = canvas.getContext("webgpu");
-        if (!context) throw new Error("Failed to obtain WebGPU context from canvas.");
+        if (!context) {
+            throw new Error("Failed to obtain WebGPU context from canvas.");
+        }
 
         const format = navigator.gpu.getPreferredCanvasFormat();
         context.configure({device, format, alphaMode: options?.alphaMode ?? "opaque"});
@@ -76,20 +79,29 @@ export class Renderer {
     }
 
     resize(width: number, height: number): void {
-        if (this.width === width && this.height === height) return;
+        if (this.width === width && this.height === height) {
+            return;
+        }
         this.width = width;
         this.height = height;
 
-        if (!this.currentGraph) return;
+        if (!this.currentGraph) {
+            return;
+        }
 
         for (const node of this.currentGraph.getNodes()) {
-            let passW = width, passH = height;
+            let passW = width,
+                passH = height;
 
             for (const slot of node.pass.outputSlots) {
-                if (slot.name === node.canvasSlot) continue;
+                if (slot.name === node.canvasSlot) {
+                    continue;
+                }
                 const key = `${node.id}:${slot.name}`;
                 const mt = this.textureCache.get(key);
-                if (!mt) continue;
+                if (!mt) {
+                    continue;
+                }
 
                 if (mt.fixed) {
                     passW = mt.texture.width;
@@ -134,7 +146,8 @@ export class Renderer {
 
             // Resolve named output views.
             const outputViews: Record<string, GPUTextureView> = {};
-            let passW = this.width, passH = this.height;
+            let passW = this.width,
+                passH = this.height;
             for (const slot of pass.outputSlots) {
                 if (slot.name === canvasSlot) {
                     outputViews[slot.name] = canvasView;
@@ -176,7 +189,9 @@ export class Renderer {
         let stopped = false;
 
         const loop = () => {
-            if (stopped) return;
+            if (stopped) {
+                return;
+            }
             const resolved = typeof graph === "function" ? graph() : graph;
             this.renderFrame(resolved);
             this.animationId = requestAnimationFrame(loop);
@@ -211,14 +226,19 @@ export class Renderer {
         }
 
         for (const node of graph.getNodes()) {
-            if (this.initializedPasses.has(node.pass)) continue;
+            if (this.initializedPasses.has(node.pass)) {
+                continue;
+            }
 
             node.pass.initialize(this.device, this.format);
             this.initializedPasses.add(node.pass);
 
-            let passW = this.width, passH = this.height;
+            let passW = this.width,
+                passH = this.height;
             for (const slot of node.pass.outputSlots) {
-                if (slot.name === node.canvasSlot) continue;
+                if (slot.name === node.canvasSlot) {
+                    continue;
+                }
                 const key = `${node.id}:${slot.name}`;
                 const mt = this.createTexture(slot.spec, this.width, this.height);
                 this.textureCache.set(key, mt);

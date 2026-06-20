@@ -136,7 +136,9 @@ function readAccessor(json: GltfJson, bin: ArrayBuffer, accessorIndex: number): 
     const elemCount = TYPE_ELEMENT_COUNT[accessor.type] ?? 1;
     const totalCount = accessor.count * elemCount;
     const ct = COMPONENT_TYPES[accessor.componentType];
-    if (!ct) throw new Error(`GLB: unsupported componentType ${accessor.componentType}`);
+    if (!ct) {
+        throw new Error(`GLB: unsupported componentType ${accessor.componentType}`);
+    }
 
     if (accessor.bufferView === undefined) {
         // Zero-filled sparse accessor placeholder
@@ -165,20 +167,28 @@ function readAccessor(json: GltfJson, bin: ArrayBuffer, accessorIndex: number): 
 }
 
 function toFloat32(data: ArrayLike<number>): Float32Array {
-    if (data instanceof Float32Array) return data;
+    if (data instanceof Float32Array) {
+        return data;
+    }
     return Float32Array.from(data);
 }
 
 function toUint32(data: ArrayLike<number>): Uint32Array {
-    if (data instanceof Uint32Array) return data;
+    if (data instanceof Uint32Array) {
+        return data;
+    }
     return Uint32Array.from(data);
 }
 
 function extractTextureSource(json: GltfJson, bin: ArrayBuffer, textureIndex: number): GltfTextureSource | null {
     const texture = json.textures?.[textureIndex];
-    if (!texture || texture.source === undefined) return null;
+    if (!texture || texture.source === undefined) {
+        return null;
+    }
     const image = json.images?.[texture.source];
-    if (!image) return null;
+    if (!image) {
+        return null;
+    }
 
     if (image.uri !== undefined) {
         return {type: "uri", uri: image.uri};
@@ -186,7 +196,9 @@ function extractTextureSource(json: GltfJson, bin: ArrayBuffer, textureIndex: nu
 
     if (image.bufferView !== undefined) {
         const bv = json.bufferViews?.[image.bufferView];
-        if (!bv) return null;
+        if (!bv) {
+            return null;
+        }
         const src = new Uint8Array(bin, bv.byteOffset ?? 0, bv.byteLength);
         return {
             type: "embedded",
@@ -234,13 +246,19 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
     // GLB header (12 bytes)
     const magic = view.getUint32(0, true);
     const version = view.getUint32(4, true);
-    if (magic !== 0x46546c67) throw new Error("GLB: invalid magic number");
-    if (version !== 2) throw new Error(`GLB: unsupported version ${version}`);
+    if (magic !== 0x46546c67) {
+        throw new Error("GLB: invalid magic number");
+    }
+    if (version !== 2) {
+        throw new Error(`GLB: unsupported version ${version}`);
+    }
 
     // JSON chunk
     const jsonChunkLength = view.getUint32(12, true);
     const jsonChunkType = view.getUint32(16, true);
-    if (jsonChunkType !== 0x4e4f534a) throw new Error("GLB: first chunk is not JSON");
+    if (jsonChunkType !== 0x4e4f534a) {
+        throw new Error("GLB: first chunk is not JSON");
+    }
     const jsonText = new TextDecoder().decode(new Uint8Array(buffer, 20, jsonChunkLength));
     const json: GltfJson = JSON.parse(jsonText);
 
@@ -260,14 +278,18 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
     for (const mesh of json.meshes ?? []) {
         for (const prim of mesh.primitives) {
             // Only support TRIANGLES (mode 4, which is also the default)
-            if (prim.mode !== undefined && prim.mode !== 4) continue;
+            if (prim.mode !== undefined && prim.mode !== 4) {
+                continue;
+            }
 
             const posIdx = prim.attributes["POSITION"];
             const normIdx = prim.attributes["NORMAL"];
             const uvIdx = prim.attributes["TEXCOORD_0"];
             const tanIdx = prim.attributes["TANGENT"];
 
-            if (posIdx === undefined) continue;
+            if (posIdx === undefined) {
+                continue;
+            }
 
             const positions = toFloat32(readAccessor(json, bin, posIdx));
 
@@ -288,7 +310,9 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
                 // Non-indexed: generate sequential indices
                 const count = positions.length / 3;
                 indices = new Uint32Array(count);
-                for (let i = 0; i < count; i++) indices[i] = i;
+                for (let i = 0; i < count; i++) {
+                    indices[i] = i;
+                }
             }
 
             const vertexCount = positions.length / 3;
@@ -314,7 +338,9 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
  */
 export async function loadGLBFromURL(url: string): Promise<GLBPrimitive[]> {
     const response = await fetch(url);
-    if (!response.ok) throw new Error(`GLB: failed to fetch '${url}' (${response.status})`);
+    if (!response.ok) {
+        throw new Error(`GLB: failed to fetch '${url}' (${response.status})`);
+    }
     const buffer = await response.arrayBuffer();
     return parseGLB(buffer);
 }
@@ -342,8 +368,12 @@ export async function createPBRMaterialFromGltf(
     });
 
     async function loadTex(source: GltfTextureSource | null): Promise<Texture | null> {
-        if (!source) return null;
-        if (source.type === "uri") return Texture.fromURL(device, resolveUri(source.uri));
+        if (!source) {
+            return null;
+        }
+        if (source.type === "uri") {
+            return Texture.fromURL(device, resolveUri(source.uri));
+        }
         return Texture.fromBlob(device, new Blob([source.data], {type: source.mimeType}));
     }
 
@@ -354,10 +384,18 @@ export async function createPBRMaterialFromGltf(
         loadTex(descriptor.metallicRoughnessTexture),
     ]);
 
-    if (albedo) mat.albedoMap = albedo;
-    if (normal) mat.normalMap = normal;
-    if (emissive) mat.emissiveMap = emissive;
-    if (orm) mat.ormMap = orm;
+    if (albedo) {
+        mat.albedoMap = albedo;
+    }
+    if (normal) {
+        mat.normalMap = normal;
+    }
+    if (emissive) {
+        mat.emissiveMap = emissive;
+    }
+    if (orm) {
+        mat.ormMap = orm;
+    }
 
     return mat;
 }

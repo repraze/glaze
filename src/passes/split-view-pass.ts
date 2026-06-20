@@ -1,4 +1,4 @@
-import type { PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
+import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 
 // ─── WGSL ─────────────────────────────────────────────────────────────────────
@@ -135,15 +135,19 @@ export class SplitViewPass extends Pass {
 
     render(ctx: PassRenderContext): void {
         const canvasView = Object.values(ctx.outputs)[0];
-        if (!canvasView) throw new Error("SplitViewPass: no canvas output available");
+        if (!canvasView) {
+            throw new Error("SplitViewPass: no canvas output available");
+        }
 
         const pass = ctx.encoder.beginRenderPass({
-            colorAttachments: [{
-                view: canvasView,
-                clearValue: {r: 0, g: 0, b: 0, a: 1},
-                loadOp: "clear",
-                storeOp: "store",
-            }],
+            colorAttachments: [
+                {
+                    view: canvasView,
+                    clearValue: {r: 0, g: 0, b: 0, a: 1},
+                    loadOp: "clear",
+                    storeOp: "store",
+                },
+            ],
         });
 
         pass.setPipeline(this.pipeline);
@@ -153,7 +157,9 @@ export class SplitViewPass extends Pass {
 
         for (const slot of this.slots) {
             const inputView = ctx.inputs[slot.input];
-            if (!inputView) continue;
+            if (!inputView) {
+                continue;
+            }
 
             const x = Math.floor(slot.rect.x * cw);
             const y = Math.floor(slot.rect.y * ch);

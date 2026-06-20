@@ -1,6 +1,6 @@
-import type { PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "../pass";
+import type {PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
-import type {TextureUniform,Uniform} from "../uniform";
+import type {TextureUniform, Uniform} from "../uniform";
 
 // ─── WGSL boilerplate ─────────────────────────────────────────────────────────
 
@@ -126,7 +126,7 @@ export class EffectPass extends Pass {
         this.uniformEntries = Object.entries(options.uniforms ?? {});
         this.textureEntries = Object.entries(options.textures ?? {});
 
-        this.inputSlots = this.inputDefs.map(s => ({name: s.name}));
+        this.inputSlots = this.inputDefs.map((s) => ({name: s.name}));
         this.outputSlots = options.outputs ?? [];
     }
 
@@ -179,7 +179,7 @@ export class EffectPass extends Pass {
         this.writeUniforms(ctx.device);
 
         if (this.inputDefs.length > 0) {
-            const views = this.inputDefs.map(s => ctx.inputs[s.name]!);
+            const views = this.inputDefs.map((s) => ctx.inputs[s.name]!);
             if (!this.inputViewsMatch(views)) {
                 this.lastInputViews = views;
                 this.inputBindGroup = this.buildInputBindGroup(views);
@@ -195,18 +195,28 @@ export class EffectPass extends Pass {
                     dirty = true;
                 }
             }
-            if (dirty) this.textureBindGroup = this.buildTextureBindGroup();
+            if (dirty) {
+                this.textureBindGroup = this.buildTextureBindGroup();
+            }
             // Skip draw until all textures are loaded
-            if (!this.textureBindGroup) return;
+            if (!this.textureBindGroup) {
+                return;
+            }
         }
 
         const targets = this.resolveOutputTargets(ctx);
         const pass = ctx.encoder.beginRenderPass({colorAttachments: targets});
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.globalsBindGroup);
-        if (this.inputsGroup >= 0 && this.inputBindGroup) pass.setBindGroup(this.inputsGroup, this.inputBindGroup);
-        if (this.uniformsGroup >= 0 && this.uniformBindGroup) pass.setBindGroup(this.uniformsGroup, this.uniformBindGroup);
-        if (this.texturesGroup >= 0 && this.textureBindGroup) pass.setBindGroup(this.texturesGroup, this.textureBindGroup);
+        if (this.inputsGroup >= 0 && this.inputBindGroup) {
+            pass.setBindGroup(this.inputsGroup, this.inputBindGroup);
+        }
+        if (this.uniformsGroup >= 0 && this.uniformBindGroup) {
+            pass.setBindGroup(this.uniformsGroup, this.uniformBindGroup);
+        }
+        if (this.texturesGroup >= 0 && this.textureBindGroup) {
+            pass.setBindGroup(this.texturesGroup, this.textureBindGroup);
+        }
         pass.draw(3);
         pass.end();
     }
@@ -270,9 +280,9 @@ export class EffectPass extends Pass {
 
         // Assign contiguous group indices — no gaps, no empty layouts needed
         let nextGroup = 1;
-        this.inputsGroup   = this.inputDefs.length > 0      ? nextGroup++ : -1;
-        this.uniformsGroup = this.uniformEntries.length > 0  ? nextGroup++ : -1;
-        this.texturesGroup = this.textureEntries.length > 0  ? nextGroup++ : -1;
+        this.inputsGroup = this.inputDefs.length > 0 ? nextGroup++ : -1;
+        this.uniformsGroup = this.uniformEntries.length > 0 ? nextGroup++ : -1;
+        this.texturesGroup = this.textureEntries.length > 0 ? nextGroup++ : -1;
 
         const wgsl = [
             VERTEX_SHADER,
@@ -286,11 +296,13 @@ export class EffectPass extends Pass {
         // ── Bind group layouts ─────────────────────────────────────────────────
         const globalsLayout = device.createBindGroupLayout({
             label: "EffectPass:globals",
-            entries: [{
-                binding: 0,
-                visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-                buffer: {type: "uniform"},
-            }],
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: {type: "uniform"},
+                },
+            ],
         });
         const bindGroupLayouts: GPUBindGroupLayout[] = [globalsLayout];
 
@@ -327,16 +339,15 @@ export class EffectPass extends Pass {
             for (let i = 0; i < this.textureEntries.length; i++) {
                 const samplerType: GPUSamplerBindingType =
                     this.textureEntries[i]![1].filter === "linear" ? "filtering" : "non-filtering";
-                entries.push({binding: i * 2,     visibility: GPUShaderStage.FRAGMENT, sampler: {type: samplerType}});
+                entries.push({binding: i * 2, visibility: GPUShaderStage.FRAGMENT, sampler: {type: samplerType}});
                 entries.push({binding: i * 2 + 1, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}});
             }
             bindGroupLayouts.push(device.createBindGroupLayout({label: "EffectPass:textures", entries}));
         }
 
         const pipelineLayout = device.createPipelineLayout({bindGroupLayouts});
-        const outputFormats = this.outputSlots.length > 0
-            ? this.outputSlots.map(s => s.spec.format)
-            : [this.canvasFormat];
+        const outputFormats =
+            this.outputSlots.length > 0 ? this.outputSlots.map((s) => s.spec.format) : [this.canvasFormat];
 
         this.pipeline = device.createRenderPipeline({
             label: "EffectPass",
@@ -345,7 +356,7 @@ export class EffectPass extends Pass {
             fragment: {
                 module: shaderModule,
                 entryPoint: "fs_main",
-                targets: outputFormats.map(fmt => ({format: fmt})),
+                targets: outputFormats.map((fmt) => ({format: fmt})),
             },
             primitive: {topology: "triangle-list"},
         });
@@ -363,7 +374,9 @@ export class EffectPass extends Pass {
         const entries: GPUBindGroupEntry[] = [{binding: 0, resource: this.inputSampler}];
         for (let i = 0; i < this.inputDefs.length; i++) {
             const view = views[i];
-            if (!view) throw new Error(`EffectPass: missing input '${this.inputDefs[i]!.name}'`);
+            if (!view) {
+                throw new Error(`EffectPass: missing input '${this.inputDefs[i]!.name}'`);
+            }
             entries.push({binding: i + 1, resource: view});
         }
         return this.device.createBindGroup({layout, entries});
@@ -371,20 +384,26 @@ export class EffectPass extends Pass {
 
     private buildTextureBindGroup(): GPUBindGroup | null {
         for (const [, u] of this.textureEntries) {
-            if (!u.texture) return null; // wait until all textures are loaded
+            if (!u.texture) {
+                return null;
+            } // wait until all textures are loaded
         }
         const layout = this.pipeline.getBindGroupLayout(this.texturesGroup);
         const entries: GPUBindGroupEntry[] = [];
         for (let i = 0; i < this.textureEntries.length; i++) {
-            entries.push({binding: i * 2,     resource: this.textureSamplers[i]!});
+            entries.push({binding: i * 2, resource: this.textureSamplers[i]!});
             entries.push({binding: i * 2 + 1, resource: this.textureEntries[i]![1].texture!.createView()});
         }
         return this.device.createBindGroup({layout, entries});
     }
 
     private inputViewsMatch(views: GPUTextureView[]): boolean {
-        if (!this.inputBindGroup) return false;
-        if (views.length !== this.lastInputViews.length) return false;
+        if (!this.inputBindGroup) {
+            return false;
+        }
+        if (views.length !== this.lastInputViews.length) {
+            return false;
+        }
         return views.every((v, i) => v === this.lastInputViews[i]);
     }
 
@@ -401,7 +420,9 @@ export class EffectPass extends Pass {
     }
 
     private writeUniforms(device: GPUDevice): void {
-        if (!this.uniformBuffer || this.uniformEntries.length === 0) return;
+        if (!this.uniformBuffer || this.uniformEntries.length === 0) {
+            return;
+        }
         const buf = new ArrayBuffer(this.uniformBufferSize);
         const view = new DataView(buf);
         for (let i = 0; i < this.uniformEntries.length; i++) {
@@ -414,19 +435,24 @@ export class EffectPass extends Pass {
 
     private resolveOutputTargets(ctx: PassRenderContext): GPURenderPassColorAttachment[] {
         const clearValue = this.opts.clearColor ?? {r: 0, g: 0, b: 0, a: 0};
-        const views = this.outputSlots.length > 0
-            ? this.outputSlots.map(s => {
-                const v = ctx.outputs[s.name];
-                if (!v) throw new Error(`EffectPass: output '${s.name}' not available`);
-                return v;
-            })
-            : (() => {
-                const vals = Object.values(ctx.outputs);
-                if (vals.length === 0) throw new Error("EffectPass: no render target available");
-                return vals as GPUTextureView[];
-            })();
+        const views =
+            this.outputSlots.length > 0
+                ? this.outputSlots.map((s) => {
+                      const v = ctx.outputs[s.name];
+                      if (!v) {
+                          throw new Error(`EffectPass: output '${s.name}' not available`);
+                      }
+                      return v;
+                  })
+                : (() => {
+                      const vals = Object.values(ctx.outputs);
+                      if (vals.length === 0) {
+                          throw new Error("EffectPass: no render target available");
+                      }
+                      return vals as GPUTextureView[];
+                  })();
 
-        return views.map(view => ({
+        return views.map((view) => ({
             view,
             clearValue,
             loadOp: "clear" as GPULoadOp,

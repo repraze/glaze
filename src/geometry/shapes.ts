@@ -1,4 +1,4 @@
-import {computeTangents,Geometry} from "./geometry";
+import {computeTangents, Geometry} from "./geometry";
 
 // ─── Internal builder helpers ─────────────────────────────────────────────────
 
@@ -11,10 +11,10 @@ interface RawGeometry {
 
 function toGeometry(raw: RawGeometry): Geometry {
     const positions = new Float32Array(raw.positions);
-    const normals   = new Float32Array(raw.normals);
-    const uvs       = new Float32Array(raw.uvs);
-    const indices   = new Uint32Array(raw.indices);
-    const tangents  = computeTangents(positions, normals, uvs, indices, positions.length / 3);
+    const normals = new Float32Array(raw.normals);
+    const uvs = new Float32Array(raw.uvs);
+    const indices = new Uint32Array(raw.indices);
+    const tangents = computeTangents(positions, normals, uvs, indices, positions.length / 3);
     return new Geometry({positions, normals, uvs, indices, tangents});
 }
 
@@ -30,27 +30,44 @@ function applyFlatShading(raw: RawGeometry): RawGeometry {
         const ib = raw.indices[tri * 3 + 1]!;
         const ic = raw.indices[tri * 3 + 2]!;
 
-        const ax = raw.positions[ia * 3]!, ay = raw.positions[ia * 3 + 1]!, az = raw.positions[ia * 3 + 2]!;
-        const bx = raw.positions[ib * 3]!, by = raw.positions[ib * 3 + 1]!, bz = raw.positions[ib * 3 + 2]!;
-        const cx = raw.positions[ic * 3]!, cy = raw.positions[ic * 3 + 1]!, cz = raw.positions[ic * 3 + 2]!;
+        const ax = raw.positions[ia * 3]!,
+            ay = raw.positions[ia * 3 + 1]!,
+            az = raw.positions[ia * 3 + 2]!;
+        const bx = raw.positions[ib * 3]!,
+            by = raw.positions[ib * 3 + 1]!,
+            bz = raw.positions[ib * 3 + 2]!;
+        const cx = raw.positions[ic * 3]!,
+            cy = raw.positions[ic * 3 + 1]!,
+            cz = raw.positions[ic * 3 + 2]!;
 
-        const ux = bx - ax, uy = by - ay, uz = bz - az;
-        const vx = cx - ax, vy = cy - ay, vz = cz - az;
+        const ux = bx - ax,
+            uy = by - ay,
+            uz = bz - az;
+        const vx = cx - ax,
+            vy = cy - ay,
+            vz = cz - az;
 
         let nx = uy * vz - uz * vy;
         let ny = uz * vx - ux * vz;
         let nz = ux * vy - uy * vx;
         const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
-        if (len > 0) { nx /= len; ny /= len; nz /= len; }
+        if (len > 0) {
+            nx /= len;
+            ny /= len;
+            nz /= len;
+        }
 
         const base = out.positions.length / 3;
 
         out.positions.push(ax, ay, az, bx, by, bz, cx, cy, cz);
         out.normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
         out.uvs.push(
-            raw.uvs[ia * 2]!, raw.uvs[ia * 2 + 1]!,
-            raw.uvs[ib * 2]!, raw.uvs[ib * 2 + 1]!,
-            raw.uvs[ic * 2]!, raw.uvs[ic * 2 + 1]!,
+            raw.uvs[ia * 2]!,
+            raw.uvs[ia * 2 + 1]!,
+            raw.uvs[ib * 2]!,
+            raw.uvs[ib * 2 + 1]!,
+            raw.uvs[ic * 2]!,
+            raw.uvs[ic * 2 + 1]!,
         );
         out.indices.push(base, base + 1, base + 2);
     }
@@ -86,12 +103,12 @@ export function createCube({
         su: number;
         sv: number;
     }> = [
-        {u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1],  o: [-hw, -hw, hw],  su: widthSegments, sv: heightSegments},
-        {u: [-1, 0, 0], v: [0, 1, 0], n: [0, 0, -1], o: [hw, -hw, -hw],  su: widthSegments, sv: heightSegments},
-        {u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0],  o: [-hw, hw, hw],   su: widthSegments, sv: depthSegments},
-        {u: [1, 0, 0], v: [0, 0, 1],  n: [0, -1, 0], o: [-hw, -hw, -hw], su: widthSegments, sv: depthSegments},
-        {u: [0, 0, -1], v: [0, 1, 0], n: [1, 0, 0],  o: [hw, -hw, hw],   su: depthSegments, sv: heightSegments},
-        {u: [0, 0, 1],  v: [0, 1, 0], n: [-1, 0, 0], o: [-hw, -hw, -hw], su: depthSegments, sv: heightSegments},
+        {u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1], o: [-hw, -hw, hw], su: widthSegments, sv: heightSegments},
+        {u: [-1, 0, 0], v: [0, 1, 0], n: [0, 0, -1], o: [hw, -hw, -hw], su: widthSegments, sv: heightSegments},
+        {u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0], o: [-hw, hw, hw], su: widthSegments, sv: depthSegments},
+        {u: [1, 0, 0], v: [0, 0, 1], n: [0, -1, 0], o: [-hw, -hw, -hw], su: widthSegments, sv: depthSegments},
+        {u: [0, 0, -1], v: [0, 1, 0], n: [1, 0, 0], o: [hw, -hw, hw], su: depthSegments, sv: heightSegments},
+        {u: [0, 0, 1], v: [0, 1, 0], n: [-1, 0, 0], o: [-hw, -hw, -hw], su: depthSegments, sv: heightSegments},
     ];
 
     for (const face of faces) {
@@ -144,7 +161,8 @@ export function createPlane({
     flat = false,
 }: PlaneOptions = {}): Geometry {
     const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
-    const hw = width / 2, hh = height / 2;
+    const hw = width / 2,
+        hh = height / 2;
 
     for (let j = 0; j <= heightSegments; j++) {
         for (let i = 0; i <= widthSegments; i++) {
@@ -224,8 +242,12 @@ export function createSphere({
             const b = a + 1;
             const c = (j + 1) * (widthSegments + 1) + i;
             const d = c + 1;
-            if (j !== 0) raw.indices.push(a, b, c);
-            if (j !== heightSegments - 1) raw.indices.push(b, d, c);
+            if (j !== 0) {
+                raw.indices.push(a, b, c);
+            }
+            if (j !== heightSegments - 1) {
+                raw.indices.push(b, d, c);
+            }
         }
     }
 
@@ -240,17 +262,22 @@ export interface IcosphereOptions {
     flat?: boolean;
 }
 
-export function createIcosphere({
-    radius = 1,
-    subdivisions = 2,
-    flat = false,
-}: IcosphereOptions = {}): Geometry {
+export function createIcosphere({radius = 1, subdivisions = 2, flat = false}: IcosphereOptions = {}): Geometry {
     const t = (1 + Math.sqrt(5)) / 2;
 
     let verts: [number, number, number][] = [
-        [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
-        [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t],
-        [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1],
+        [-1, t, 0],
+        [1, t, 0],
+        [-1, -t, 0],
+        [1, -t, 0],
+        [0, -1, t],
+        [0, 1, t],
+        [0, -1, -t],
+        [0, 1, -t],
+        [t, 0, -1],
+        [t, 0, 1],
+        [-t, 0, -1],
+        [-t, 0, 1],
     ];
 
     verts = verts.map(([x, y, z]) => {
@@ -259,10 +286,26 @@ export function createIcosphere({
     });
 
     let faces: [number, number, number][] = [
-        [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-        [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-        [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-        [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+        [0, 11, 5],
+        [0, 5, 1],
+        [0, 1, 7],
+        [0, 7, 10],
+        [0, 10, 11],
+        [1, 5, 9],
+        [5, 11, 4],
+        [11, 10, 2],
+        [10, 7, 6],
+        [7, 1, 8],
+        [3, 9, 4],
+        [3, 4, 2],
+        [3, 2, 6],
+        [3, 6, 8],
+        [3, 8, 9],
+        [4, 9, 5],
+        [2, 4, 11],
+        [6, 2, 10],
+        [8, 6, 7],
+        [9, 8, 1],
     ];
 
     const midCache = new Map<string, number>();
@@ -270,7 +313,9 @@ export function createIcosphere({
     function getMidpoint(i: number, j: number): number {
         const key = `${Math.min(i, j)}_${Math.max(i, j)}`;
         const cached = midCache.get(key);
-        if (cached !== undefined) return cached;
+        if (cached !== undefined) {
+            return cached;
+        }
 
         const a = verts[i]!;
         const b = verts[j]!;
@@ -278,7 +323,9 @@ export function createIcosphere({
         let my = (a[1] + b[1]) / 2;
         let mz = (a[2] + b[2]) / 2;
         const l = Math.sqrt(mx * mx + my * my + mz * mz);
-        mx /= l; my /= l; mz /= l;
+        mx /= l;
+        my /= l;
+        mz /= l;
 
         const idx = verts.length;
         verts.push([mx, my, mz]);
@@ -315,7 +362,9 @@ export function createIcosphere({
 
     function getSeamDuplicate(origIdx: number): number {
         const cached = seamDuplicates.get(origIdx);
-        if (cached !== undefined) return cached;
+        if (cached !== undefined) {
+            return cached;
+        }
         const newIdx = positions.length / 3;
         positions.push(positions[origIdx * 3]!, positions[origIdx * 3 + 1]!, positions[origIdx * 3 + 2]!);
         normals.push(normals[origIdx * 3]!, normals[origIdx * 3 + 1]!, normals[origIdx * 3 + 2]!);
@@ -333,7 +382,9 @@ export function createIcosphere({
     function getPoleDuplicate(idx: number, targetU: number): number {
         const key = `${idx}_${Math.round(targetU * 1000)}`;
         const cached = poleDuplicates.get(key);
-        if (cached !== undefined) return cached;
+        if (cached !== undefined) {
+            return cached;
+        }
         const newIdx = positions.length / 3;
         positions.push(positions[idx * 3]!, positions[idx * 3 + 1]!, positions[idx * 3 + 2]!);
         normals.push(normals[idx * 3]!, normals[idx * 3 + 1]!, normals[idx * 3 + 2]!);
@@ -347,7 +398,9 @@ export function createIcosphere({
     const indices: number[] = [];
 
     for (const [a, b, c] of faces) {
-        let ia = a, ib = b, ic = c;
+        let ia = a,
+            ib = b,
+            ic = c;
 
         const ua = uvs[a * 2]!;
         const ub = uvs[b * 2]!;
@@ -355,16 +408,30 @@ export function createIcosphere({
 
         // Seam fix (first, so pole fix can use the corrected u values)
         if (Math.min(ua, ub, uc) < 0.2 && Math.max(ua, ub, uc) > 0.8) {
-            if (ua < 0.5) ia = getSeamDuplicate(a);
-            if (ub < 0.5) ib = getSeamDuplicate(b);
-            if (uc < 0.5) ic = getSeamDuplicate(c);
+            if (ua < 0.5) {
+                ia = getSeamDuplicate(a);
+            }
+            if (ub < 0.5) {
+                ib = getSeamDuplicate(b);
+            }
+            if (uc < 0.5) {
+                ic = getSeamDuplicate(c);
+            }
         }
 
         // Pole fix (reads seam-corrected u values from the potentially updated indices)
-        const ua2 = uvs[ia * 2]!, ub2 = uvs[ib * 2]!, uc2 = uvs[ic * 2]!;
-        if (isPole(ia)) ia = getPoleDuplicate(ia, (ub2 + uc2) * 0.5);
-        if (isPole(ib)) ib = getPoleDuplicate(ib, (ua2 + uc2) * 0.5);
-        if (isPole(ic)) ic = getPoleDuplicate(ic, (ua2 + ub2) * 0.5);
+        const ua2 = uvs[ia * 2]!,
+            ub2 = uvs[ib * 2]!,
+            uc2 = uvs[ic * 2]!;
+        if (isPole(ia)) {
+            ia = getPoleDuplicate(ia, (ub2 + uc2) * 0.5);
+        }
+        if (isPole(ib)) {
+            ib = getPoleDuplicate(ib, (ua2 + uc2) * 0.5);
+        }
+        if (isPole(ic)) {
+            ic = getPoleDuplicate(ic, (ua2 + ub2) * 0.5);
+        }
 
         indices.push(ia, ib, ic);
     }
@@ -395,9 +462,9 @@ export function createCylinder({
     flat = false,
 }: CylinderOptions = {}): Geometry {
     const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
-    const hh    = height / 2;
+    const hh = height / 2;
     const slope = (radiusBottom - radiusTop) / height;
-    const nl    = Math.sqrt(1 + slope * slope);
+    const nl = Math.sqrt(1 + slope * slope);
 
     // Track the start index of each horizontal ring.
     // When a ring's radius is 0 (cone apex/nadir) we emit a single shared vertex
@@ -420,8 +487,8 @@ export function createCylinder({
         } else {
             for (let i = 0; i <= radialSegments; i++) {
                 const theta = (i / radialSegments) * 2 * Math.PI;
-                const cosT  = Math.cos(theta);
-                const sinT  = Math.sin(theta);
+                const cosT = Math.cos(theta);
+                const sinT = Math.sin(theta);
                 raw.positions.push(r * cosT, y, r * sinT);
                 raw.normals.push(cosT / nl, slope / nl, sinT / nl);
                 raw.uvs.push(i / radialSegments, t);
@@ -430,7 +497,7 @@ export function createCylinder({
     }
 
     for (let j = 0; j < heightSegments; j++) {
-        const tR = radiusTop + (j       / heightSegments) * (radiusBottom - radiusTop);
+        const tR = radiusTop + (j / heightSegments) * (radiusBottom - radiusTop);
         const bR = radiusTop + ((j + 1) / heightSegments) * (radiusBottom - radiusTop);
         const tb = ringStart[j]!;
         const bb = ringStart[j + 1]!;
@@ -443,8 +510,10 @@ export function createCylinder({
                 // Fan up to bottom nadir.
                 raw.indices.push(tb + i, tb + i + 1, bb);
             } else {
-                const a = tb + i, b = tb + i + 1;
-                const c = bb + i, d = bb + i + 1;
+                const a = tb + i,
+                    b = tb + i + 1;
+                const c = bb + i,
+                    d = bb + i + 1;
                 raw.indices.push(a, b, c, b, d, c);
             }
         }

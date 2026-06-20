@@ -1,4 +1,4 @@
-import type { PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
+import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 
 // ─── WGSL ─────────────────────────────────────────────────────────────────────
@@ -136,7 +136,9 @@ export class BlitPass extends Pass {
 
     render(ctx: PassRenderContext): void {
         const inputView = ctx.inputs[this.inputName];
-        if (!inputView) throw new Error(`BlitPass: input '${this.inputName}' not found`);
+        if (!inputView) {
+            throw new Error(`BlitPass: input '${this.inputName}' not found`);
+        }
 
         if (inputView !== this.lastInputView) {
             this.lastInputView = inputView;
@@ -151,15 +153,19 @@ export class BlitPass extends Pass {
         }
 
         const canvasView = Object.values(ctx.outputs)[0];
-        if (!canvasView) throw new Error("BlitPass: no canvas output available");
+        if (!canvasView) {
+            throw new Error("BlitPass: no canvas output available");
+        }
 
         const pass = ctx.encoder.beginRenderPass({
-            colorAttachments: [{
-                view: canvasView,
-                clearValue: {r: 0, g: 0, b: 0, a: 1},
-                loadOp: "clear",
-                storeOp: "store",
-            }],
+            colorAttachments: [
+                {
+                    view: canvasView,
+                    clearValue: {r: 0, g: 0, b: 0, a: 1},
+                    loadOp: "clear",
+                    storeOp: "store",
+                },
+            ],
         });
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.bindGroup!);

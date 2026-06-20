@@ -1,20 +1,20 @@
-import { vec3 } from "gl-matrix";
+import {vec3} from "gl-matrix";
 
-import type { Texture } from "../texture";
-import type { Camera } from "./camera";
-import { Entity } from "./entity";
-import type { Light} from "./light";
-import { DirectionalLight, PointLight, SpotLight } from "./light";
-import { Mesh } from "./mesh";
+import type {Texture} from "../texture";
+import type {Camera} from "./camera";
+import {Entity} from "./entity";
+import type {Light} from "./light";
+import {DirectionalLight, PointLight, SpotLight} from "./light";
+import {Mesh} from "./mesh";
 
 export class Scene {
     readonly root = new Entity();
     activeCamera: Camera | null = null;
-    ambientColor:      vec3 = vec3.fromValues(0.05, 0.05, 0.05);
-    backgroundColor:   vec3 = vec3.fromValues(0, 0, 0);
-    environmentColor:  vec3 = vec3.fromValues(1.0, 1.0, 1.0);
-    environmentMap:    Texture | null = null;
-    backgroundMap:     Texture | null = null;
+    ambientColor: vec3 = vec3.fromValues(0.05, 0.05, 0.05);
+    backgroundColor: vec3 = vec3.fromValues(0, 0, 0);
+    environmentColor: vec3 = vec3.fromValues(1.0, 1.0, 1.0);
+    environmentMap: Texture | null = null;
+    backgroundMap: Texture | null = null;
 
     add(entity: Entity): this {
         this.root.add(entity);
@@ -41,8 +41,12 @@ export class Scene {
     }
 
     private traverseEntity(entity: Entity, meshes: Mesh[]): void {
-        if (!entity.enabled) return;
-        if (entity instanceof Mesh) meshes.push(entity);
+        if (!entity.enabled) {
+            return;
+        }
+        if (entity instanceof Mesh) {
+            meshes.push(entity);
+        }
         for (const child of entity.children) {
             this.traverseEntity(child, meshes);
         }
@@ -67,13 +71,13 @@ export class Scene {
         return result;
     }
 
-    private traverseLight<T extends Light>(
-        entity: Entity,
-        ctor: new (...args: never[]) => T,
-        out: T[],
-    ): void {
-        if (!entity.enabled) return;
-        if (entity instanceof ctor) out.push(entity);
+    private traverseLight<T extends Light>(entity: Entity, ctor: new (...args: never[]) => T, out: T[]): void {
+        if (!entity.enabled) {
+            return;
+        }
+        if (entity instanceof ctor) {
+            out.push(entity);
+        }
         for (const child of entity.children) {
             this.traverseLight(child, ctor, out);
         }

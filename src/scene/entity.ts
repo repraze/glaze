@@ -1,4 +1,4 @@
-import { mat4, quat,vec3 } from "gl-matrix";
+import {mat4, quat, vec3} from "gl-matrix";
 
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
@@ -34,12 +34,19 @@ export class Entity {
 
     updateLocalMatrix(): void {
         const q = quat.create();
-        quat.fromEuler(q, this.rotation[0] * (180 / Math.PI), this.rotation[1] * (180 / Math.PI), this.rotation[2] * (180 / Math.PI));
+        quat.fromEuler(
+            q,
+            this.rotation[0] * (180 / Math.PI),
+            this.rotation[1] * (180 / Math.PI),
+            this.rotation[2] * (180 / Math.PI),
+        );
         mat4.fromRotationTranslationScale(this.localMatrix, q, this.position, this.scale);
     }
 
     updateWorldMatrix(parentWorld: mat4 | null): void {
-        if (!this.enabled) return;
+        if (!this.enabled) {
+            return;
+        }
         this.updateLocalMatrix();
         if (parentWorld !== null) {
             mat4.multiply(this.worldMatrix, parentWorld, this.localMatrix);

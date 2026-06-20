@@ -2,7 +2,7 @@ import {mat4, vec3} from "gl-matrix";
 
 import type {Geometry} from "../geometry/geometry";
 import {PBRMaterial} from "../material/material";
-import type { PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
+import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 import type {Camera} from "../scene/camera";
 import type {DirectionalLight, PointLight, SpotLight} from "../scene/light";
@@ -33,13 +33,13 @@ fn vs_shadow(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
 
 export interface GBufferFeatures {
     parallaxMapping: boolean; // heightMap is assigned
-    normalMapping:   boolean; // normalMap is assigned
+    normalMapping: boolean; // normalMap is assigned
 }
 
 function getGBufferFeatures(mat: PBRMaterial): GBufferFeatures {
     return {
         parallaxMapping: mat.heightMap != null,
-        normalMapping:   mat.normalMap  != null,
+        normalMapping: mat.normalMap != null,
     };
 }
 
@@ -110,7 +110,9 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     return output;
 }
 
-${f.parallaxMapping ? `
+${
+    f.parallaxMapping
+        ? `
 fn parallaxOcclusionMapping(uv: vec2<f32>, viewDirT: vec3<f32>, scale: f32) -> vec2<f32> {
     let numLayers  = mix(8.0, 32.0, abs(dot(vec3(0.0, 0.0, 1.0), normalize(viewDirT))));
     let layerDepth = 1.0 / numLayers;
@@ -130,7 +132,9 @@ fn parallaxOcclusionMapping(uv: vec2<f32>, viewDirT: vec3<f32>, scale: f32) -> v
     let w = afterDiff / (afterDiff - beforeDiff);
     return mix(cuv, prevUV, w);
 }
-` : ""}
+`
+        : ""
+}
 
 struct GBufferOutput {
     @location(0) albedo:   vec4<f32>,
@@ -142,25 +146,37 @@ struct GBufferOutput {
 @fragment
 fn fs_main(input: VertexOutput) -> GBufferOutput {
     let N = normalize(input.worldNormal);
-${needsTbn ? `
+${
+    needsTbn
+        ? `
     let T   = normalize(input.worldTangent.xyz);
     let B   = cross(N, T) * input.worldTangent.w;
     let tbn = mat3x3<f32>(T, B, N);
-` : ""}
+`
+        : ""
+}
     var uv = input.uv;
-${f.parallaxMapping ? `
+${
+    f.parallaxMapping
+        ? `
     if (mat.heightScale > 0.001) {
         let viewDir  = normalize(camera.position.xyz - input.worldPos);
         let viewDirT = transpose(tbn) * viewDir;
         uv = parallaxOcclusionMapping(uv, viewDirT, mat.heightScale);
     }
-` : ""}
-${f.normalMapping ? `
+`
+        : ""
+}
+${
+    f.normalMapping
+        ? `
     let normalSample  = textureSample(normalMap, matSampler, uv).rgb * 2.0 - 1.0;
     let shadingNormal = normalize(tbn * normalSample);
-` : `
+`
+        : `
     let shadingNormal = N;
-`}
+`
+}
     let texAlbedo = textureSample(albedoMap, matSampler, uv).rgb;
     let albedo    = texAlbedo * mat.albedo.rgb;
 
@@ -197,11 +213,11 @@ const SHADOW_BIAS = 0.002;
 const POINT_SHADOW_MATRICES_SIZE = MAX_POINT * 6 * 64;
 
 const CUBE_FACE_DIRS: {dir: [number, number, number]; up: [number, number, number]}[] = [
-    {dir: [1, 0, 0],  up: [0, -1, 0]},
+    {dir: [1, 0, 0], up: [0, -1, 0]},
     {dir: [-1, 0, 0], up: [0, -1, 0]},
-    {dir: [0, 1, 0],  up: [0, 0, 1]},
+    {dir: [0, 1, 0], up: [0, 0, 1]},
     {dir: [0, -1, 0], up: [0, 0, -1]},
-    {dir: [0, 0, 1],  up: [0, -1, 0]},
+    {dir: [0, 0, 1], up: [0, -1, 0]},
     {dir: [0, 0, -1], up: [0, -1, 0]},
 ];
 
@@ -534,7 +550,7 @@ export class DeferredScenePass extends Pass {
     // Default material texture resources
     private defaultWhiteTex!: GPUTexture;
     private defaultWhiteView!: GPUTextureView;
-private defaultNormalTex!: GPUTexture;
+    private defaultNormalTex!: GPUTexture;
     private defaultNormalView!: GPUTextureView;
     private texSampler!: GPUSampler;
 
@@ -562,12 +578,12 @@ private defaultNormalTex!: GPUTexture;
         this.scene = scene;
         this.colorFormat = colorFormat;
         this.outputSlots = [
-            {name: "color",    spec: {format: colorFormat}},
-            {name: "albedo",   spec: {format: "rgba8unorm"}},
-            {name: "normal",   spec: {format: "rgba16float"}},
+            {name: "color", spec: {format: colorFormat}},
+            {name: "albedo", spec: {format: "rgba8unorm"}},
+            {name: "normal", spec: {format: "rgba16float"}},
             {name: "worldPos", spec: {format: "rgba16float"}},
             {name: "emissive", spec: {format: "rgba16float"}},
-            {name: "depth",    spec: {format: "depth24plus"}},
+            {name: "depth", spec: {format: "depth24plus"}},
         ];
     }
 
@@ -600,20 +616,14 @@ private defaultNormalTex!: GPUTexture;
 
         this.scene.updateWorldMatrices();
 
-        const meshes      = this.scene.collectMeshes();
-        const dirLights   = this.scene.collectDirectionalLights().slice(0, MAX_DIRECTIONAL);
+        const meshes = this.scene.collectMeshes();
+        const dirLights = this.scene.collectDirectionalLights().slice(0, MAX_DIRECTIONAL);
         const pointLights = this.scene.collectPointLights().slice(0, MAX_POINT);
-        const spotLights  = this.scene.collectSpotLights().slice(0, MAX_SPOT);
+        const spotLights = this.scene.collectSpotLights().slice(0, MAX_SPOT);
 
-        const dirMatrices   = dirLights.map(l =>
-            l.castShadow ? this.computeDirectionalLightMatrix(l) : null,
-        );
-        const spotMatrices  = spotLights.map(l =>
-            l.castShadow ? this.computeSpotLightMatrix(l) : null,
-        );
-        const pointMatrices = pointLights.map(l =>
-            l.castShadow ? this.computePointLightFaceMatrices(l) : null,
-        );
+        const dirMatrices = dirLights.map((l) => (l.castShadow ? this.computeDirectionalLightMatrix(l) : null));
+        const spotMatrices = spotLights.map((l) => (l.castShadow ? this.computeSpotLightMatrix(l) : null));
+        const pointMatrices = pointLights.map((l) => (l.castShadow ? this.computePointLightFaceMatrices(l) : null));
 
         this.uploadCameraUniforms(this.scene.activeCamera, ctx.width, ctx.height);
         this.uploadLightingUniforms(dirLights, pointLights, spotLights, dirMatrices, spotMatrices);
@@ -622,10 +632,21 @@ private defaultNormalTex!: GPUTexture;
         this.ensureMeshResources(meshes);
         for (const mesh of meshes) {
             const res = this.meshCache.get(mesh);
-            if (res) this.uploadModelUniforms(mesh, res.modelBuffer);
+            if (res) {
+                this.uploadModelUniforms(mesh, res.modelBuffer);
+            }
         }
 
-        this.renderShadowMaps(encoder, meshes, dirLights, pointLights, spotLights, dirMatrices, pointMatrices, spotMatrices);
+        this.renderShadowMaps(
+            encoder,
+            meshes,
+            dirLights,
+            pointLights,
+            spotLights,
+            dirMatrices,
+            pointMatrices,
+            spotMatrices,
+        );
         this.renderGBuffer(encoder, meshes, ctx);
         this.renderLighting(encoder, ctx);
     }
@@ -640,9 +661,15 @@ private defaultNormalTex!: GPUTexture;
         this.spotShadowTex?.destroy();
         this.pointShadowTex?.destroy();
         this.pointShadowMatricesBuffer?.destroy();
-        for (const b of this.dirShadowLightBuffers) b.destroy();
-        for (const b of this.spotShadowLightBuffers) b.destroy();
-        for (const b of this.pointShadowFaceBuffers) b.destroy();
+        for (const b of this.dirShadowLightBuffers) {
+            b.destroy();
+        }
+        for (const b of this.spotShadowLightBuffers) {
+            b.destroy();
+        }
+        for (const b of this.pointShadowFaceBuffers) {
+            b.destroy();
+        }
         for (const r of this.meshCache.values()) {
             r.vertexBuffer.destroy();
             r.indexBuffer.destroy();
@@ -658,16 +685,20 @@ private defaultNormalTex!: GPUTexture;
 
         this.cameraBindGroupLayout = device.createBindGroupLayout({
             label: "DeferredScene:cameraLayout",
-            entries: [{binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}}],
+            entries: [
+                {binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}},
+            ],
         });
 
         this.modelBindGroupLayout = device.createBindGroupLayout({
             label: "DeferredScene:modelLayout",
-            entries: [{
-                binding: 0,
-                visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-                buffer: {type: "uniform"},
-            }],
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: {type: "uniform"},
+                },
+            ],
         });
 
         this.materialBindGroupLayout = device.createBindGroupLayout({
@@ -694,7 +725,7 @@ private defaultNormalTex!: GPUTexture;
         device.queue.writeTexture({texture: this.defaultWhiteTex}, white, {bytesPerRow: 4}, {width: 1, height: 1});
         this.defaultWhiteView = this.defaultWhiteTex.createView();
 
-// Default flat normal 1×1 texture: (128,128,255) → (0,0,1) after decode
+        // Default flat normal 1×1 texture: (128,128,255) → (0,0,1) after decode
         const flatNormal = new Uint8Array([128, 128, 255, 255]);
         this.defaultNormalTex = device.createTexture({
             label: "DeferredScene:defaultNormal",
@@ -702,7 +733,12 @@ private defaultNormalTex!: GPUTexture;
             format: "rgba8unorm",
             usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
         });
-        device.queue.writeTexture({texture: this.defaultNormalTex}, flatNormal, {bytesPerRow: 4}, {width: 1, height: 1});
+        device.queue.writeTexture(
+            {texture: this.defaultNormalTex},
+            flatNormal,
+            {bytesPerRow: 4},
+            {width: 1, height: 1},
+        );
         this.defaultNormalView = this.defaultNormalTex.createView();
 
         this.texSampler = device.createSampler({
@@ -713,11 +749,7 @@ private defaultNormalTex!: GPUTexture;
         });
 
         this.gbufferPipelineLayout = device.createPipelineLayout({
-            bindGroupLayouts: [
-                this.cameraBindGroupLayout,
-                this.modelBindGroupLayout,
-                this.materialBindGroupLayout,
-            ],
+            bindGroupLayouts: [this.cameraBindGroupLayout, this.modelBindGroupLayout, this.materialBindGroupLayout],
         });
 
         this.lightingBindGroupLayout = device.createBindGroupLayout({
@@ -737,10 +769,22 @@ private defaultNormalTex!: GPUTexture;
         this.shadowSceneBindGroupLayout = device.createBindGroupLayout({
             label: "DeferredScene:shadowSceneLayout",
             entries: [
-                {binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "depth", viewDimension: "2d-array"}},
-                {binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "depth", viewDimension: "2d-array"}},
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: {sampleType: "depth", viewDimension: "2d-array"},
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: {sampleType: "depth", viewDimension: "2d-array"},
+                },
                 {binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {type: "comparison"}},
-                {binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "depth", viewDimension: "2d-array"}},
+                {
+                    binding: 3,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: {sampleType: "depth", viewDimension: "2d-array"},
+                },
                 {binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}},
             ],
         });
@@ -790,12 +834,14 @@ private defaultNormalTex!: GPUTexture;
             vertex: {
                 module: shadowModule,
                 entryPoint: "vs_shadow",
-                buffers: [{
-                    arrayStride: 48,
-                    attributes: [
-                        {shaderLocation: 0, offset: 0, format: "float32x3"}, // position only
-                    ],
-                }],
+                buffers: [
+                    {
+                        arrayStride: 48,
+                        attributes: [
+                            {shaderLocation: 0, offset: 0, format: "float32x3"}, // position only
+                        ],
+                    },
+                ],
             },
             depthStencil: {
                 format: "depth32float",
@@ -822,15 +868,17 @@ private defaultNormalTex!: GPUTexture;
                 vertex: {
                     module,
                     entryPoint: "vs_main",
-                    buffers: [{
-                        arrayStride: 48,
-                        attributes: [
-                            {shaderLocation: 0, offset:  0, format: "float32x3"},
-                            {shaderLocation: 1, offset: 12, format: "float32x3"},
-                            {shaderLocation: 2, offset: 24, format: "float32x2"},
-                            {shaderLocation: 3, offset: 32, format: "float32x4"},
-                        ],
-                    }],
+                    buffers: [
+                        {
+                            arrayStride: 48,
+                            attributes: [
+                                {shaderLocation: 0, offset: 0, format: "float32x3"},
+                                {shaderLocation: 1, offset: 12, format: "float32x3"},
+                                {shaderLocation: 2, offset: 24, format: "float32x2"},
+                                {shaderLocation: 3, offset: 32, format: "float32x4"},
+                            ],
+                        },
+                    ],
                 },
                 fragment: {
                     module,
@@ -858,8 +906,8 @@ private defaultNormalTex!: GPUTexture;
         const sets = featureSets ?? [
             {parallaxMapping: false, normalMapping: false},
             {parallaxMapping: false, normalMapping: true},
-            {parallaxMapping: true,  normalMapping: false},
-            {parallaxMapping: true,  normalMapping: true},
+            {parallaxMapping: true, normalMapping: false},
+            {parallaxMapping: true, normalMapping: true},
         ];
         for (const f of sets) {
             this.getOrCreateGBufferPipeline(f);
@@ -877,9 +925,9 @@ private defaultNormalTex!: GPUTexture;
                 usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
             });
 
-        this.dirShadowTex   = makeDepthArray(MAX_DIRECTIONAL, SHADOW_MAP_SIZE,       "Shadow:directional");
-        this.spotShadowTex  = makeDepthArray(MAX_SPOT,         SHADOW_MAP_SIZE,       "Shadow:spot");
-        this.pointShadowTex = makeDepthArray(MAX_POINT * 6,    POINT_SHADOW_MAP_SIZE, "Shadow:point");
+        this.dirShadowTex = makeDepthArray(MAX_DIRECTIONAL, SHADOW_MAP_SIZE, "Shadow:directional");
+        this.spotShadowTex = makeDepthArray(MAX_SPOT, SHADOW_MAP_SIZE, "Shadow:spot");
+        this.pointShadowTex = makeDepthArray(MAX_POINT * 6, POINT_SHADOW_MAP_SIZE, "Shadow:point");
 
         this.shadowSampler = device.createSampler({
             label: "DeferredScene:shadowSampler",
@@ -891,33 +939,51 @@ private defaultNormalTex!: GPUTexture;
         });
 
         for (let i = 0; i < MAX_DIRECTIONAL; i++) {
-            const buf = device.createBuffer({label: `Shadow:dirLight${i}`, size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
+            const buf = device.createBuffer({
+                label: `Shadow:dirLight${i}`,
+                size: 64,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
             this.dirShadowLightBuffers.push(buf);
-            this.dirShadowLightBGs.push(device.createBindGroup({
-                label: `Shadow:dirLightBG${i}`,
-                layout: this.shadowLightBindGroupLayout,
-                entries: [{binding: 0, resource: {buffer: buf}}],
-            }));
+            this.dirShadowLightBGs.push(
+                device.createBindGroup({
+                    label: `Shadow:dirLightBG${i}`,
+                    layout: this.shadowLightBindGroupLayout,
+                    entries: [{binding: 0, resource: {buffer: buf}}],
+                }),
+            );
         }
 
         for (let i = 0; i < MAX_SPOT; i++) {
-            const buf = device.createBuffer({label: `Shadow:spotLight${i}`, size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
+            const buf = device.createBuffer({
+                label: `Shadow:spotLight${i}`,
+                size: 64,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
             this.spotShadowLightBuffers.push(buf);
-            this.spotShadowLightBGs.push(device.createBindGroup({
-                label: `Shadow:spotLightBG${i}`,
-                layout: this.shadowLightBindGroupLayout,
-                entries: [{binding: 0, resource: {buffer: buf}}],
-            }));
+            this.spotShadowLightBGs.push(
+                device.createBindGroup({
+                    label: `Shadow:spotLightBG${i}`,
+                    layout: this.shadowLightBindGroupLayout,
+                    entries: [{binding: 0, resource: {buffer: buf}}],
+                }),
+            );
         }
 
         for (let i = 0; i < MAX_POINT * 6; i++) {
-            const buf = device.createBuffer({label: `Shadow:pointFace${i}`, size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
+            const buf = device.createBuffer({
+                label: `Shadow:pointFace${i}`,
+                size: 64,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
             this.pointShadowFaceBuffers.push(buf);
-            this.pointShadowFaceBGs.push(device.createBindGroup({
-                label: `Shadow:pointFaceBG${i}`,
-                layout: this.shadowLightBindGroupLayout,
-                entries: [{binding: 0, resource: {buffer: buf}}],
-            }));
+            this.pointShadowFaceBGs.push(
+                device.createBindGroup({
+                    label: `Shadow:pointFaceBG${i}`,
+                    layout: this.shadowLightBindGroupLayout,
+                    entries: [{binding: 0, resource: {buffer: buf}}],
+                }),
+            );
         }
 
         this.pointShadowMatricesBuffer = device.createBuffer({
@@ -951,12 +1017,14 @@ private defaultNormalTex!: GPUTexture;
         pointMatrices: (mat4[] | null)[],
         spotMatrices: (mat4 | null)[],
     ): void {
-        const shadowMeshes = meshes.filter(m => m.castShadow);
+        const shadowMeshes = meshes.filter((m) => m.castShadow);
 
         const drawShadowMeshes = (pass: GPURenderPassEncoder) => {
             for (const mesh of shadowMeshes) {
                 const res = this.meshCache.get(mesh);
-                if (!res) continue;
+                if (!res) {
+                    continue;
+                }
                 pass.setBindGroup(1, res.modelBindGroup);
                 pass.setVertexBuffer(0, res.vertexBuffer);
                 pass.setIndexBuffer(res.indexBuffer, "uint32");
@@ -966,14 +1034,18 @@ private defaultNormalTex!: GPUTexture;
 
         for (let i = 0; i < dirLights.length; i++) {
             const lsMatrix = dirMatrices[i];
-            if (!lsMatrix) continue;
+            if (!lsMatrix) {
+                continue;
+            }
             this.device.queue.writeBuffer(this.dirShadowLightBuffers[i]!, 0, lsMatrix as Float32Array);
             const pass = encoder.beginRenderPass({
                 label: `Shadow:dir${i}`,
                 colorAttachments: [],
                 depthStencilAttachment: {
                     view: this.dirShadowTex.createView({dimension: "2d", baseArrayLayer: i, arrayLayerCount: 1}),
-                    depthClearValue: 1.0, depthLoadOp: "clear", depthStoreOp: "store",
+                    depthClearValue: 1.0,
+                    depthLoadOp: "clear",
+                    depthStoreOp: "store",
                 },
             });
             pass.setPipeline(this.shadowPipeline);
@@ -984,7 +1056,9 @@ private defaultNormalTex!: GPUTexture;
 
         for (let i = 0; i < pointLights.length; i++) {
             const faceMatrices = pointMatrices[i];
-            if (!faceMatrices) continue;
+            if (!faceMatrices) {
+                continue;
+            }
             for (let f = 0; f < 6; f++) {
                 const slot = i * 6 + f;
                 this.device.queue.writeBuffer(this.pointShadowFaceBuffers[slot]!, 0, faceMatrices[f] as Float32Array);
@@ -992,8 +1066,14 @@ private defaultNormalTex!: GPUTexture;
                     label: `Shadow:point${i}f${f}`,
                     colorAttachments: [],
                     depthStencilAttachment: {
-                        view: this.pointShadowTex.createView({dimension: "2d", baseArrayLayer: slot, arrayLayerCount: 1}),
-                        depthClearValue: 1.0, depthLoadOp: "clear", depthStoreOp: "store",
+                        view: this.pointShadowTex.createView({
+                            dimension: "2d",
+                            baseArrayLayer: slot,
+                            arrayLayerCount: 1,
+                        }),
+                        depthClearValue: 1.0,
+                        depthLoadOp: "clear",
+                        depthStoreOp: "store",
                     },
                 });
                 pass.setPipeline(this.shadowPipeline);
@@ -1005,14 +1085,18 @@ private defaultNormalTex!: GPUTexture;
 
         for (let i = 0; i < spotLights.length; i++) {
             const lsMatrix = spotMatrices[i];
-            if (!lsMatrix) continue;
+            if (!lsMatrix) {
+                continue;
+            }
             this.device.queue.writeBuffer(this.spotShadowLightBuffers[i]!, 0, lsMatrix as Float32Array);
             const pass = encoder.beginRenderPass({
                 label: `Shadow:spot${i}`,
                 colorAttachments: [],
                 depthStencilAttachment: {
                     view: this.spotShadowTex.createView({dimension: "2d", baseArrayLayer: i, arrayLayerCount: 1}),
-                    depthClearValue: 1.0, depthLoadOp: "clear", depthStoreOp: "store",
+                    depthClearValue: 1.0,
+                    depthLoadOp: "clear",
+                    depthStoreOp: "store",
                 },
             });
             pass.setPipeline(this.shadowPipeline);
@@ -1027,14 +1111,16 @@ private defaultNormalTex!: GPUTexture;
         const pass = encoder.beginRenderPass({
             label: "GBuffer",
             colorAttachments: [
-                {view: outputs["albedo"]!,   clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
-                {view: outputs["normal"]!,   clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
+                {view: outputs["albedo"]!, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
+                {view: outputs["normal"]!, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
                 {view: outputs["worldPos"]!, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
                 {view: outputs["emissive"]!, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
             ],
             depthStencilAttachment: {
                 view: outputs["depth"]!,
-                depthClearValue: 1.0, depthLoadOp: "clear", depthStoreOp: "store",
+                depthClearValue: 1.0,
+                depthLoadOp: "clear",
+                depthStoreOp: "store",
             },
         });
 
@@ -1043,9 +1129,13 @@ private defaultNormalTex!: GPUTexture;
         let activePipelineKey: string | null = null;
         for (const mesh of meshes) {
             const res = this.meshCache.get(mesh);
-            if (!res) continue;
+            if (!res) {
+                continue;
+            }
 
-            if (!(mesh.material instanceof PBRMaterial)) continue;
+            if (!(mesh.material instanceof PBRMaterial)) {
+                continue;
+            }
 
             const features = getGBufferFeatures(mesh.material);
             const key = featureKey(features);
@@ -1077,7 +1167,7 @@ private defaultNormalTex!: GPUTexture;
 
         // Build lighting bind group each frame so G-buffer views are always current.
         const envView = this.scene.environmentMap?.view ?? this.defaultWhiteView;
-        const bgView  = this.scene.backgroundMap?.view  ?? this.defaultWhiteView;
+        const bgView = this.scene.backgroundMap?.view ?? this.defaultWhiteView;
         const lightingBG = this.device.createBindGroup({
             label: "DeferredScene:lightingBindGroup",
             layout: this.lightingBindGroupLayout,
@@ -1095,9 +1185,7 @@ private defaultNormalTex!: GPUTexture;
 
         const pass = encoder.beginRenderPass({
             label: "Lighting",
-            colorAttachments: [
-                {view: outputs["color"]!, clearValue: [0, 0, 0, 1], loadOp: "clear", storeOp: "store"},
-            ],
+            colorAttachments: [{view: outputs["color"]!, clearValue: [0, 0, 0, 1], loadOp: "clear", storeOp: "store"}],
         });
 
         pass.setPipeline(this.lightingPipeline);
@@ -1113,8 +1201,8 @@ private defaultNormalTex!: GPUTexture;
         const aspect = width / height;
         const viewMatrix = camera ? camera.getViewMatrix() : mat4.create();
         const projMatrix = camera ? camera.getProjectionMatrix(aspect) : mat4.create();
-        const vpMatrix   = camera ? camera.getViewProjectionMatrix(aspect) : mat4.create();
-        const camPos     = camera ? camera.getCameraPosition() : vec3.create();
+        const vpMatrix = camera ? camera.getViewProjectionMatrix(aspect) : mat4.create();
+        const camPos = camera ? camera.getCameraPosition() : vec3.create();
 
         mat4.invert(this.currentInvVP, vpMatrix);
 
@@ -1122,7 +1210,10 @@ private defaultNormalTex!: GPUTexture;
         data.set(viewMatrix, 0);
         data.set(projMatrix, 16);
         data.set(vpMatrix, 32);
-        data[48] = camPos[0]; data[49] = camPos[1]; data[50] = camPos[2]; data[51] = 1.0;
+        data[48] = camPos[0];
+        data[49] = camPos[1];
+        data[50] = camPos[2];
+        data[51] = 1.0;
 
         this.device.queue.writeBuffer(this.cameraBuffer, 0, data);
     }
@@ -1148,34 +1239,56 @@ private defaultNormalTex!: GPUTexture;
         spotMatrices: (mat4 | null)[],
     ): void {
         const data = new ArrayBuffer(LIGHTING_BUFFER_SIZE);
-        const f32  = new Float32Array(data);
-        const u32  = new Uint32Array(data);
+        const f32 = new Float32Array(data);
+        const u32 = new Uint32Array(data);
 
         const ambient = this.scene.ambientColor;
-        f32[0] = ambient[0]; f32[1] = ambient[1]; f32[2] = ambient[2]; f32[3] = 1.0;
+        f32[0] = ambient[0];
+        f32[1] = ambient[1];
+        f32[2] = ambient[2];
+        f32[3] = 1.0;
 
         const cam = this.scene.activeCamera;
-        const cp  = cam ? cam.getCameraPosition() : vec3.create();
-        f32[4] = cp[0]; f32[5] = cp[1]; f32[6] = cp[2]; f32[7] = 1.0;
+        const cp = cam ? cam.getCameraPosition() : vec3.create();
+        f32[4] = cp[0];
+        f32[5] = cp[1];
+        f32[6] = cp[2];
+        f32[7] = 1.0;
 
-        u32[8] = dirLights.length; u32[9] = pointLights.length; u32[10] = spotLights.length; u32[11] = 0;
+        u32[8] = dirLights.length;
+        u32[9] = pointLights.length;
+        u32[10] = spotLights.length;
+        u32[11] = 0;
 
         for (let i = 0; i < dirLights.length; i++) {
             const base = 12 + i * 24;
             const l = dirLights[i]!;
             const lm = dirMatrices[i];
-            f32[base + 0] = l.direction[0]; f32[base + 1] = l.direction[1]; f32[base + 2] = l.direction[2];
+            f32[base + 0] = l.direction[0];
+            f32[base + 1] = l.direction[1];
+            f32[base + 2] = l.direction[2];
             f32[base + 3] = l.castShadow ? 1.0 : 0.0;
-            f32[base + 4] = l.color[0]; f32[base + 5] = l.color[1]; f32[base + 6] = l.color[2]; f32[base + 7] = l.intensity;
-            if (lm) f32.set(lm, base + 8);
+            f32[base + 4] = l.color[0];
+            f32[base + 5] = l.color[1];
+            f32[base + 6] = l.color[2];
+            f32[base + 7] = l.intensity;
+            if (lm) {
+                f32.set(lm, base + 8);
+            }
         }
 
         for (let i = 0; i < pointLights.length; i++) {
             const base = 108 + i * 12;
             const l = pointLights[i]!;
             const wp = l.worldMatrix;
-            f32[base + 0] = wp[12]!; f32[base + 1] = wp[13]!; f32[base + 2] = wp[14]!; f32[base + 3] = l.range;
-            f32[base + 4] = l.color[0]; f32[base + 5] = l.color[1]; f32[base + 6] = l.color[2]; f32[base + 7] = l.intensity;
+            f32[base + 0] = wp[12]!;
+            f32[base + 1] = wp[13]!;
+            f32[base + 2] = wp[14]!;
+            f32[base + 3] = l.range;
+            f32[base + 4] = l.color[0];
+            f32[base + 5] = l.color[1];
+            f32[base + 6] = l.color[2];
+            f32[base + 7] = l.intensity;
             f32[base + 8] = l.castShadow ? 1.0 : 0.0;
         }
 
@@ -1184,19 +1297,36 @@ private defaultNormalTex!: GPUTexture;
             const l = spotLights[i]!;
             const lm = spotMatrices[i];
             const wp = l.worldMatrix;
-            f32[base + 0]  = wp[12]!;        f32[base + 1]  = wp[13]!;        f32[base + 2]  = wp[14]!;        f32[base + 3]  = l.range;
-            f32[base + 4]  = l.direction[0]; f32[base + 5]  = l.direction[1]; f32[base + 6]  = l.direction[2];
-            f32[base + 7]  = l.castShadow ? 1.0 : 0.0;
-            f32[base + 8]  = l.color[0];     f32[base + 9]  = l.color[1];     f32[base + 10] = l.color[2];     f32[base + 11] = l.intensity;
-            f32[base + 12] = Math.cos(l.innerAngle); f32[base + 13] = Math.cos(l.outerAngle);
-            if (lm) f32.set(lm, base + 16);
+            f32[base + 0] = wp[12]!;
+            f32[base + 1] = wp[13]!;
+            f32[base + 2] = wp[14]!;
+            f32[base + 3] = l.range;
+            f32[base + 4] = l.direction[0];
+            f32[base + 5] = l.direction[1];
+            f32[base + 6] = l.direction[2];
+            f32[base + 7] = l.castShadow ? 1.0 : 0.0;
+            f32[base + 8] = l.color[0];
+            f32[base + 9] = l.color[1];
+            f32[base + 10] = l.color[2];
+            f32[base + 11] = l.intensity;
+            f32[base + 12] = Math.cos(l.innerAngle);
+            f32[base + 13] = Math.cos(l.outerAngle);
+            if (lm) {
+                f32.set(lm, base + 16);
+            }
         }
 
         const bg = this.scene.backgroundColor;
-        f32[332] = bg[0]; f32[333] = bg[1]; f32[334] = bg[2]; f32[335] = 1.0;
+        f32[332] = bg[0];
+        f32[333] = bg[1];
+        f32[334] = bg[2];
+        f32[335] = 1.0;
 
         const env = this.scene.environmentColor;
-        f32[336] = env[0]; f32[337] = env[1]; f32[338] = env[2]; f32[339] = 1.0;
+        f32[336] = env[0];
+        f32[337] = env[1];
+        f32[338] = env[2];
+        f32[339] = 1.0;
 
         f32.set(this.currentInvVP, 340);
 
@@ -1207,7 +1337,7 @@ private defaultNormalTex!: GPUTexture;
 
     private computeDirectionalLightMatrix(light: DirectionalLight): mat4 {
         const dir = light.direction;
-        const up  = Math.abs(dir[1]) > 0.9 ? vec3.fromValues(1, 0, 0) : vec3.fromValues(0, 1, 0);
+        const up = Math.abs(dir[1]) > 0.9 ? vec3.fromValues(1, 0, 0) : vec3.fromValues(0, 1, 0);
         const eye = vec3.scale(vec3.create(), dir, -20);
 
         const view = mat4.create();
@@ -1222,10 +1352,10 @@ private defaultNormalTex!: GPUTexture;
     }
 
     private computeSpotLightMatrix(light: SpotLight): mat4 {
-        const wp  = light.worldMatrix;
+        const wp = light.worldMatrix;
         const eye = vec3.fromValues(wp[12]!, wp[13]!, wp[14]!);
         const dir = light.direction;
-        const up  = Math.abs(dir[1]) > 0.9 ? vec3.fromValues(1, 0, 0) : vec3.fromValues(0, 1, 0);
+        const up = Math.abs(dir[1]) > 0.9 ? vec3.fromValues(1, 0, 0) : vec3.fromValues(0, 1, 0);
         const center = vec3.add(vec3.create(), eye, dir);
 
         const view = mat4.create();
@@ -1240,7 +1370,7 @@ private defaultNormalTex!: GPUTexture;
     }
 
     private computePointLightFaceMatrices(light: PointLight): mat4[] {
-        const wp  = light.worldMatrix;
+        const wp = light.worldMatrix;
         const eye = vec3.fromValues(wp[12]!, wp[13]!, wp[14]!);
 
         return CUBE_FACE_DIRS.map(({dir, up}) => {
@@ -1259,7 +1389,9 @@ private defaultNormalTex!: GPUTexture;
         const data = new Float32Array(POINT_SHADOW_MATRICES_SIZE / 4);
         for (let i = 0; i < pointLights.length; i++) {
             const faceMatrices = pointMatrices[i];
-            if (!faceMatrices) continue;
+            if (!faceMatrices) {
+                continue;
+            }
             for (let f = 0; f < 6; f++) {
                 data.set(faceMatrices[f] as Float32Array, (i * 6 + f) * 16);
             }
@@ -1271,7 +1403,9 @@ private defaultNormalTex!: GPUTexture;
 
     private ensureMeshResources(meshes: Mesh[]): void {
         for (const mesh of meshes) {
-            if (this.meshCache.has(mesh)) continue;
+            if (this.meshCache.has(mesh)) {
+                continue;
+            }
             this.meshCache.set(mesh, this.createMeshResources(mesh.geometry));
         }
     }

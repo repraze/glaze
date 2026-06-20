@@ -3,7 +3,9 @@ import {Geometry} from "../geometry/geometry";
 // ─── Detection ────────────────────────────────────────────────────────────────
 
 function isBinarySTL(buffer: ArrayBuffer): boolean {
-    if (buffer.byteLength < 84) return false;
+    if (buffer.byteLength < 84) {
+        return false;
+    }
     const triangleCount = new DataView(buffer).getUint32(80, true);
     // Binary STL is exactly 84 + 50*n bytes. Use this to distinguish from
     // ASCII files that happen to start with "solid".
@@ -82,7 +84,9 @@ function parseAsciiSTL(buffer: ArrayBuffer): Geometry {
     const normals = new Float32Array(nrmArr);
     const uvs = new Float32Array(triangleCount * 6);
     const indices = new Uint32Array(vertexCount);
-    for (let i = 0; i < vertexCount; i++) indices[i] = i;
+    for (let i = 0; i < vertexCount; i++) {
+        indices[i] = i;
+    }
 
     return new Geometry({positions, normals, uvs, indices});
 }

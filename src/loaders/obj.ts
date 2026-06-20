@@ -25,7 +25,9 @@ export function parseOBJ(text: string): Geometry {
     function getVertex(posIdx: number, uvIdx: number, normIdx: number): number {
         const key = `${posIdx}/${uvIdx}/${normIdx}`;
         const cached = vertexCache.get(key);
-        if (cached !== undefined) return cached;
+        if (cached !== undefined) {
+            return cached;
+        }
 
         const idx = outPositions.length / 3;
 
@@ -44,7 +46,9 @@ export function parseOBJ(text: string): Geometry {
 
     for (const rawLine of text.split(/\r?\n/)) {
         const line = rawLine.trim();
-        if (!line || line.startsWith("#")) continue;
+        if (!line || line.startsWith("#")) {
+            continue;
+        }
 
         const parts = line.split(/\s+/);
         const cmd = parts[0];
@@ -72,7 +76,9 @@ export function parseOBJ(text: string): Geometry {
         const vertCount = outPositions.length / 3;
         const positions = new Float32Array(outPositions);
         const indices = new Uint32Array(outIndices);
-        for (let i = 0; i < vertCount * 3; i++) outNormals[i] = 0;
+        for (let i = 0; i < vertCount * 3; i++) {
+            outNormals[i] = 0;
+        }
         for (let t = 0; t < indices.length / 3; t++) {
             const i0 = indices[t * 3]!,
                 i1 = indices[t * 3 + 1]!,
@@ -123,7 +129,9 @@ export function parseOBJ(text: string): Geometry {
  */
 export async function loadOBJFromURL(url: string): Promise<Geometry> {
     const response = await fetch(url);
-    if (!response.ok) throw new Error(`OBJ: failed to fetch '${url}' (${response.status})`);
+    if (!response.ok) {
+        throw new Error(`OBJ: failed to fetch '${url}' (${response.status})`);
+    }
     const text = await response.text();
     return parseOBJ(text);
 }

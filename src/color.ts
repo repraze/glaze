@@ -62,7 +62,9 @@ function parseHex(input: string): StrictColorRgba {
  */
 export function colorRgb(input: string | ColorRgb): StrictColorRgb {
     if (typeof input === "string") {
-        if (!input.startsWith("#")) throw new Error(`Unsupported color format: "${input}"`);
+        if (!input.startsWith("#")) {
+            throw new Error(`Unsupported color format: "${input}"`);
+        }
         const [r, g, b] = parseHex(input);
         return [r, g, b];
     }
@@ -78,7 +80,9 @@ export function colorRgb(input: string | ColorRgb): StrictColorRgb {
  */
 export function colorRgba(input: string | ColorRgb | ColorRgba, alpha?: number): StrictColorRgba {
     if (typeof input === "string") {
-        if (!input.startsWith("#")) throw new Error(`Unsupported color format: "${input}"`);
+        if (!input.startsWith("#")) {
+            throw new Error(`Unsupported color format: "${input}"`);
+        }
         const parsed = parseHex(input);
         return [parsed[0], parsed[1], parsed[2], alpha ?? parsed[3]];
     }
@@ -97,7 +101,9 @@ export function colorRgba(input: string | ColorRgb | ColorRgba, alpha?: number):
  */
 export function setColorRgb(out: ColorRgb, input: string | ColorRgb): ColorRgb {
     if (typeof input === "string") {
-        if (!input.startsWith("#")) throw new Error(`Unsupported color format: "${input}"`);
+        if (!input.startsWith("#")) {
+            throw new Error(`Unsupported color format: "${input}"`);
+        }
         const [r, g, b] = parseHex(input);
         out[0] = r;
         out[1] = g;
@@ -116,7 +122,9 @@ export function setColorRgb(out: ColorRgb, input: string | ColorRgb): ColorRgb {
  */
 export function setColorRgba(out: ColorRgba, input: string | ColorRgb | ColorRgba, alpha?: number): ColorRgba {
     if (typeof input === "string") {
-        if (!input.startsWith("#")) throw new Error(`Unsupported color format: "${input}"`);
+        if (!input.startsWith("#")) {
+            throw new Error(`Unsupported color format: "${input}"`);
+        }
         const parsed = parseHex(input);
         out[0] = parsed[0];
         out[1] = parsed[1];
