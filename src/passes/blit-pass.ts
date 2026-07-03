@@ -11,15 +11,13 @@ struct QuadInput {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> QuadInput {
-    var positions = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>( 3.0, -1.0),
-        vec2<f32>(-1.0,  3.0),
-    );
-    var p = positions[vi];
+    // Fullscreen triangle from vertex_index (arithmetic — NOT array indexing).
+    // Indexing a var array by vertex_index miscompiles to zero on some mobile GPU
+    // drivers (Adreno/Mali), collapsing the triangle to nothing → black output.
+    let t = vec2<f32>(f32((vi << 1u) & 2u), f32(vi & 2u));
     var out: QuadInput;
-    out.pos = vec4<f32>(p, 0.0, 1.0);
-    out.uv = vec2<f32>((p.x + 1.0) * 0.5, (1.0 - p.y) * 0.5);
+    out.pos = vec4<f32>(t * 2.0 - 1.0, 0.0, 1.0);
+    out.uv = vec2<f32>(t.x, 1.0 - t.y);
     return out;
 }
 `;

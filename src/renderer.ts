@@ -67,6 +67,16 @@ export class Renderer {
 
         const device = await adapter.requestDevice();
 
+        // Surface silent GPU failures — on mobile a lost device turns every
+        // queue.submit() into a no-op that never throws, so the rAF loop keeps
+        // running while nothing reaches the canvas and the console stays empty.
+        void device.lost.then((info) => {
+            console.warn(`[glaze] GPU device lost (${info.reason}): ${info.message}`);
+        });
+        device.addEventListener("uncapturederror", (event) => {
+            console.error("[glaze] uncaptured WebGPU error:", (event as GPUUncapturedErrorEvent).error);
+        });
+
         const context = canvas.getContext("webgpu");
         if (!context) {
             throw new Error("Failed to obtain WebGPU context from canvas.");
