@@ -128,6 +128,11 @@ export class Renderer {
     }
 
     renderFrame(graph: RenderGraph): void {
+        const canvas = this.context.canvas;
+        if (canvas.width === 0 || canvas.height === 0) {
+            return;
+        }
+
         this.ensureGraph(graph);
 
         const encoder = this.device.createCommandEncoder();
