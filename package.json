@@ -15,8 +15,8 @@
         "gl-matrix": "^3.4.4"
     },
     "devDependencies": {
-        "@types/node": "^26",
-        "@webgpu/types": "^0.1.70",
+        "@types/node": "^26.6.5",
+        "@webgpu/types": "^0.1.74",
         "typescript": "^6.0.3"
     },
     "exports": {
