@@ -64,12 +64,13 @@ struct ModelUniforms {
 };
 
 struct MaterialUniforms {
-    albedo:      vec4<f32>,
-    roughness:   f32,
-    metallic:    f32,
-    heightScale: f32,
-    _pad1:       f32,
-    emissive:    vec4<f32>,
+    albedo:            vec4<f32>,
+    roughness:         f32,
+    metallic:          f32,
+    heightScale:       f32,
+    normalScale:       f32,
+    emissive:          vec4<f32>,
+    occlusionStrength: f32,
 };
 
 @group(0) @binding(0) var<uniform> camera:     CameraUniforms;
@@ -79,8 +80,9 @@ struct MaterialUniforms {
 @group(2) @binding(2) var matSampler:          sampler;
 @group(2) @binding(3) var normalMap:           texture_2d<f32>;
 @group(2) @binding(4) var emissiveMap:         texture_2d<f32>;
-@group(2) @binding(5) var ormMap:              texture_2d<f32>;
+@group(2) @binding(5) var metallicRoughnessMap: texture_2d<f32>; // G=roughness, B=metallic
 @group(2) @binding(6) var heightMap:           texture_2d<f32>;
+@group(2) @binding(7) var occlusionMap:        texture_2d<f32>; // R=occlusion
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -170,7 +172,9 @@ ${
 ${
     f.normalMapping
         ? `
-    let normalSample  = textureSample(normalMap, matSampler, uv).rgb * 2.0 - 1.0;
+    // tangent-space normal, +Y toward the top of the image (glTF / OpenGL convention), XY scaled
+    let normalSample  = (textureSample(normalMap, matSampler, uv).rgb * 2.0 - 1.0)
+                      * vec3<f32>(mat.normalScale, mat.normalScale, 1.0);
     let shadingNormal = normalize(tbn * normalSample);
 `
         : `
@@ -180,10 +184,11 @@ ${
     let texAlbedo = textureSample(albedoMap, matSampler, uv).rgb;
     let albedo    = texAlbedo * mat.albedo.rgb;
 
-    let orm       = textureSample(ormMap, matSampler, uv);
-    let ao        = orm.r;
-    let roughness = clamp(orm.g * mat.roughness, 0.0, 1.0);
-    let metallic  = clamp(orm.b * mat.metallic,  0.0, 1.0);
+    let mr        = textureSample(metallicRoughnessMap, matSampler, uv);
+    let occlusion = textureSample(occlusionMap, matSampler, uv).r;
+    let ao        = 1.0 + mat.occlusionStrength * (occlusion - 1.0);
+    let roughness = clamp(mr.g * mat.roughness, 0.0, 1.0);
+    let metallic  = clamp(mr.b * mat.metallic,  0.0, 1.0);
 
     let texEmissive = textureSample(emissiveMap, matSampler, uv).rgb;
     let emissive    = texEmissive * mat.emissive.rgb;
@@ -712,6 +717,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 {binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
                 {binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
                 {binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
+                {binding: 7, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
             ],
         });
 

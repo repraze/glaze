@@ -11,8 +11,14 @@ export {
     createSphere,
     createTorus,
 } from "./geometry/shapes";
-export type {GLBPrimitive, GltfMaterialDescriptor, GltfTextureSource} from "./loaders/glb";
-export {createPBRMaterialFromGltf, loadGLBFromURL, parseGLB} from "./loaders/glb";
+export type {
+    GLBPrimitive,
+    GltfMaterialDescriptor,
+    GltfMaterialPlan,
+    GltfTextureSlot,
+    GltfTextureSource,
+} from "./loaders/glb";
+export {createPBRMaterialFromGltf, loadGLBFromURL, parseGLB, planGltfMaterial} from "./loaders/glb";
 export {loadOBJFromURL, parseOBJ} from "./loaders/obj";
 export {loadSTLFromURL, parseSTL} from "./loaders/stl";
 export type {PBRMaterialOptions, StandardMaterialOptions} from "./material/material";

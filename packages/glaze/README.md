@@ -180,7 +180,7 @@ normals): `createCube`, `createPlane`, `createQuad`, `createSphere`, `createIcos
 
 ```ts
 const gold = new PBRMaterial({color: colorRgb("#f0c040"), roughness: 0.1, metallic: 1, emissive: [0, 0, 0, 0]});
-gold.albedoMap = Texture.fromPixels(renderer.device, rgbaBytes, 256, 256); // also normalMap, ormMap, emissiveMap, heightMap
+gold.albedoMap = Texture.fromPixels(renderer.device, rgbaBytes, 256, 256); // also normalMap, emissiveMap, heightMap
 gold.roughness = 0.3;
 gold.markDirty(); // after changing scalars
 ```
@@ -188,10 +188,15 @@ gold.markDirty(); // after changing scalars
 `Texture.fromPixels(device, data, w, h)`, `Texture.fromURL(device, url)`, `Texture.fromBlob(device, blob)`.
 Meshes sharing a material share its GPU buffer and bind group. Emission is the rgb of `emissive` (alpha unused).
 
+Occlusion, roughness and metallic follow glTF: `ormMap` is a packed texture (r occlusion, g roughness, b metallic);
+`metallicRoughnessMap` (g, b) and `occlusionMap` (r) are separate textures that override its channels. Without an
+occlusion source, occlusion is 1. `normalScale` and `occlusionStrength` scale the normal and occlusion maps.
+
 ## Loaders
 
 `parseGLB(buffer)` / `loadGLBFromURL(url)` → `{geometry, material}[]`, with
-`createPBRMaterialFromGltf(device, material, resolveUri?)`; `parseOBJ(text)` / `loadOBJFromURL(url)`;
+`createPBRMaterialFromGltf(device, material, resolveUri?)` (the mapping itself, GPU-free, is
+`planGltfMaterial(material)`). Node transforms of the default scene are baked into the geometry. `parseOBJ(text)` / `loadOBJFromURL(url)`;
 `parseSTL(buffer)` (binary or text STL) / `loadSTLFromURL(url)`.
 
 ## Color

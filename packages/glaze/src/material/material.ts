@@ -18,19 +18,46 @@ export interface PBRMaterialOptions {
     roughness?: number;
     metallic?: number;
     emissive?: ColorRgba;
+    /** Scales the tangent-space XY of the normal map (glTF `normalTexture.scale`). Default 1. */
+    normalScale?: number;
+    /** How much the occlusion map darkens ambient light, 0..1 (glTF `occlusionTexture.strength`). Default 1. */
+    occlusionStrength?: number;
 }
 
 /**
- * Uniform struct layout (std140, 48 bytes):
+ * Uniform struct layout (std140, 64 bytes):
  *
- *   albedo:      vec4<f32>  offset  0  (16 bytes)
- *   roughness:   f32        offset 16  ( 4 bytes)
- *   metallic:    f32        offset 20  ( 4 bytes)
- *   heightScale: f32        offset 24  ( 4 bytes)
- *   _pad1:       f32        offset 28  ( 4 bytes)
- *   emissive:    vec4<f32>  offset 32  (16 bytes)
+ *   albedo:            vec4<f32>  offset  0  (16 bytes)
+ *   roughness:         f32        offset 16  ( 4 bytes)
+ *   metallic:          f32        offset 20  ( 4 bytes)
+ *   heightScale:       f32        offset 24  ( 4 bytes)
+ *   normalScale:       f32        offset 28  ( 4 bytes)
+ *   emissive:          vec4<f32>  offset 32  (16 bytes)
+ *   occlusionStrength: f32        offset 48  ( 4 bytes)
+ *   _pad:              vec3<f32>  offset 52  (12 bytes)
  */
-const MATERIAL_BUFFER_SIZE = 48;
+const MATERIAL_BUFFER_SIZE = 64;
+
+/**
+ * Pack the material's scalars into its uniform buffer layout (see above). GPU-free, exported for tests.
+ * @internal
+ */
+export function packMaterialUniforms(mat: PBRMaterial, out = new Float32Array(MATERIAL_BUFFER_SIZE / 4)): Float32Array {
+    out[0] = mat.color[0];
+    out[1] = mat.color[1];
+    out[2] = mat.color[2];
+    out[3] = 1.0;
+    out[4] = mat.roughness;
+    out[5] = mat.metallic;
+    out[6] = mat.heightScale;
+    out[7] = mat.normalScale;
+    out[8] = mat.emissive[0];
+    out[9] = mat.emissive[1];
+    out[10] = mat.emissive[2];
+    out[11] = mat.emissive[3];
+    out[12] = mat.occlusionStrength;
+    return out;
+}
 
 /**
  * Bind group bindings:
@@ -39,13 +66,15 @@ const MATERIAL_BUFFER_SIZE = 48;
  *   2: matSampler     sampler         (shared for all maps)
  *   3: normalMap      texture_2d<f32>
  *   4: emissiveMap    texture_2d<f32>
- *   5: ormMap         texture_2d<f32>  (R=occlusion, G=roughness, B=metallic)
+ *   5: metallicRoughness texture_2d<f32>  (G=roughness, B=metallic): metallicRoughnessMap ?? ormMap
  *   6: heightMap      texture_2d<f32>  (R=height 0=low 1=high)
+ *   7: occlusion      texture_2d<f32>  (R=occlusion):                occlusionMap ?? ormMap
  *
  * All maps fall back to a neutral 1×1 default when null:
  *   albedoMap    → white  (multiplier 1, uses mat albedo as-is)
  *   emissiveMap  → white  (multiplier 1, uses mat emissive as-is)
- *   ormMap       → white  (AO=1, roughness scale=1, metallic scale=1)
+ *   metallic-roughness → white (roughness scale=1, metallic scale=1)
+ *   occlusion    → white  (AO=1)
  *   normalMap    → flat   [128,128,255,255] → (0,0,1) in tangent space
  *   heightMap    → white  (heightScale=0 guard disables POM when no map set)
  */
@@ -60,21 +89,29 @@ export class PBRMaterial extends Material {
     albedoMap: Texture | null = null;
     normalMap: Texture | null = null;
     emissiveMap: Texture | null = null;
-    /** RGB packed: R=occlusion, G=roughness, B=metallic. */
+    /**
+     * Packed occlusion-roughness-metallic: R=occlusion, G=roughness, B=metallic (glTF's packed layout).
+     * Supplies both the occlusion and the metallic-roughness inputs unless a separate map overrides one.
+     */
     ormMap: Texture | null = null;
+    /**
+     * glTF metallic-roughness map: G=roughness, B=metallic (R is ignored). Overrides {@link ormMap}'s G and B.
+     * Multiplied by {@link roughness} and {@link metallic}.
+     */
+    metallicRoughnessMap: Texture | null = null;
+    /** Ambient occlusion in R (1 = unoccluded). Overrides {@link ormMap}'s R; scaled by {@link occlusionStrength}. */
+    occlusionMap: Texture | null = null;
+    /** 0 ignores the occlusion map, 1 applies it fully. */
+    occlusionStrength: number;
+    /** Scales the normal map's tangent-space XY; 1 = as authored, 0 = flat. */
+    normalScale: number;
     /** R=height (0=low, 1=high). Used for parallax occlusion mapping when heightScale > 0. */
     heightMap: Texture | null = null;
     heightScale: number = 0;
 
     private buffer: GPUBuffer | null = null;
     private bindGroup: GPUBindGroup | null = null;
-    private _boundMaps: [Texture | null, Texture | null, Texture | null, Texture | null, Texture | null] = [
-        null,
-        null,
-        null,
-        null,
-        null,
-    ];
+    private _boundMaps: (Texture | null)[] = [];
     private dirty = true;
 
     constructor({
@@ -82,12 +119,26 @@ export class PBRMaterial extends Material {
         roughness = 0.5,
         metallic = 0.0,
         emissive = [0, 0, 0, 0],
+        normalScale = 1,
+        occlusionStrength = 1,
     }: PBRMaterialOptions = {}) {
         super();
         this.color = color;
         this.roughness = roughness;
         this.metallic = metallic;
         this.emissive = emissive;
+        this.normalScale = normalScale;
+        this.occlusionStrength = occlusionStrength;
+    }
+
+    /** The texture sampled for roughness (G) and metallic (B): {@link metallicRoughnessMap}, else {@link ormMap}. */
+    get resolvedMetallicRoughnessMap(): Texture | null {
+        return this.metallicRoughnessMap ?? this.ormMap;
+    }
+
+    /** The texture sampled for occlusion (R): {@link occlusionMap}, else {@link ormMap}. */
+    get resolvedOcclusionMap(): Texture | null {
+        return this.occlusionMap ?? this.ormMap;
     }
 
     /** Call after changing any scalar property to force a buffer update on the next render. */
@@ -112,40 +163,17 @@ export class PBRMaterial extends Material {
         }
 
         if (this.dirty) {
-            const data = new Float32Array(MATERIAL_BUFFER_SIZE / 4);
-            data[0] = this.color[0];
-            data[1] = this.color[1];
-            data[2] = this.color[2];
-            data[3] = 1.0;
-            data[4] = this.roughness;
-            data[5] = this.metallic;
-            data[6] = this.heightScale;
-            // data[7] = padding
-            data[8] = this.emissive[0];
-            data[9] = this.emissive[1];
-            data[10] = this.emissive[2];
-            data[11] = this.emissive[3];
-            device.queue.writeBuffer(this.buffer, 0, data);
+            device.queue.writeBuffer(this.buffer, 0, packMaterialUniforms(this));
             this.dirty = false;
         }
 
         // Recreate bind group when any map changes.
-        const maps: [Texture | null, Texture | null, Texture | null, Texture | null, Texture | null] = [
-            this.albedoMap,
-            this.normalMap,
-            this.emissiveMap,
-            this.ormMap,
-            this.heightMap,
-        ];
-        if (
-            maps[0] !== this._boundMaps[0] ||
-            maps[1] !== this._boundMaps[1] ||
-            maps[2] !== this._boundMaps[2] ||
-            maps[3] !== this._boundMaps[3] ||
-            maps[4] !== this._boundMaps[4]
-        ) {
+        const metallicRoughness = this.resolvedMetallicRoughnessMap;
+        const occlusion = this.resolvedOcclusionMap;
+        const maps = [this.albedoMap, this.normalMap, this.emissiveMap, metallicRoughness, this.heightMap, occlusion];
+        if (this._boundMaps.length !== maps.length || maps.some((map, i) => map !== this._boundMaps[i])) {
             this.bindGroup = null;
-            this._boundMaps = [...maps];
+            this._boundMaps = maps;
         }
 
         if (!this.bindGroup) {
@@ -158,8 +186,9 @@ export class PBRMaterial extends Material {
                     {binding: 2, resource: sampler},
                     {binding: 3, resource: this.normalMap?.view ?? defaultNormalView},
                     {binding: 4, resource: this.emissiveMap?.view ?? defaultWhiteView},
-                    {binding: 5, resource: this.ormMap?.view ?? defaultWhiteView},
+                    {binding: 5, resource: metallicRoughness?.view ?? defaultWhiteView},
                     {binding: 6, resource: this.heightMap?.view ?? defaultWhiteView},
+                    {binding: 7, resource: occlusion?.view ?? defaultWhiteView},
                 ],
             });
         }
@@ -171,7 +200,7 @@ export class PBRMaterial extends Material {
         this.buffer?.destroy();
         this.buffer = null;
         this.bindGroup = null;
-        this._boundMaps = [null, null, null, null, null];
+        this._boundMaps = [];
     }
 }
 

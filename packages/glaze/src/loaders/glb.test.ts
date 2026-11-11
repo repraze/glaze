@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import {describe, test} from "node:test";
 
-import {parseGLB} from "./glb";
+import {linearToSrgb} from "../color";
+import {type GltfMaterialDescriptor, parseGLB, planGltfMaterial} from "./glb";
 
 // ─── Test binary builder ──────────────────────────────────────────────────────
 
@@ -319,5 +320,204 @@ describe("parseGLB — material", () => {
         const emb = src as {type: "embedded"; data: Uint8Array; mimeType: string};
         // data should not share an ArrayBuffer with glbBuf
         assert.notEqual(emb.data.buffer, glbBuf);
+    });
+});
+
+// ─── Material mapping ─────────────────────────────────────────────────────────
+
+/** A triangle whose material uses `material`, over three URI images a.png, b.png, c.png. */
+function materialGLB(material: object, textures: object[] = [{source: 0}, {source: 1}, {source: 2}]) {
+    return parseGLB(
+        makeTriangleGLB({
+            images: [{uri: "a.png"}, {uri: "b.png"}, {uri: "c.png"}],
+            textures,
+            materials: [material],
+            meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
+        }),
+    )[0]!.material!;
+}
+
+const uri = (source: unknown) => (source as {uri: string} | null)?.uri ?? null;
+
+describe("parseGLB — material scalars", () => {
+    test("reads normal scale, occlusion strength and emissive strength", () => {
+        const m = materialGLB({
+            normalTexture: {index: 0, scale: 0.5},
+            occlusionTexture: {index: 1, strength: 0.25},
+            extensions: {KHR_materials_emissive_strength: {emissiveStrength: 4}},
+        });
+        assert.equal(m.normalScale, 0.5);
+        assert.equal(m.occlusionStrength, 0.25);
+        assert.equal(m.emissiveStrength, 4);
+    });
+
+    test("defaults scale, strengths and texCoords per the spec", () => {
+        const m = materialGLB({});
+        assert.equal(m.normalScale, 1);
+        assert.equal(m.occlusionStrength, 1);
+        assert.equal(m.emissiveStrength, 1);
+        assert.deepEqual(m.texCoords, {baseColor: 0, normal: 0, emissive: 0, occlusion: 0, metallicRoughness: 0});
+    });
+
+    test("records each texture's texCoord", () => {
+        const m = materialGLB({occlusionTexture: {index: 0, texCoord: 1}});
+        assert.equal(m.texCoords!.occlusion, 1);
+    });
+
+    test("slots that reference the same image share one source object", () => {
+        // two texture entries, one image: still the same source
+        const m = materialGLB(
+            {pbrMetallicRoughness: {metallicRoughnessTexture: {index: 0}}, occlusionTexture: {index: 1}},
+            [{source: 2}, {source: 2}],
+        );
+        assert.ok(m.occlusionTexture);
+        assert.equal(m.occlusionTexture, m.metallicRoughnessTexture);
+    });
+});
+
+describe("planGltfMaterial", () => {
+    test("separate occlusion and metallic-roughness textures go to separate maps", () => {
+        const plan = planGltfMaterial(
+            materialGLB({pbrMetallicRoughness: {metallicRoughnessTexture: {index: 0}}, occlusionTexture: {index: 1}}),
+        );
+        assert.equal(uri(plan.metallicRoughnessMap), "a.png");
+        assert.equal(uri(plan.occlusionMap), "b.png");
+        assert.equal(plan.ormMap, null);
+    });
+
+    test("occlusion packed into the metallic-roughness image becomes one ORM map", () => {
+        const plan = planGltfMaterial(
+            materialGLB({pbrMetallicRoughness: {metallicRoughnessTexture: {index: 0}}, occlusionTexture: {index: 0}}),
+        );
+        assert.equal(uri(plan.ormMap), "a.png");
+        assert.equal(plan.metallicRoughnessMap, null);
+        assert.equal(plan.occlusionMap, null);
+    });
+
+    test("metallic-roughness without occlusion never feeds occlusion (its red channel is unspecified)", () => {
+        const plan = planGltfMaterial(materialGLB({pbrMetallicRoughness: {metallicRoughnessTexture: {index: 0}}}));
+        assert.equal(uri(plan.metallicRoughnessMap), "a.png");
+        assert.equal(plan.ormMap, null);
+        assert.equal(plan.occlusionMap, null);
+        assert.equal(plan.options.occlusionStrength, 1);
+    });
+
+    test("occlusion strength is carried through", () => {
+        const plan = planGltfMaterial(materialGLB({occlusionTexture: {index: 1, strength: 0.3}}));
+        assert.equal(uri(plan.occlusionMap), "b.png");
+        assert.equal(plan.options.occlusionStrength, 0.3);
+    });
+
+    test("a texture on another UV set is skipped, so occlusion falls back to 1", () => {
+        const plan = planGltfMaterial(
+            materialGLB({
+                pbrMetallicRoughness: {metallicRoughnessTexture: {index: 0}},
+                occlusionTexture: {index: 0, texCoord: 1, strength: 0.5},
+            }),
+        );
+        assert.equal(plan.occlusionMap, null);
+        assert.equal(plan.ormMap, null);
+        assert.equal(uri(plan.metallicRoughnessMap), "a.png");
+        assert.equal(plan.options.occlusionStrength, 1);
+        assert.deepEqual(plan.skipped, ["occlusion"]);
+    });
+
+    test("factors: metallic and roughness as-is, colors from linear to sRGB, emissive × strength", () => {
+        const plan = planGltfMaterial(
+            materialGLB({
+                pbrMetallicRoughness: {baseColorFactor: [0.2, 0.5, 1, 1], metallicFactor: 0.3, roughnessFactor: 0.7},
+                emissiveFactor: [0.1, 0, 0.25],
+                extensions: {KHR_materials_emissive_strength: {emissiveStrength: 2}},
+                normalTexture: {index: 2, scale: 0.4},
+            }),
+        );
+        const close = (a: ArrayLike<number>, b: number[]) =>
+            b.forEach((v, i) => assert.ok(Math.abs(a[i]! - v) < 1e-6, `${a[i]} ≈ ${v}`));
+        assert.equal(plan.options.metallic, 0.3);
+        assert.equal(plan.options.roughness, 0.7);
+        close(plan.options.color, [linearToSrgb(0.2), linearToSrgb(0.5), 1]);
+        close(plan.options.emissive, [linearToSrgb(0.2), 0, linearToSrgb(0.5), 0]);
+        assert.equal(plan.options.normalScale, 0.4);
+        assert.equal(uri(plan.normalMap), "c.png");
+    });
+
+    test("an empty material gets the spec defaults and no maps", () => {
+        const plan = planGltfMaterial(materialGLB({}));
+        assert.ok(Array.from(plan.options.color).every((c) => Math.abs(c - 1) < 1e-9));
+        assert.deepEqual(plan.options, {
+            color: plan.options.color,
+            metallic: 1,
+            roughness: 1,
+            emissive: [0, 0, 0, 0],
+            normalScale: 1,
+            occlusionStrength: 1,
+        });
+        for (const map of [
+            plan.albedoMap,
+            plan.normalMap,
+            plan.emissiveMap,
+            plan.ormMap,
+            plan.metallicRoughnessMap,
+            plan.occlusionMap,
+        ]) {
+            assert.equal(map, null);
+        }
+    });
+
+    test("accepts a hand-built descriptor without the optional fields", () => {
+        const descriptor: GltfMaterialDescriptor = {
+            name: "",
+            baseColorFactor: [1, 1, 1, 1],
+            metallicFactor: 0,
+            roughnessFactor: 0.5,
+            emissiveFactor: [0, 0, 0],
+            baseColorTexture: null,
+            normalTexture: null,
+            emissiveTexture: null,
+            occlusionTexture: null,
+            metallicRoughnessTexture: {type: "uri", uri: "mr.png"},
+        };
+        const plan = planGltfMaterial(descriptor);
+        assert.equal(uri(plan.metallicRoughnessMap), "mr.png");
+        assert.equal(plan.options.normalScale, 1);
+    });
+});
+
+// ─── Node transforms ──────────────────────────────────────────────────────────
+
+describe("parseGLB — nodes", () => {
+    const withNodes = (nodes: object[], scenes: object[] = [{nodes: [0]}]) =>
+        parseGLB(makeTriangleGLB({nodes, scenes, scene: 0}));
+
+    test("bakes a node's translation and scale into positions", () => {
+        const geo = withNodes([{mesh: 0, translation: [10, 0, 0], scale: [2, 2, 2]}])[0]!.geometry;
+        assert.deepEqual(Array.from(geo.positions), [12, 0, 0, 10, 2, 0, 10, 0, 2]);
+    });
+
+    test("composes parent and child transforms", () => {
+        const geo = withNodes([
+            {children: [1], translation: [0, 5, 0]},
+            {mesh: 0, translation: [1, 0, 0]},
+        ])[0]!.geometry;
+        assert.deepEqual(Array.from(geo.positions.slice(0, 3)), [2, 5, 0]);
+    });
+
+    test("one primitive per node that uses a mesh", () => {
+        const result = withNodes([{children: [1, 2]}, {mesh: 0}, {mesh: 0, translation: [0, 0, 3]}]);
+        assert.equal(result.length, 2);
+        assert.equal(result[1]!.geometry.positions[2], 3);
+        // the untransformed instance is unaffected by the transformed one
+        assert.equal(result[0]!.geometry.positions[2], 0);
+    });
+
+    test("a mirroring transform reverses the winding", () => {
+        const geo = withNodes([{mesh: 0, scale: [-1, 1, 1]}])[0]!.geometry;
+        assert.deepEqual(Array.from(geo.indices), [0, 2, 1]);
+        assert.equal(geo.positions[0], -1);
+    });
+
+    test("nodes outside the default scene are not drawn", () => {
+        const result = withNodes([{mesh: 0}, {mesh: 0}], [{nodes: [1]}]);
+        assert.equal(result.length, 1);
     });
 });

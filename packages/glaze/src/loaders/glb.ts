@@ -1,5 +1,8 @@
+import {mat3, mat4, type quat, vec3} from "gl-matrix";
+
+import {linearToSrgb} from "../color";
 import {computeTangents, Geometry} from "../geometry/geometry";
-import {PBRMaterial} from "../material/material";
+import {PBRMaterial, type PBRMaterialOptions} from "../material/material";
 import {Texture} from "../texture";
 
 // ─── GLTF types (minimal subset) ─────────────────────────────────────────────
@@ -37,6 +40,9 @@ interface GltfMaterialDef {
     occlusionTexture?: GltfTextureRef & {strength?: number};
     emissiveTexture?: GltfTextureRef;
     emissiveFactor?: [number, number, number];
+    extensions?: {
+        KHR_materials_emissive_strength?: {emissiveStrength?: number};
+    };
 }
 
 interface GltfTextureDef {
@@ -60,11 +66,23 @@ interface GltfMesh {
     primitives: GltfMeshPrimitive[];
 }
 
+interface GltfNode {
+    mesh?: number;
+    children?: number[];
+    matrix?: number[];
+    translation?: [number, number, number];
+    rotation?: [number, number, number, number];
+    scale?: [number, number, number];
+}
+
 interface GltfJson {
     accessors?: GltfAccessor[];
     bufferViews?: GltfBufferView[];
     buffers?: {byteLength: number}[];
     meshes?: GltfMesh[];
+    nodes?: GltfNode[];
+    scenes?: {nodes?: number[]}[];
+    scene?: number;
     materials?: GltfMaterialDef[];
     textures?: GltfTextureDef[];
     images?: GltfImageDef[];
@@ -100,25 +118,42 @@ const TYPE_ELEMENT_COUNT: Record<string, number> = {
 export type GltfTextureSource =
     {type: "uri"; uri: string} | {type: "embedded"; data: Uint8Array<ArrayBuffer>; mimeType: string};
 
+/** The texture slots of a glTF material. */
+export type GltfTextureSlot = "baseColor" | "normal" | "emissive" | "occlusion" | "metallicRoughness";
+
 /**
  * GPU-free material descriptor extracted from a GLTF primitive.
- * Scalar defaults follow the GLTF 2.0 spec.
+ * Scalar defaults follow the GLTF 2.0 spec. Factors are as stored in the file (linear). {@link parseGLB}
+ * always fills the optional fields; they are optional so hand-built descriptors stay valid.
+ *
+ * Texture sources are shared by identity: two slots that reference the same image (the common packed
+ * occlusion-roughness-metallic case) hold the same {@link GltfTextureSource} object.
  */
 export interface GltfMaterialDescriptor {
     name: string;
-    /** RGBA base color factor (default [1,1,1,1]). */
+    /** RGBA base color factor, linear (default [1,1,1,1]). */
     baseColorFactor: [number, number, number, number];
     /** Default 1.0 per GLTF spec. */
     metallicFactor: number;
     /** Default 1.0 per GLTF spec. */
     roughnessFactor: number;
+    /** Linear RGB (default [0,0,0]). */
     emissiveFactor: [number, number, number];
+    /** KHR_materials_emissive_strength multiplier (default 1). */
+    emissiveStrength?: number;
+    /** normalTexture.scale (default 1). */
+    normalScale?: number;
+    /** occlusionTexture.strength (default 1). */
+    occlusionStrength?: number;
     baseColorTexture: GltfTextureSource | null;
     normalTexture: GltfTextureSource | null;
     emissiveTexture: GltfTextureSource | null;
+    /** R=occlusion. May be the same image as {@link metallicRoughnessTexture} (packed ORM). */
     occlusionTexture: GltfTextureSource | null;
-    /** ORM texture: R=occlusion, G=roughness, B=metallic. */
+    /** G=roughness, B=metallic; R is unspecified by glTF (often occlusion, when packed). */
     metallicRoughnessTexture: GltfTextureSource | null;
+    /** TEXCOORD_n set each texture reads (default 0). Glaze geometry carries TEXCOORD_0 only. */
+    texCoords?: Record<GltfTextureSlot, number>;
 }
 
 /** One mesh primitive returned by {@link parseGLB}. */
@@ -179,12 +214,25 @@ function toUint32(data: ArrayLike<number>): Uint32Array {
     return Uint32Array.from(data);
 }
 
-function extractTextureSource(json: GltfJson, bin: ArrayBuffer, textureIndex: number): GltfTextureSource | null {
+function extractTextureSource(
+    json: GltfJson,
+    bin: ArrayBuffer,
+    textureIndex: number,
+    cache: Map<number, GltfTextureSource | null>,
+): GltfTextureSource | null {
     const texture = json.textures?.[textureIndex];
     if (!texture || texture.source === undefined) {
         return null;
     }
-    const image = json.images?.[texture.source];
+    // one source object per image, so slots sharing an image share the object (and the GPU texture)
+    if (!cache.has(texture.source)) {
+        cache.set(texture.source, extractImageSource(json, bin, texture.source));
+    }
+    return cache.get(texture.source)!;
+}
+
+function extractImageSource(json: GltfJson, bin: ArrayBuffer, imageIndex: number): GltfTextureSource | null {
+    const image = json.images?.[imageIndex];
     if (!image) {
         return null;
     }
@@ -209,11 +257,16 @@ function extractTextureSource(json: GltfJson, bin: ArrayBuffer, textureIndex: nu
     return null;
 }
 
-function extractMaterial(json: GltfJson, bin: ArrayBuffer, materialIndex: number): GltfMaterialDescriptor {
+function extractMaterial(
+    json: GltfJson,
+    bin: ArrayBuffer,
+    materialIndex: number,
+    cache: Map<number, GltfTextureSource | null>,
+): GltfMaterialDescriptor {
     const mat = json.materials?.[materialIndex];
     const pbr = mat?.pbrMetallicRoughness ?? {};
     const tex = (ref: GltfTextureRef | undefined) =>
-        ref !== undefined ? extractTextureSource(json, bin, ref.index) : null;
+        ref !== undefined ? extractTextureSource(json, bin, ref.index, cache) : null;
 
     return {
         name: mat?.name ?? "",
@@ -221,12 +274,118 @@ function extractMaterial(json: GltfJson, bin: ArrayBuffer, materialIndex: number
         metallicFactor: pbr.metallicFactor ?? 1.0,
         roughnessFactor: pbr.roughnessFactor ?? 1.0,
         emissiveFactor: mat?.emissiveFactor ?? [0, 0, 0],
+        emissiveStrength: mat?.extensions?.KHR_materials_emissive_strength?.emissiveStrength ?? 1.0,
+        normalScale: mat?.normalTexture?.scale ?? 1.0,
+        occlusionStrength: mat?.occlusionTexture?.strength ?? 1.0,
         baseColorTexture: tex(pbr.baseColorTexture),
         normalTexture: tex(mat?.normalTexture),
         emissiveTexture: tex(mat?.emissiveTexture),
         occlusionTexture: tex(mat?.occlusionTexture),
         metallicRoughnessTexture: tex(pbr.metallicRoughnessTexture),
+        texCoords: {
+            baseColor: pbr.baseColorTexture?.texCoord ?? 0,
+            normal: mat?.normalTexture?.texCoord ?? 0,
+            emissive: mat?.emissiveTexture?.texCoord ?? 0,
+            occlusion: mat?.occlusionTexture?.texCoord ?? 0,
+            metallicRoughness: pbr.metallicRoughnessTexture?.texCoord ?? 0,
+        },
     };
+}
+
+// ─── Node transforms ─────────────────────────────────────────────────────────
+
+function nodeMatrix(node: GltfNode): mat4 {
+    if (node.matrix) {
+        return mat4.clone(node.matrix as unknown as mat4);
+    }
+    return mat4.fromRotationTranslationScale(
+        mat4.create(),
+        (node.rotation ?? [0, 0, 0, 1]) as unknown as quat,
+        (node.translation ?? [0, 0, 0]) as unknown as vec3,
+        (node.scale ?? [1, 1, 1]) as unknown as vec3,
+    );
+}
+
+/** Every (mesh, world matrix) pair of the default scene; every mesh at identity when the file has no scene. */
+function meshInstances(json: GltfJson): {mesh: GltfMesh; matrix: mat4 | null}[] {
+    const nodes = json.nodes ?? [];
+    const roots = json.scenes?.[json.scene ?? 0]?.nodes;
+    if (!roots || nodes.length === 0) {
+        return (json.meshes ?? []).map((mesh) => ({mesh, matrix: null}));
+    }
+    const out: {mesh: GltfMesh; matrix: mat4 | null}[] = [];
+    const visit = (index: number, parent: mat4, depth: number) => {
+        const node = nodes[index];
+        if (!node || depth > 256) {
+            return;
+        }
+        const world = mat4.multiply(mat4.create(), parent, nodeMatrix(node));
+        const mesh = node.mesh !== undefined ? json.meshes?.[node.mesh] : undefined;
+        if (mesh) {
+            out.push({mesh, matrix: isIdentity(world) ? null : world});
+        }
+        for (const child of node.children ?? []) {
+            visit(child, world, depth + 1);
+        }
+    };
+    for (const root of roots) {
+        visit(root, mat4.create(), 0);
+    }
+    return out;
+}
+
+function isIdentity(m: mat4): boolean {
+    return mat4.exactEquals(m, mat4.create());
+}
+
+/**
+ * Bake a node's world matrix into vertex data (new arrays: accessor data can be shared between instances).
+ * A mirroring matrix flips the triangle winding and the tangent handedness.
+ */
+function bakeTransform(
+    matrix: mat4,
+    positions: Float32Array,
+    normals: Float32Array,
+    tangents: Float32Array | null,
+    indices: Uint32Array,
+): {positions: Float32Array; normals: Float32Array; tangents: Float32Array | null; indices: Uint32Array} {
+    const normalMatrix = mat3.normalFromMat4(mat3.create(), matrix) ?? mat3.fromMat4(mat3.create(), matrix);
+    const linear = mat3.fromMat4(mat3.create(), matrix);
+    const mirrored = mat3.determinant(linear) < 0;
+    const v = vec3.create();
+
+    const outPositions = new Float32Array(positions.length);
+    for (let i = 0; i < positions.length; i += 3) {
+        vec3.set(v, positions[i]!, positions[i + 1]!, positions[i + 2]!);
+        vec3.transformMat4(v, v, matrix);
+        outPositions.set(v as Float32Array, i);
+    }
+    const outNormals = new Float32Array(normals.length);
+    for (let i = 0; i < normals.length; i += 3) {
+        vec3.set(v, normals[i]!, normals[i + 1]!, normals[i + 2]!);
+        vec3.normalize(v, vec3.transformMat3(v, v, normalMatrix));
+        outNormals.set(v as Float32Array, i);
+    }
+    let outTangents: Float32Array | null = null;
+    if (tangents) {
+        outTangents = new Float32Array(tangents.length);
+        for (let i = 0; i < tangents.length; i += 4) {
+            vec3.set(v, tangents[i]!, tangents[i + 1]!, tangents[i + 2]!);
+            vec3.normalize(v, vec3.transformMat3(v, v, linear));
+            outTangents.set(v as Float32Array, i);
+            outTangents[i + 3] = mirrored ? -tangents[i + 3]! : tangents[i + 3]!;
+        }
+    }
+    let outIndices = indices;
+    if (mirrored) {
+        outIndices = new Uint32Array(indices.length);
+        for (let i = 0; i + 2 < indices.length; i += 3) {
+            outIndices[i] = indices[i]!;
+            outIndices[i + 1] = indices[i + 2]!;
+            outIndices[i + 2] = indices[i + 1]!;
+        }
+    }
+    return {positions: outPositions, normals: outNormals, tangents: outTangents, indices: outIndices};
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -235,6 +394,10 @@ function extractMaterial(json: GltfJson, bin: ArrayBuffer, materialIndex: number
  * Parse a GLB (Binary GLTF 2.0) buffer and return one {@link GLBPrimitive} per
  * mesh primitive, each carrying a {@link Geometry} and an optional
  * {@link GltfMaterialDescriptor}.
+ *
+ * Primitives come from the default scene's node tree with each node's world transform baked into the
+ * vertex data (a file without scenes or nodes yields every mesh untransformed). A mesh used by several
+ * nodes appears once per node.
  *
  * Tangents are read from the TANGENT attribute when present, otherwise computed.
  * The material descriptor is `null` when the primitive has no material index.
@@ -273,8 +436,9 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
     }
 
     const primitives: GLBPrimitive[] = [];
+    const imageCache = new Map<number, GltfTextureSource | null>();
 
-    for (const mesh of json.meshes ?? []) {
+    for (const {mesh, matrix} of meshInstances(json)) {
         for (const prim of mesh.primitives) {
             // Only support TRIANGLES (mode 4, which is also the default)
             if (prim.mode !== undefined && prim.mode !== 4) {
@@ -290,9 +454,9 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
                 continue;
             }
 
-            const positions = toFloat32(readAccessor(json, bin, posIdx));
+            let positions = toFloat32(readAccessor(json, bin, posIdx));
 
-            const normals =
+            let normals =
                 normIdx !== undefined
                     ? toFloat32(readAccessor(json, bin, normIdx))
                     : new Float32Array((positions.length / 3) * 3); // zeros
@@ -301,6 +465,8 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
                 uvIdx !== undefined
                     ? toFloat32(readAccessor(json, bin, uvIdx))
                     : new Float32Array((positions.length / 3) * 2);
+
+            let tangents = tanIdx !== undefined ? toFloat32(readAccessor(json, bin, tanIdx)) : null;
 
             let indices: Uint32Array;
             if (prim.indices !== undefined) {
@@ -314,16 +480,20 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
                 }
             }
 
-            const vertexCount = positions.length / 3;
-            let tangents: Float32Array;
-            if (tanIdx !== undefined) {
-                tangents = toFloat32(readAccessor(json, bin, tanIdx));
-            } else {
-                tangents = computeTangents(positions, normals, uvs, indices, vertexCount);
+            if (matrix) {
+                ({positions, normals, tangents, indices} = bakeTransform(
+                    matrix,
+                    positions,
+                    normals,
+                    tangents,
+                    indices,
+                ));
             }
 
+            tangents ??= computeTangents(positions, normals, uvs, indices, positions.length / 3);
+
             const geometry = new Geometry({positions, normals, uvs, indices, tangents});
-            const material = prim.material !== undefined ? extractMaterial(json, bin, prim.material) : null;
+            const material = prim.material !== undefined ? extractMaterial(json, bin, prim.material, imageCache) : null;
 
             primitives.push({geometry, material});
         }
@@ -345,7 +515,88 @@ export async function loadGLBFromURL(url: string): Promise<GLBPrimitive[]> {
 }
 
 /**
- * Build a {@link PBRMaterial} from a {@link GltfMaterialDescriptor}.
+ * How a {@link GltfMaterialDescriptor} maps onto a {@link PBRMaterial}: scalar options and which texture source
+ * goes in which map. GPU-free; {@link createPBRMaterialFromGltf} loads the textures and applies it.
+ */
+export interface GltfMaterialPlan {
+    options: Required<PBRMaterialOptions>;
+    albedoMap: GltfTextureSource | null;
+    normalMap: GltfTextureSource | null;
+    emissiveMap: GltfTextureSource | null;
+    /** Set when occlusion and metallic-roughness share one image (R=occlusion, G=roughness, B=metallic). */
+    ormMap: GltfTextureSource | null;
+    /** G=roughness, B=metallic, when not packed with occlusion. */
+    metallicRoughnessMap: GltfTextureSource | null;
+    /** R=occlusion, when not packed. */
+    occlusionMap: GltfTextureSource | null;
+    /** Slots dropped because they read a UV set other than TEXCOORD_0. */
+    skipped: GltfTextureSlot[];
+}
+
+function sameImage(a: GltfTextureSource, b: GltfTextureSource): boolean {
+    if (a === b) {
+        return true;
+    }
+    if (a.type === "uri" && b.type === "uri") {
+        return a.uri === b.uri;
+    }
+    return a.type === "embedded" && b.type === "embedded" && a.data === b.data;
+}
+
+/**
+ * Map a glTF material onto PBRMaterial inputs, per the glTF 2.0 metallic-roughness model:
+ *
+ * - base color = baseColorFactor × baseColorTexture; emissive = emissiveFactor × strength × emissiveTexture;
+ *   factors are converted from glTF's linear values to sRGB, the space Glaze's colors and textures live in.
+ * - roughness = roughnessFactor × texture G, metallic = metallicFactor × texture B (R is never read as occlusion).
+ * - occlusion comes from occlusionTexture.R scaled by its strength, and is 1 without one. When occlusion and
+ *   metallic-roughness are the same image, it becomes one packed {@link PBRMaterial.ormMap}.
+ * - normal map XY is scaled by normalTexture.scale.
+ *
+ * Glaze geometry has a single UV set, so a texture reading another TEXCOORD set is left out (and listed in
+ * `skipped`) rather than sampled with the wrong coordinates.
+ */
+export function planGltfMaterial(descriptor: GltfMaterialDescriptor): GltfMaterialPlan {
+    const skipped: GltfTextureSlot[] = [];
+    const usable = (slot: GltfTextureSlot, source: GltfTextureSource | null): GltfTextureSource | null => {
+        if (!source) {
+            return null;
+        }
+        if ((descriptor.texCoords?.[slot] ?? 0) !== 0) {
+            skipped.push(slot);
+            return null;
+        }
+        return source;
+    };
+
+    const occlusion = usable("occlusion", descriptor.occlusionTexture);
+    const metallicRoughness = usable("metallicRoughness", descriptor.metallicRoughnessTexture);
+    const packed = occlusion !== null && metallicRoughness !== null && sameImage(occlusion, metallicRoughness);
+
+    const [r, g, b] = descriptor.baseColorFactor;
+    const strength = descriptor.emissiveStrength ?? 1;
+    const [er, eg, eb] = descriptor.emissiveFactor;
+    return {
+        options: {
+            color: [linearToSrgb(r), linearToSrgb(g), linearToSrgb(b)],
+            metallic: descriptor.metallicFactor,
+            roughness: descriptor.roughnessFactor,
+            emissive: [linearToSrgb(er * strength), linearToSrgb(eg * strength), linearToSrgb(eb * strength), 0],
+            normalScale: descriptor.normalScale ?? 1,
+            occlusionStrength: occlusion ? (descriptor.occlusionStrength ?? 1) : 1,
+        },
+        albedoMap: usable("baseColor", descriptor.baseColorTexture),
+        normalMap: usable("normal", descriptor.normalTexture),
+        emissiveMap: usable("emissive", descriptor.emissiveTexture),
+        ormMap: packed ? occlusion : null,
+        metallicRoughnessMap: packed ? null : metallicRoughness,
+        occlusionMap: packed ? null : occlusion,
+        skipped,
+    };
+}
+
+/**
+ * Build a {@link PBRMaterial} from a {@link GltfMaterialDescriptor} (see {@link planGltfMaterial} for the mapping).
  *
  * @param device      WebGPU device used to create textures.
  * @param descriptor  Material descriptor from {@link parseGLB}.
@@ -358,43 +609,35 @@ export async function createPBRMaterialFromGltf(
     descriptor: GltfMaterialDescriptor,
     resolveUri: (uri: string) => string = (uri) => uri,
 ): Promise<PBRMaterial> {
-    const [r, g, b] = descriptor.baseColorFactor;
-    const mat = new PBRMaterial({
-        color: [r!, g!, b!],
-        metallic: descriptor.metallicFactor,
-        roughness: descriptor.roughnessFactor,
-        emissive: [descriptor.emissiveFactor[0], descriptor.emissiveFactor[1], descriptor.emissiveFactor[2], 0],
-    });
+    const plan = planGltfMaterial(descriptor);
+    const mat = new PBRMaterial(plan.options);
 
-    async function loadTex(source: GltfTextureSource | null): Promise<Texture | null> {
+    // one GPU texture per image, however many slots use it
+    const loaded = new Map<GltfTextureSource, Promise<Texture>>();
+    function loadTex(source: GltfTextureSource | null): Promise<Texture | null> {
         if (!source) {
-            return null;
+            return Promise.resolve(null);
         }
-        if (source.type === "uri") {
-            return Texture.fromURL(device, resolveUri(source.uri));
+        let texture = loaded.get(source);
+        if (!texture) {
+            texture =
+                source.type === "uri"
+                    ? Texture.fromURL(device, resolveUri(source.uri))
+                    : Texture.fromBlob(device, new Blob([source.data], {type: source.mimeType}));
+            loaded.set(source, texture);
         }
-        return Texture.fromBlob(device, new Blob([source.data], {type: source.mimeType}));
+        return texture;
     }
 
-    const [albedo, normal, emissive, orm] = await Promise.all([
-        loadTex(descriptor.baseColorTexture),
-        loadTex(descriptor.normalTexture),
-        loadTex(descriptor.emissiveTexture),
-        loadTex(descriptor.metallicRoughnessTexture),
-    ]);
-
-    if (albedo) {
-        mat.albedoMap = albedo;
-    }
-    if (normal) {
-        mat.normalMap = normal;
-    }
-    if (emissive) {
-        mat.emissiveMap = emissive;
-    }
-    if (orm) {
-        mat.ormMap = orm;
-    }
+    [mat.albedoMap, mat.normalMap, mat.emissiveMap, mat.ormMap, mat.metallicRoughnessMap, mat.occlusionMap] =
+        await Promise.all([
+            loadTex(plan.albedoMap),
+            loadTex(plan.normalMap),
+            loadTex(plan.emissiveMap),
+            loadTex(plan.ormMap),
+            loadTex(plan.metallicRoughnessMap),
+            loadTex(plan.occlusionMap),
+        ]);
 
     return mat;
 }
