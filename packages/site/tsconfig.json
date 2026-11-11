@@ -2,7 +2,7 @@
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
         "lib": ["ES2023", "DOM", "DOM.Iterable"],
-        "types": ["vite/client", "node", "@webgpu/types"],
+        "types": ["vite/client", "node", "@webgpu/types", "@repraze/kernelkit/vite/client"],
         "jsx": "react-jsx",
         "paths": {
             "@/*": ["./src/*"],
@@ -10,5 +10,5 @@
             "@repraze/glaze/*": ["../glaze/src/*"]
         }
     },
-    "include": ["src", "plugins", "vite.config.ts"]
+    "include": ["src", "vite.config.ts"]
 }

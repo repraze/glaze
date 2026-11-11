@@ -29,15 +29,15 @@ import {
     SectionTitle,
 } from "@repraze/kernelkit/components/section";
 import {SiteContainer} from "@repraze/kernelkit/components/site-layout";
+import {GithubIcon, usePageTitle} from "@repraze/kernelkit/site";
 import {Link} from "@tanstack/react-router";
 import {ArrowRightIcon, CpuIcon, PackageIcon, PaletteIcon, TerminalIcon, TriangleIcon} from "lucide-react";
 
-import {GithubIcon} from "@/components/github-icon";
 import {GlazeShowcase} from "@/components/hero-showcase";
 import {PipelineDiagram} from "@/components/pipeline-diagram";
 import {Code} from "@/lib/doc-kit";
-import {DOCS, DOCS_BY_SLUG} from "@/lib/docs-index";
-import {GITHUB_URL, usePageTitle} from "@/lib/site";
+import {DOCS_INDEX} from "@/lib/docs-index";
+import {GITHUB_URL, SITE_NAME} from "@/lib/site";
 
 const PIPELINE = ["renderer", "render-graph", "shader-pass", "deferred-scene-pass", "g-buffer", "uniforms"];
 const SCENE = ["lights", "materials", "geometry", "camera", "textures", "loaders"];
@@ -51,8 +51,8 @@ graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas
 renderer.startAnimation(graph);`;
 
 export function HomePage() {
-    usePageTitle();
-    const demoCount = DOCS.filter((d) => d.category !== "Foundations").length;
+    usePageTitle(undefined, SITE_NAME);
+    const demoCount = DOCS_INDEX.docs.filter((d) => d.category !== "Foundations").length;
     return (
         <main className="flex flex-1 flex-col">
             <Hero layout="split">
@@ -229,7 +229,7 @@ function DocCards({slugs}: {slugs: string[]}) {
     return (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {slugs.flatMap((slug) => {
-                const doc = DOCS_BY_SLUG.get(slug);
+                const doc = DOCS_INDEX.bySlug.get(slug);
                 return doc
                     ? [
                           <LinkCard key={slug} render={<Link to="/docs/$slug" params={{slug}} />} className="h-full">

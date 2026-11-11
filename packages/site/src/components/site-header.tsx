@@ -1,91 +1,66 @@
-import {Button} from "@repraze/kernelkit/components/button";
-import {Separator} from "@repraze/kernelkit/components/separator";
-import {
-    SiteHeader as SiteHeaderRoot,
-    SiteHeaderActions,
-    SiteHeaderBrand,
-    SiteHeaderContent,
-    SiteHeaderMenu,
-    SiteNav,
-    SiteNavLink,
-} from "@repraze/kernelkit/components/site-header";
-import {ThemeMenu} from "@repraze/kernelkit/components/theme-menu";
-import {Link, useRouterState} from "@tanstack/react-router";
-import {useEffect, useState} from "react";
+import {DocsNav, DocsSearch} from "@repraze/kernelkit/docs";
+import {BrandLogo, SuiteHeader} from "@repraze/kernelkit/site";
+import {Link, useNavigate, useRouterState} from "@tanstack/react-router";
+import {BookOpenIcon, BoxIcon, ImageIcon, LayersIcon} from "lucide-react";
 
-import {DocsNav} from "@/components/docs-nav";
-import {GithubIcon} from "@/components/github-icon";
-import {Logo} from "@/components/logo";
-import {SiteSearch} from "@/components/site-search";
 import type {Category} from "@/lib/doc-kit";
-import {DOCS_BY_SLUG} from "@/lib/docs-index";
-import {GITHUB_URL, SITE_NAME} from "@/lib/site";
+import {DOCS_INDEX} from "@/lib/docs-index";
+import {GITHUB_URL, MARK_SVG, SITE_NAME} from "@/lib/site";
 
-type Section = "docs" | "pipeline" | "scene" | "assets";
-
-const NAV: {section: Section; slug: string; label: string}[] = [
-    {section: "docs", slug: "introduction", label: "Docs"},
-    {section: "pipeline", slug: "pass-chain", label: "Pipeline"},
-    {section: "scene", slug: "scene-graph", label: "Scene"},
-    {section: "assets", slug: "textures", label: "Assets"},
-];
-
-const SECTION_OF_CATEGORY: Record<Category, Section> = {
-    Foundations: "docs",
-    Pipeline: "pipeline",
-    Scene: "scene",
-    Assets: "assets",
+/** One icon per docs category, so a search result's kind reads at a glance. */
+const CATEGORY_ICONS: Record<Category, typeof BookOpenIcon> = {
+    Foundations: BookOpenIcon,
+    Pipeline: LayersIcon,
+    Scene: BoxIcon,
+    Assets: ImageIcon,
 };
 
-/** Which header entry a docs page belongs to: one per docs category. */
-function sectionOf(pathname: string): Section | undefined {
-    const slug = /\/docs\/([^/]+)/.exec(pathname)?.[1];
-    const doc = slug ? DOCS_BY_SLUG.get(slug) : undefined;
-    return doc ? SECTION_OF_CATEGORY[doc.category] : undefined;
+/** One header entry per docs category, each opening its first page. */
+const NAV: {category: Category; slug: string; label: string}[] = [
+    {category: "Foundations", slug: "introduction", label: "Docs"},
+    {category: "Pipeline", slug: "pass-chain", label: "Pipeline"},
+    {category: "Scene", slug: "scene-graph", label: "Scene"},
+    {category: "Assets", slug: "textures", label: "Assets"},
+];
+
+export const docLink = (slug: string) => <Link to="/docs/$slug" params={{slug}} />;
+
+export const Logo = () => <BrandLogo svg={MARK_SVG} first="Glaze" second="Engine" />;
+
+/** The docs sidebar (desktop SiteSidebar and the phone menu). */
+export function SiteDocsNav() {
+    const pathname = useRouterState({select: (s) => s.location.pathname});
+    return <DocsNav index={DOCS_INDEX} current={DOCS_INDEX.slugOf(pathname)} linkFor={docLink} />;
 }
 
-/** The suite's site header (kernelkit SiteHeader): brand, sections, search, theme, repository. */
+/** The suite's header with GlazeEngine's brand, one entry per docs category and the docs search. */
 export function SiteHeader() {
     const pathname = useRouterState({select: (s) => s.location.pathname});
-    const section = sectionOf(pathname);
-    const [menuOpen, setMenuOpen] = useState(false);
-    useEffect(() => setMenuOpen(false), [pathname]);
-
-    const navLinks = NAV.map((item) => (
-        <SiteNavLink
-            key={item.section}
-            aria-current={item.section === section ? "page" : undefined}
-            render={<Link to="/docs/$slug" params={{slug: item.slug}} />}
-        >
-            {item.label}
-        </SiteNavLink>
-    ));
-
+    const navigate = useNavigate();
+    const slug = DOCS_INDEX.slugOf(pathname);
+    const category = slug ? DOCS_INDEX.bySlug.get(slug)?.category : undefined;
     return (
-        <SiteHeaderRoot>
-            <SiteHeaderContent>
-                <SiteHeaderMenu title={<Logo />} open={menuOpen} onOpenChange={setMenuOpen}>
-                    <nav aria-label="Main" className="flex flex-col gap-1 px-2 pt-2">
-                        {navLinks}
-                    </nav>
-                    <DocsNav />
-                </SiteHeaderMenu>
-                <SiteHeaderBrand aria-label={`${SITE_NAME} home`} render={<Link to="/" />}>
-                    <Logo />
-                </SiteHeaderBrand>
-                <SiteNav>{navLinks}</SiteNav>
-                <SiteHeaderActions>
-                    <SiteSearch />
-                    <Separator
-                        orientation="vertical"
-                        className="mx-1 hidden data-vertical:h-5 data-vertical:self-center sm:block"
-                    />
-                    <ThemeMenu />
-                    <Button variant="ghost" size="icon" render={<a href={GITHUB_URL} aria-label="GitHub" />}>
-                        <GithubIcon className="size-4" />
-                    </Button>
-                </SiteHeaderActions>
-            </SiteHeaderContent>
-        </SiteHeaderRoot>
+        <SuiteHeader
+            brand={<Logo />}
+            brandLabel={`${SITE_NAME} home`}
+            home={<Link to="/" />}
+            nav={NAV.map((item) => ({
+                label: item.label,
+                render: docLink(item.slug),
+                current: item.category === category,
+            }))}
+            search={
+                <DocsSearch
+                    index={DOCS_INDEX}
+                    icons={CATEGORY_ICONS}
+                    suggested={["getting-started", "pass-chain", "deferred-scene-pass", "materials", "lights"]}
+                    placeholder="Search the pipeline, scene and guides…"
+                    onSelect={(slug) => void navigate({to: "/docs/$slug", params: {slug}})}
+                />
+            }
+            repository={{href: GITHUB_URL}}
+            menu={<SiteDocsNav />}
+            locationKey={pathname}
+        />
     );
 }

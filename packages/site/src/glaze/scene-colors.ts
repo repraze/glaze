@@ -1,5 +1,5 @@
 import {type ColorRgb, colorRgb, type PBRMaterial, type Scene, setColorRgb} from "@repraze/glaze";
-import {type ThemeContextValue, useTheme} from "@repraze/kernelkit/provider";
+import {type ThemeContextValue, useResolvedTheme} from "@repraze/kernelkit/provider";
 import {type AccentName, allModes, createPalette} from "@repraze/termicolor";
 
 import {useLatest} from "./glaze-canvas";
@@ -61,10 +61,13 @@ export function sceneColors(theme: Pick<ThemeContextValue, "resolvedMode" | "con
     return colors;
 }
 
-/** The current scene colors in a ref, for frame callbacks: re-read every frame, so theme changes apply live. */
+/**
+ * The current scene colors in a ref, for frame callbacks: re-read every frame, so theme changes apply live.
+ * Follows the nearest ThemeScope (the review matrix), else the page's theme.
+ */
 export function useSceneColors() {
-    const theme = useTheme();
-    return useLatest(sceneColors(theme));
+    const {mode, contrast, accent} = useResolvedTheme();
+    return useLatest(sceneColors({resolvedMode: mode, contrast, accent}));
 }
 
 /** Background and ambient from the palette. Call it every frame: it allocates nothing. */
