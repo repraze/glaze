@@ -1,6 +1,6 @@
 {
     "name": "@repraze/glaze",
-    "version": "0.1.0-alpha.0",
+    "version": "0.1.0-alpha.1",
     "description": "WebGPU-only rendering engine: a renderer, composable render passes, a deferred PBR scene pass, materials and loaders.",
     "keywords": [
         "webgpu",
