@@ -1,0 +1,38 @@
+{
+    "name": "@glaze/root",
+    "private": true,
+    "version": "0.1.0",
+    "description": "GlazeEngine - a WebGPU-only rendering engine: composable render passes, deferred PBR scene pass, loaders",
+    "type": "module",
+    "workspaces": [
+        "packages/*"
+    ],
+    "scripts": {
+        "dev": "npm run dev -w @glaze/site",
+        "build": "npm run build -w @repraze/glaze && npm run build -w @glaze/site",
+        "test": "npm run test -w @repraze/glaze",
+        "typecheck": "npm run typecheck --workspaces --if-present",
+        "lint": "eslint .",
+        "lint:fix": "eslint . --fix",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "check:docs": "node scripts/check-docs.mjs",
+        "check:states": "node scripts/check-states.mjs",
+        "shot": "node scripts/shot.mjs"
+    },
+    "author": "Thomas Dubosc (https://repraze.com)",
+    "license": "MIT",
+    "devDependencies": {
+        "@types/node": "^26.6.6",
+        "eslint": "^10.14.0",
+        "eslint-config-prettier": "^10.1.8",
+        "eslint-plugin-simple-import-sort": "^14.0.0",
+        "eslint-plugin-unused-imports": "^4.4.1",
+        "jiti": "^2.7.0",
+        "playwright": "^1.65.0",
+        "prettier": "^3.9.10",
+        "tsx": "^4.23.15",
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.72.1"
+    }
+}

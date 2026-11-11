@@ -1,0 +1,36 @@
+{
+    "name": "@glaze/site",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build && tsc --noEmit -p .",
+        "preview": "vite preview",
+        "typecheck": "tsc --noEmit -p ."
+    },
+    "devDependencies": {
+        "@tailwindcss/vite": "^4.3.4",
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "@vitejs/plugin-react": "^6.2.1",
+        "@webgpu/types": "^0.1.74",
+        "tailwindcss": "^4.3.4",
+        "vite": "^8.3.6"
+    },
+    "dependencies": {
+        "@fontsource-variable/geist": "^5.3.0",
+        "@fontsource-variable/jetbrains-mono": "^5.3.0",
+        "@repraze/glaze": "*",
+        "@repraze/kernelkit": "^0.1.0-alpha.2",
+        "@repraze/termicolor": "^0.1.0-alpha.1",
+        "@tanstack/react-router": "^1.170.46",
+        "cmdk": "^1.1.1",
+        "embla-carousel-react": "^8.6.0",
+        "gl-matrix": "^3.4.4",
+        "lucide-react": "^1.69.0",
+        "react": "^19.3.1",
+        "react-dom": "^19.3.1",
+        "shiki": "^4.6.0"
+    }
+}

@@ -1,38 +1,169 @@
 {
     "name": "@repraze/glaze",
-    "version": "0.1.0",
-    "description": "Performant WebGPU rendering engine with class-based bindings and composable render passes",
-    "type": "module",
+    "version": "0.1.0-alpha.0",
+    "description": "WebGPU-only rendering engine: a renderer, composable render passes, a deferred PBR scene pass, materials and loaders.",
+    "keywords": [
+        "webgpu",
+        "wgsl",
+        "rendering",
+        "3d",
+        "pbr",
+        "deferred-shading",
+        "render-graph",
+        "gpu"
+    ],
+    "homepage": "https://repraze.github.io/glaze/",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/repraze/glaze.git",
+        "directory": "packages/glaze"
+    },
+    "bugs": "https://github.com/repraze/glaze/issues",
     "author": "Thomas Dubosc (https://repraze.com)",
     "license": "MIT",
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        ".": {
+            "@repraze/source": "./src/index.ts",
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./renderer": {
+            "@repraze/source": "./src/renderer.ts",
+            "types": "./dist/renderer.d.ts",
+            "default": "./dist/renderer.js"
+        },
+        "./pass": {
+            "@repraze/source": "./src/pass.ts",
+            "types": "./dist/pass.d.ts",
+            "default": "./dist/pass.js"
+        },
+        "./render-graph": {
+            "@repraze/source": "./src/render-graph.ts",
+            "types": "./dist/render-graph.d.ts",
+            "default": "./dist/render-graph.js"
+        },
+        "./uniform": {
+            "@repraze/source": "./src/uniform.ts",
+            "types": "./dist/uniform.d.ts",
+            "default": "./dist/uniform.js"
+        },
+        "./texture": {
+            "@repraze/source": "./src/texture.ts",
+            "types": "./dist/texture.d.ts",
+            "default": "./dist/texture.js"
+        },
+        "./color": {
+            "@repraze/source": "./src/color.ts",
+            "types": "./dist/color.d.ts",
+            "default": "./dist/color.js"
+        },
+        "./passes/shader-pass": {
+            "@repraze/source": "./src/passes/shader-pass.ts",
+            "types": "./dist/passes/shader-pass.d.ts",
+            "default": "./dist/passes/shader-pass.js"
+        },
+        "./passes/deferred-scene-pass": {
+            "@repraze/source": "./src/passes/deferred-scene-pass.ts",
+            "types": "./dist/passes/deferred-scene-pass.d.ts",
+            "default": "./dist/passes/deferred-scene-pass.js"
+        },
+        "./passes/effect-pass": {
+            "@repraze/source": "./src/passes/effect-pass.ts",
+            "types": "./dist/passes/effect-pass.d.ts",
+            "default": "./dist/passes/effect-pass.js"
+        },
+        "./passes/blit-pass": {
+            "@repraze/source": "./src/passes/blit-pass.ts",
+            "types": "./dist/passes/blit-pass.d.ts",
+            "default": "./dist/passes/blit-pass.js"
+        },
+        "./passes/split-view-pass": {
+            "@repraze/source": "./src/passes/split-view-pass.ts",
+            "types": "./dist/passes/split-view-pass.d.ts",
+            "default": "./dist/passes/split-view-pass.js"
+        },
+        "./scene": {
+            "@repraze/source": "./src/scene/scene.ts",
+            "types": "./dist/scene/scene.d.ts",
+            "default": "./dist/scene/scene.js"
+        },
+        "./scene/entity": {
+            "@repraze/source": "./src/scene/entity.ts",
+            "types": "./dist/scene/entity.d.ts",
+            "default": "./dist/scene/entity.js"
+        },
+        "./scene/mesh": {
+            "@repraze/source": "./src/scene/mesh.ts",
+            "types": "./dist/scene/mesh.d.ts",
+            "default": "./dist/scene/mesh.js"
+        },
+        "./scene/light": {
+            "@repraze/source": "./src/scene/light.ts",
+            "types": "./dist/scene/light.d.ts",
+            "default": "./dist/scene/light.js"
+        },
+        "./scene/camera": {
+            "@repraze/source": "./src/scene/camera.ts",
+            "types": "./dist/scene/camera.d.ts",
+            "default": "./dist/scene/camera.js"
+        },
+        "./geometry": {
+            "@repraze/source": "./src/geometry/geometry.ts",
+            "types": "./dist/geometry/geometry.d.ts",
+            "default": "./dist/geometry/geometry.js"
+        },
+        "./geometry/shapes": {
+            "@repraze/source": "./src/geometry/shapes.ts",
+            "types": "./dist/geometry/shapes.d.ts",
+            "default": "./dist/geometry/shapes.js"
+        },
+        "./material": {
+            "@repraze/source": "./src/material/material.ts",
+            "types": "./dist/material/material.d.ts",
+            "default": "./dist/material/material.js"
+        },
+        "./loaders/glb": {
+            "@repraze/source": "./src/loaders/glb.ts",
+            "types": "./dist/loaders/glb.d.ts",
+            "default": "./dist/loaders/glb.js"
+        },
+        "./loaders/obj": {
+            "@repraze/source": "./src/loaders/obj.ts",
+            "types": "./dist/loaders/obj.d.ts",
+            "default": "./dist/loaders/obj.js"
+        },
+        "./loaders/stl": {
+            "@repraze/source": "./src/loaders/stl.ts",
+            "types": "./dist/loaders/stl.d.ts",
+            "default": "./dist/loaders/stl.js"
+        },
+        "./math/animation": {
+            "@repraze/source": "./src/math/animation.ts",
+            "types": "./dist/math/animation.d.ts",
+            "default": "./dist/math/animation.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "src",
+        "!src/**/*.test.ts",
+        "README.md"
+    ],
     "scripts": {
+        "build": "rm -rf dist && tsc -p tsconfig.build.json",
         "test": "node --import tsx --test",
-        "lint": "eslint .",
-        "lint:fix": "eslint . --fix",
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit -p ."
+    },
+    "publishConfig": {
+        "access": "public"
     },
     "dependencies": {
         "gl-matrix": "^3.4.4"
     },
     "devDependencies": {
-        "@types/node": "^26.6.5",
-        "@webgpu/types": "^0.1.74",
-        "typescript": "^6.0.3"
-    },
-    "exports": {
-        ".": "./src/index.ts",
-        "./renderer": "./src/renderer.ts",
-        "./pass": "./src/pass.ts",
-        "./passes/shader-pass": "./src/passes/shader-pass.ts",
-        "./passes/deferred-scene-pass": "./src/passes/deferred-scene-pass.ts",
-        "./scene": "./src/scene/scene.ts",
-        "./scene/entity": "./src/scene/entity.ts",
-        "./scene/mesh": "./src/scene/mesh.ts",
-        "./scene/light": "./src/scene/light.ts",
-        "./scene/camera": "./src/scene/camera.ts",
-        "./geometry": "./src/geometry/geometry.ts",
-        "./geometry/shapes": "./src/geometry/shapes.ts",
-        "./material": "./src/material/material.ts",
-        "./color": "./src/color.ts"
+        "@webgpu/types": "^0.1.74"
     }
 }

@@ -1,25 +1,13 @@
 {
-    "$schema": "https://json.schemastore.org/tsconfig",
+    "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "target": "ES2022",
-        "lib": ["ES2022", "DOM", "DOM.Iterable"],
+        "lib": ["ES2023", "DOM", "DOM.Iterable"],
         "types": ["@webgpu/types", "node"],
-        "allowImportingTsExtensions": true,
-        "module": "esnext",
-        "moduleResolution": "bundler",
-        "declaration": true,
-        "declarationMap": true,
-        "isolatedModules": true,
-        "noUncheckedIndexedAccess": true,
-        "resolveJsonModule": true,
-        "skipLibCheck": true,
-        "strict": true,
-        "noEmit": true,
+        "customConditions": ["@repraze/source"],
         "paths": {
             "@repraze/glaze": ["./src/index.ts"],
             "@repraze/glaze/*": ["./src/*"]
         }
     },
-    "include": ["."],
-    "exclude": ["node_modules", "dist"]
+    "include": ["src"]
 }
