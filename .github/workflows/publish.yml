@@ -1,0 +1,52 @@
+name: Publish glaze
+
+# Stages @repraze/glaze when a `glaze-v<version>` tag is pushed. Nothing goes live until a maintainer
+# approves it with 2FA: npmjs.com → package → Staged, or `npm stage approve <stage-id>`.
+#
+# Supply-chain posture:
+# - npm staged publishing: CI can only stage; a human approves (2FA) before the version is installable.
+# - npm trusted publishing (OIDC): no npm token in GitHub secrets. Configure on npmjs.com → package →
+#   Trusted publisher → GitHub Actions (repraze/glaze, publish.yml, environment "npm").
+# - --provenance: the package page links the exact commit and workflow run that built it.
+# - Actions pinned to full commit SHAs, no persisted git credentials, least-privilege permissions,
+#   installs with --ignore-scripts.
+
+on:
+    push:
+        tags: ["glaze-v*"]
+
+permissions: {}
+
+concurrency:
+    group: publish-glaze
+    cancel-in-progress: false
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        environment: npm
+        permissions:
+            contents: read
+            id-token: write # OIDC for trusted publishing + provenance
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 24
+                  registry-url: https://registry.npmjs.org
+            # `npm stage` needs npm 12; exact version, released weeks before it was pinned (not "latest")
+            - name: Use pinned npm
+              run: npm install -g npm@12.2.1 && npm --version
+            - name: Tag matches package version
+              run: test "glaze-v$(node -p 'require("./packages/glaze/package.json").version')" = "$GITHUB_REF_NAME"
+            - run: npm ci --ignore-scripts
+            - run: npm run lint
+            - run: npm run typecheck
+            - run: npm test
+            - run: npm run build -w @repraze/glaze
+            - name: Stage for approval
+              working-directory: packages/glaze
+              # prereleases go to the "next" dist-tag so `npm install` keeps the stable one
+              run: npm stage publish . --provenance --access public --tag ${{ contains(github.ref_name, '-') && 'next' || 'latest' }}
