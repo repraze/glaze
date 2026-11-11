@@ -118,7 +118,8 @@ ${
 fn parallaxOcclusionMapping(uv: vec2<f32>, viewDirT: vec3<f32>, scale: f32) -> vec2<f32> {
     let numLayers  = mix(8.0, 32.0, abs(dot(vec3(0.0, 0.0, 1.0), normalize(viewDirT))));
     let layerDepth = 1.0 / numLayers;
-    let deltaUV    = (viewDirT.xy / viewDirT.z) * scale / numLayers;
+    // tangent-space y is the bitangent, toward -v (the image's top): flip it into uv space
+    let deltaUV    = (vec2<f32>(viewDirT.x, -viewDirT.y) / viewDirT.z) * scale / numLayers;
     var depth = 0.0;
     var cuv   = uv;
     var cd    = 1.0 - textureSampleLevel(heightMap, matSampler, cuv, 0.0).r;

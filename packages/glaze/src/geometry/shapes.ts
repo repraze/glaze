@@ -1,3 +1,9 @@
+/**
+ * Shape factories. UVs follow Glaze's convention (the glTF one): (0, 0) is the top-left of the image, its first
+ * row, u runs right and v runs down, as seen from outside the surface. A texture therefore reads upright and
+ * unmirrored on each cube face (top and bottom faces read with the -z edge up), on a quad turned to face the
+ * camera, and around spheres, cylinders and tori.
+ */
 import {computeTangents, Geometry} from "./geometry";
 
 // ─── Internal builder helpers ─────────────────────────────────────────────────
@@ -125,7 +131,7 @@ export function createCube({
                     o[2] + u[2] * s * size + v[2] * t * size,
                 );
                 raw.normals.push(n[0], n[1], n[2]);
-                raw.uvs.push(s, t);
+                raw.uvs.push(s, 1 - t); // t runs along the face's up axis; v runs down
             }
         }
 
@@ -232,7 +238,8 @@ export function createSphere({
 
             raw.positions.push(nx * radius, ny * radius, nz * radius);
             raw.normals.push(nx, ny, nz);
-            raw.uvs.push(i / widthSegments, j / heightSegments);
+            // azimuth turns from +x toward +z, which is leftward seen from outside: u runs the other way
+            raw.uvs.push(1 - i / widthSegments, j / heightSegments);
         }
     }
 
@@ -351,7 +358,7 @@ export function createIcosphere({radius = 1, subdivisions = 2, flat = false}: Ic
     for (const [x, y, z] of verts) {
         positions.push(x * radius, y * radius, z * radius);
         normals.push(x, y, z);
-        const u = 0.5 + Math.atan2(z, x) / (2 * Math.PI);
+        const u = 0.5 - Math.atan2(z, x) / (2 * Math.PI); // increases rightward seen from outside
         const v = 0.5 - Math.asin(y) / Math.PI;
         uvs.push(u, v);
     }
@@ -491,7 +498,7 @@ export function createCylinder({
                 const sinT = Math.sin(theta);
                 raw.positions.push(r * cosT, y, r * sinT);
                 raw.normals.push(cosT / nl, slope / nl, sinT / nl);
-                raw.uvs.push(i / radialSegments, t);
+                raw.uvs.push(1 - i / radialSegments, t); // u increases rightward seen from outside
             }
         }
     }
@@ -545,7 +552,7 @@ export function createCylinder({
                 const theta = (i / radialSegments) * 2 * Math.PI;
                 raw.positions.push(radiusBottom * Math.cos(theta), -hh, radiusBottom * Math.sin(theta));
                 raw.normals.push(0, -1, 0);
-                raw.uvs.push(0.5 + Math.cos(theta) * 0.5, 0.5 + Math.sin(theta) * 0.5);
+                raw.uvs.push(0.5 - Math.cos(theta) * 0.5, 0.5 + Math.sin(theta) * 0.5); // seen from below: mirrored x
             }
             for (let i = 0; i < radialSegments; i++) {
                 raw.indices.push(botCenter, botCenter + 1 + i, botCenter + 2 + i);
@@ -627,7 +634,8 @@ export function createTorus({
             const ny = sinPhi;
             const nz = cosPhi * sinTheta;
             raw.normals.push(nx, ny, nz);
-            raw.uvs.push(i / tubularSegments, j / radialSegments);
+            // seen from outside, theta turns leftward and phi upward: u and v run the other way
+            raw.uvs.push(1 - i / tubularSegments, 1 - j / radialSegments);
         }
     }
 

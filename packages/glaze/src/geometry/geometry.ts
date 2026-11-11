@@ -62,6 +62,10 @@ export class Geometry {
 /**
  * Compute per-vertex tangents using the standard UV-space method (MikkTSpace-style).
  * Returns a Float32Array of 4 floats per vertex: tangent xyz + handedness w (+1 or -1).
+ *
+ * Follows glTF: the tangent points along +u and the bitangent, `cross(normal, tangent) * w`, points toward the
+ * top of the image (-v, since v runs down). A normal map's green channel is therefore "up" in the image
+ * (the OpenGL / glTF normal-map convention), and w is +1 for an unmirrored mapping.
  */
 export function computeTangents(
     positions: Float32Array,
@@ -150,11 +154,11 @@ export function computeTangents(
             oz /= len;
         }
 
-        // Handedness: cross(N, T) should agree with accumulated bitangent
+        // Handedness: cross(N, T) * w should point toward -v (image up), against the accumulated dP/dv
         const cx = ny * oz - nz * oy;
         const cy = nz * ox - nx * oz;
         const cz = nx * oy - ny * ox;
-        const w = cx * bx + cy * by + cz * bz < 0 ? -1 : 1;
+        const w = cx * bx + cy * by + cz * bz > 0 ? -1 : 1;
 
         out[i * 4] = ox;
         out[i * 4 + 1] = oy;

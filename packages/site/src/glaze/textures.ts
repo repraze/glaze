@@ -8,7 +8,7 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 // ORM: R=occlusion (direct, 1=no AO), G=roughness scale, B=metallic scale.
-// Normal map: tangent-space, flat surface encodes as (128,128,255).
+// Normal map: tangent-space, +y toward the image's top (glTF), flat surface encodes as (128,128,255).
 function normalsFromHeights(heights: Float32Array, size: number, scale: number): Uint8Array {
     const data = new Uint8Array(size * size * 4);
     for (let y = 0; y < size; y++) {
@@ -19,7 +19,7 @@ function normalsFromHeights(heights: Float32Array, size: number, scale: number):
             const hU = heights[((y - 1 + size) % size) * size + x]!;
             const hD = heights[((y + 1) % size) * size + x]!;
             let nx = (hL - hR) * scale;
-            let ny = (hU - hD) * scale;
+            let ny = (hD - hU) * scale; // green is "up" in the image (glTF / OpenGL normal maps)
             let nz = 1;
             const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
             nx /= len;

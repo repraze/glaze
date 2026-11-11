@@ -51,7 +51,7 @@ export const doc = defineDoc({
                 {
                     name: "Texture.fromPixels(device, data, width, height)",
                     type: "Texture",
-                    description: "Uint8Array of RGBA bytes, row by row.",
+                    description: "Uint8Array of RGBA bytes, row by row, top row first (v = 0).",
                 },
                 {
                     name: "Texture.fromURL(device, url)",
@@ -170,9 +170,6 @@ export function FromCanvas() {
                     // draw a label with the 2D API, then decode it into a GPU texture
                     const label = new OffscreenCanvas(256, 256);
                     const ctx = label.getContext("2d")!;
-                    // the shape factories use GL-style UVs (v up) and images upload top row first: flip the label
-                    ctx.translate(0, 256);
-                    ctx.scale(1, -1);
                     // drawn once with the theme of the moment (a texture, not per-frame state)
                     const c = colors.current;
                     ctx.fillStyle = c.background;

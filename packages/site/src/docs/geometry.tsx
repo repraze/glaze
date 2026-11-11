@@ -80,7 +80,11 @@ export const doc = defineDoc({
             rows: [
                 {name: "positions", type: "Float32Array", description: "3 floats per vertex."},
                 {name: "normals", type: "Float32Array", description: "3 floats per vertex."},
-                {name: "uvs", type: "Float32Array", description: "2 floats per vertex."},
+                {
+                    name: "uvs",
+                    type: "Float32Array",
+                    description: "2 floats per vertex; (0, 0) is the image's top-left, v runs down (as in glTF).",
+                },
                 {name: "indices", type: "Uint32Array", description: "3 per triangle, counter-clockwise front faces."},
                 {
                     name: "tangents",

@@ -176,6 +176,9 @@ updated by the scene pass each frame. Cameras must be in the tree.
 normals): `createCube`, `createPlane`, `createQuad`, `createSphere`, `createIcosphere`, `createCylinder`,
 `createCone`, `createTorus`. `computeTangents(positions, normals, uvs, indices, vertexCount)` for normal maps.
 
+UVs follow glTF everywhere (shapes, GLB, OBJ, which flips `vt`): (0, 0) is the image's top-left, its first row,
+and v runs down. Normal maps are glTF's too: tangent-space +y points to the top of the image.
+
 ## Materials and textures
 
 ```ts
