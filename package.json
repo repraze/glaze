@@ -10,7 +10,7 @@
     "scripts": {
         "dev": "npm run dev -w @glaze/site",
         "build": "npm run build -w @repraze/glaze && npm run build -w @glaze/site",
-        "test": "npm run test -w @repraze/glaze",
+        "test": "npm run test --workspaces --if-present",
         "typecheck": "npm run typecheck --workspaces --if-present",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",

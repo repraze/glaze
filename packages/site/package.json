@@ -7,7 +7,8 @@
         "dev": "vite",
         "build": "vite build && tsc --noEmit -p .",
         "preview": "vite preview",
-        "typecheck": "tsc --noEmit -p ."
+        "typecheck": "tsc --noEmit -p .",
+        "test": "node --import tsx --test \"src/**/*.test.ts\""
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.3.4",
