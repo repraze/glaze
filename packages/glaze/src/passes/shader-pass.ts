@@ -47,7 +47,7 @@ export interface ShaderPassInputSlot {
     depth?: boolean;
 }
 
-export interface ShaderPassOptions {
+export interface ShaderPassOptions<Out extends string = string> {
     fragmentShader: string;
     /**
      * Named input textures. Each maps to a WGSL binding in declaration order:
@@ -58,12 +58,12 @@ export interface ShaderPassOptions {
      * Named output slots. An empty array means the pass renders directly to canvas
      * (requires canvasSlot to be set in the RenderGraph.addPass call).
      */
-    outputs?: {name: string; spec: PassOutputSpec}[];
+    outputs?: {name: Out; spec: PassOutputSpec}[];
 }
 
-export class ShaderPass extends Pass {
+export class ShaderPass<const Out extends string = string> extends Pass<Out> {
     readonly inputSlots: PassInputSlot[];
-    readonly outputSlots: PassOutputSlot[];
+    readonly outputSlots: PassOutputSlot<Out>[];
 
     private readonly fragmentShaderSource: string;
     private readonly inputDefs: ShaderPassInputSlot[];
@@ -84,7 +84,7 @@ export class ShaderPass extends Pass {
     private width = 1;
     private height = 1;
 
-    constructor(options: ShaderPassOptions) {
+    constructor(options: ShaderPassOptions<Out>) {
         super();
         this.fragmentShaderSource = options.fragmentShader;
         this.inputDefs = options.inputs ?? [];

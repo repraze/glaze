@@ -45,7 +45,7 @@ export function easeInOut(t: number): number {
  * pingpong(0)=0, pingpong(1)=1, pingpong(2)=0, pingpong(3)=1, …
  */
 export function pingpong(t: number): number {
-    return 1 - Math.abs(((t % 2) + 2) % 2 - 1);
+    return 1 - Math.abs((((t % 2) + 2) % 2) - 1);
 }
 
 /**

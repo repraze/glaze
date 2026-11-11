@@ -10,28 +10,28 @@ function makeGLB(json: object, bin?: Uint8Array): ArrayBuffer {
     const jsonPad = (4 - (jsonStr.length % 4)) % 4;
     const jsonBuf = new TextEncoder().encode(jsonStr + " ".repeat(jsonPad));
 
-    const binBuf    = bin ?? new Uint8Array(0);
-    const binPad    = binBuf.length > 0 ? (4 - (binBuf.length % 4)) % 4 : 0;
+    const binBuf = bin ?? new Uint8Array(0);
+    const binPad = binBuf.length > 0 ? (4 - (binBuf.length % 4)) % 4 : 0;
     const binPadded = new Uint8Array(binBuf.length + binPad);
     binPadded.set(binBuf);
 
     const hasBin = binBuf.length > 0;
-    const total  = 12 + 8 + jsonBuf.length + (hasBin ? 8 + binPadded.length : 0);
-    const out    = new ArrayBuffer(total);
-    const dv     = new DataView(out);
+    const total = 12 + 8 + jsonBuf.length + (hasBin ? 8 + binPadded.length : 0);
+    const out = new ArrayBuffer(total);
+    const dv = new DataView(out);
 
     dv.setUint32(0, 0x46546c67, true); // magic "glTF"
-    dv.setUint32(4, 2, true);           // version
-    dv.setUint32(8, total, true);       // total length
+    dv.setUint32(4, 2, true); // version
+    dv.setUint32(8, total, true); // total length
 
     dv.setUint32(12, jsonBuf.length, true); // JSON chunk length
-    dv.setUint32(16, 0x4e4f534a, true);     // JSON chunk type
+    dv.setUint32(16, 0x4e4f534a, true); // JSON chunk type
     new Uint8Array(out, 20, jsonBuf.length).set(jsonBuf);
 
     if (hasBin) {
         const off = 20 + jsonBuf.length;
-        dv.setUint32(off,     binPadded.length, true); // BIN chunk length
-        dv.setUint32(off + 4, 0x004e4942,       true); // BIN chunk type
+        dv.setUint32(off, binPadded.length, true); // BIN chunk length
+        dv.setUint32(off + 4, 0x004e4942, true); // BIN chunk type
         new Uint8Array(out, off + 8, binPadded.length).set(binPadded);
     }
 
@@ -41,12 +41,12 @@ function makeGLB(json: object, bin?: Uint8Array): ArrayBuffer {
 // Minimal GLB JSON + binary for a triangle (3 VEC3 float32 positions, no index buffer)
 function makeTriangleGLB(extra?: object): ArrayBuffer {
     // positions: (1,0,0), (0,1,0), (0,0,1)
-    const positions = new Float32Array([1, 0, 0,  0, 1, 0,  0, 0, 1]);
+    const positions = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
     const json = {
-        accessors:   [{bufferView: 0, byteOffset: 0, componentType: 5126, count: 3, type: "VEC3"}],
+        accessors: [{bufferView: 0, byteOffset: 0, componentType: 5126, count: 3, type: "VEC3"}],
         bufferViews: [{buffer: 0, byteOffset: 0, byteLength: 36}],
-        buffers:     [{byteLength: 36}],
-        meshes:      [{primitives: [{attributes: {POSITION: 0}}]}],
+        buffers: [{byteLength: 36}],
+        meshes: [{primitives: [{attributes: {POSITION: 0}}]}],
         ...extra,
     };
     return makeGLB(json, new Uint8Array(positions.buffer));
@@ -65,7 +65,7 @@ describe("parseGLB — header", () => {
         const buf = new ArrayBuffer(12);
         const dv = new DataView(buf);
         dv.setUint32(0, 0x46546c67, true); // correct magic
-        dv.setUint32(4, 1, true);           // version 1 (unsupported)
+        dv.setUint32(4, 1, true); // version 1 (unsupported)
         assert.throws(() => parseGLB(buf), /unsupported version/i);
     });
 
@@ -108,8 +108,8 @@ describe("parseGLB — geometry", () => {
     });
 
     test("reads index buffer when present", () => {
-        const positions = new Float32Array([1, 0, 0,  0, 1, 0,  0, 0, 1]);
-        const indices   = new Uint16Array([2, 1, 0]);
+        const positions = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+        const indices = new Uint16Array([2, 1, 0]);
         const bin = new Uint8Array(positions.byteLength + indices.byteLength);
         bin.set(new Uint8Array(positions.buffer), 0);
         bin.set(new Uint8Array(indices.buffer), positions.byteLength);
@@ -124,7 +124,7 @@ describe("parseGLB — geometry", () => {
                 {buffer: 0, byteOffset: positions.byteLength, byteLength: indices.byteLength},
             ],
             buffers: [{byteLength: bin.byteLength}],
-            meshes:  [{primitives: [{attributes: {POSITION: 1}, indices: 0}]}],
+            meshes: [{primitives: [{attributes: {POSITION: 1}, indices: 0}]}],
         };
         const geo = parseGLB(makeGLB(json, bin))[0]!.geometry;
         assert.equal(geo.indexCount, 3);
@@ -134,13 +134,13 @@ describe("parseGLB — geometry", () => {
     test("fills zero normals when NORMAL accessor absent", () => {
         const geo = parseGLB(makeTriangleGLB())[0]!.geometry;
         assert.equal(geo.normals.length, 9); // 3 vertices × 3
-        assert.ok(geo.normals.every(v => v === 0));
+        assert.ok(geo.normals.every((v) => v === 0));
     });
 
     test("fills zero UVs when TEXCOORD_0 absent", () => {
         const geo = parseGLB(makeTriangleGLB())[0]!.geometry;
         assert.equal(geo.uvs.length, 6); // 3 vertices × 2
-        assert.ok(geo.uvs.every(v => v === 0));
+        assert.ok(geo.uvs.every((v) => v === 0));
     });
 
     test("skips primitives with non-triangle mode", () => {
@@ -158,15 +158,12 @@ describe("parseGLB — geometry", () => {
     });
 
     test("handles multiple primitives in one mesh", () => {
-        const positions = new Float32Array([1, 0, 0,  0, 1, 0,  0, 0, 1]);
+        const positions = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
         const json = {
-            accessors:   [{bufferView: 0, byteOffset: 0, componentType: 5126, count: 3, type: "VEC3"}],
+            accessors: [{bufferView: 0, byteOffset: 0, componentType: 5126, count: 3, type: "VEC3"}],
             bufferViews: [{buffer: 0, byteOffset: 0, byteLength: 36}],
-            buffers:     [{byteLength: 36}],
-            meshes:      [{primitives: [
-                {attributes: {POSITION: 0}},
-                {attributes: {POSITION: 0}},
-            ]}],
+            buffers: [{byteLength: 36}],
+            meshes: [{primitives: [{attributes: {POSITION: 0}}, {attributes: {POSITION: 0}}]}],
         };
         const result = parseGLB(makeGLB(json, new Uint8Array(positions.buffer)));
         assert.equal(result.length, 2);
@@ -250,19 +247,19 @@ describe("parseGLB — material", () => {
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
         const mat = parseGLB(glb)[0]!.material!;
-        assert.equal(mat.baseColorTexture,         null);
-        assert.equal(mat.normalTexture,            null);
-        assert.equal(mat.emissiveTexture,          null);
-        assert.equal(mat.occlusionTexture,         null);
+        assert.equal(mat.baseColorTexture, null);
+        assert.equal(mat.normalTexture, null);
+        assert.equal(mat.emissiveTexture, null);
+        assert.equal(mat.occlusionTexture, null);
         assert.equal(mat.metallicRoughnessTexture, null);
     });
 
     test("extracts external URI baseColorTexture", () => {
         const glb = makeTriangleGLB({
-            images:    [{uri: "DuckCM.png"}],
-            textures:  [{source: 0}],
+            images: [{uri: "DuckCM.png"}],
+            textures: [{source: 0}],
             materials: [{pbrMetallicRoughness: {baseColorTexture: {index: 0}}}],
-            meshes:    [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
+            meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
         const src = parseGLB(glb)[0]!.material!.baseColorTexture;
         assert.ok(src !== null);
@@ -272,23 +269,23 @@ describe("parseGLB — material", () => {
 
     test("extracts embedded baseColorTexture from bufferView", () => {
         // Triangle positions in first 36 bytes, fake image bytes after
-        const positions = new Float32Array([1, 0, 0,  0, 1, 0,  0, 0, 1]);
-        const imgBytes  = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG magic header
+        const positions = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+        const imgBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG magic header
         const bin = new Uint8Array(positions.byteLength + imgBytes.length);
         bin.set(new Uint8Array(positions.buffer), 0);
         bin.set(imgBytes, positions.byteLength);
 
         const json = {
-            accessors:   [{bufferView: 0, byteOffset: 0, componentType: 5126, count: 3, type: "VEC3"}],
+            accessors: [{bufferView: 0, byteOffset: 0, componentType: 5126, count: 3, type: "VEC3"}],
             bufferViews: [
                 {buffer: 0, byteOffset: 0, byteLength: 36},
                 {buffer: 0, byteOffset: 36, byteLength: imgBytes.length},
             ],
-            images:    [{bufferView: 1, mimeType: "image/png"}],
-            textures:  [{source: 0}],
+            images: [{bufferView: 1, mimeType: "image/png"}],
+            textures: [{source: 0}],
             materials: [{pbrMetallicRoughness: {baseColorTexture: {index: 0}}}],
-            buffers:   [{byteLength: bin.byteLength}],
-            meshes:    [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
+            buffers: [{byteLength: bin.byteLength}],
+            meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         };
         const src = parseGLB(makeGLB(json, bin))[0]!.material!.baseColorTexture!;
         assert.equal(src.type, "embedded");
@@ -299,23 +296,23 @@ describe("parseGLB — material", () => {
     });
 
     test("embedded image data is an independent copy, not a view into the original buffer", () => {
-        const positions = new Float32Array([1, 0, 0,  0, 1, 0,  0, 0, 1]);
-        const imgBytes  = new Uint8Array([0xAA, 0xBB]);
+        const positions = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+        const imgBytes = new Uint8Array([0xaa, 0xbb]);
         const bin = new Uint8Array(positions.byteLength + imgBytes.length);
         bin.set(new Uint8Array(positions.buffer), 0);
         bin.set(imgBytes, positions.byteLength);
 
         const json = {
-            accessors:   [{bufferView: 0, byteOffset: 0, componentType: 5126, count: 3, type: "VEC3"}],
+            accessors: [{bufferView: 0, byteOffset: 0, componentType: 5126, count: 3, type: "VEC3"}],
             bufferViews: [
                 {buffer: 0, byteOffset: 0, byteLength: 36},
                 {buffer: 0, byteOffset: 36, byteLength: 2},
             ],
-            images:    [{bufferView: 1, mimeType: "image/png"}],
-            textures:  [{source: 0}],
+            images: [{bufferView: 1, mimeType: "image/png"}],
+            textures: [{source: 0}],
             materials: [{pbrMetallicRoughness: {baseColorTexture: {index: 0}}}],
-            buffers:   [{byteLength: bin.byteLength}],
-            meshes:    [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
+            buffers: [{byteLength: bin.byteLength}],
+            meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         };
         const glbBuf = makeGLB(json, bin);
         const src = parseGLB(glbBuf)[0]!.material!.baseColorTexture!;

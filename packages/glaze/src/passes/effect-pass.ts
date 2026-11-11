@@ -43,7 +43,7 @@ export interface EffectPassInputSlot {
     depth?: boolean;
 }
 
-export interface EffectPassOptions {
+export interface EffectPassOptions<Out extends string = string> {
     /**
      * Only the @fragment fn fs_main(in: QuadInput).
      * The vertex shader, globals, uniform struct, and texture declarations are auto-prepended.
@@ -52,7 +52,7 @@ export interface EffectPassOptions {
     /**
      * Named output slots. Empty (default) renders directly to canvas via canvasSlot.
      */
-    outputs?: {name: string; spec: PassOutputSpec}[];
+    outputs?: {name: Out; spec: PassOutputSpec}[];
     /**
      * Render-graph input textures wired via graph.addPass(pass, {name: handle}).
      * Auto-declares: inputSampler + named texture bindings. Access as {name} / inputSampler.
@@ -72,16 +72,16 @@ export interface EffectPassOptions {
     clearColor?: {r: number; g: number; b: number; a: number};
     /**
      * Sampler filter mode for render-graph inputs (default: "linear").
-     * Use "nearest" when input texels map 1:1 to output cells (e.g., noise texture for code rain).
+     * Use "nearest" when input texels map 1:1 to output cells (e.g., a per-cell noise texture).
      */
     inputFilter?: "linear" | "nearest";
 }
 
 // ─── EffectPass ───────────────────────────────────────────────────────────────
 
-export class EffectPass extends Pass {
+export class EffectPass<const Out extends string = string> extends Pass<Out> {
     readonly inputSlots: PassInputSlot[];
-    readonly outputSlots: PassOutputSlot[];
+    readonly outputSlots: PassOutputSlot<Out>[];
 
     private readonly opts: EffectPassOptions;
     private readonly inputDefs: EffectPassInputSlot[];
@@ -117,7 +117,7 @@ export class EffectPass extends Pass {
     private width = 1;
     private height = 1;
 
-    constructor(options: EffectPassOptions) {
+    constructor(options: EffectPassOptions<Out>) {
         super();
         this.opts = options;
         this.inputDefs = options.inputs ?? [];

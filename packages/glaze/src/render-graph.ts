@@ -46,11 +46,11 @@ export class RenderGraph {
      * @returns A record mapping each output slot name to a TextureHandle that
      *          downstream passes can reference.
      */
-    addPass(
-        pass: Pass,
+    addPass<Out extends string>(
+        pass: Pass<Out>,
         inputs?: Record<string, TextureHandle>,
         options?: {canvasSlot?: string},
-    ): Record<string, TextureHandle> {
+    ): Record<Out, TextureHandle> {
         const id = this.nextId++;
         this.nodes.push({
             id,
@@ -59,7 +59,7 @@ export class RenderGraph {
             canvasSlot: options?.canvasSlot ?? null,
         });
 
-        const handles: Record<string, TextureHandle> = {};
+        const handles = {} as Record<Out, TextureHandle>;
         for (const slot of pass.outputSlots) {
             handles[slot.name] = {_nodeId: id, _slot: slot.name};
         }

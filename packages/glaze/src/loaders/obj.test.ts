@@ -6,7 +6,9 @@ import {parseOBJ} from "./obj";
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const EPS = 1e-6;
-function near(a: number, b: number): boolean { return Math.abs(a - b) < EPS; }
+function near(a: number, b: number): boolean {
+    return Math.abs(a - b) < EPS;
+}
 
 // ─── Basic parsing ────────────────────────────────────────────────────────────
 
@@ -14,7 +16,7 @@ describe("parseOBJ — basic", () => {
     test("returns zero vertices for empty string", () => {
         const geo = parseOBJ("");
         assert.equal(geo.vertexCount, 0);
-        assert.equal(geo.indexCount,  0);
+        assert.equal(geo.indexCount, 0);
     });
 
     test("ignores comment lines", () => {
@@ -34,7 +36,8 @@ describe("parseOBJ — basic", () => {
     });
 
     test("ignores mtllib and usemtl directives", () => {
-        const obj = "mtllib mat.mtl\nusemtl MyMat\nv 1 0 0\nv 0 1 0\nv 0 0 1\nvn 0 0 1\nvn 0 0 1\nvn 0 0 1\nf 1//1 2//2 3//3\n";
+        const obj =
+            "mtllib mat.mtl\nusemtl MyMat\nv 1 0 0\nv 0 1 0\nv 0 0 1\nvn 0 0 1\nvn 0 0 1\nvn 0 0 1\nf 1//1 2//2 3//3\n";
         const geo = parseOBJ(obj);
         assert.equal(geo.vertexCount, 3);
     });
@@ -60,7 +63,7 @@ describe("parseOBJ — triangle", () => {
     test("produces 3 vertices and 3 indices", () => {
         const geo = parseOBJ(OBJ);
         assert.equal(geo.vertexCount, 3);
-        assert.equal(geo.indexCount,  3);
+        assert.equal(geo.indexCount, 3);
     });
 
     test("positions are correct", () => {
@@ -74,9 +77,9 @@ describe("parseOBJ — triangle", () => {
 
     test("normals are correct", () => {
         const geo = parseOBJ(OBJ);
-        assert.ok(near(geo.normals[0]!, 0));  // nx
-        assert.ok(near(geo.normals[1]!, 1));  // ny
-        assert.ok(near(geo.normals[2]!, 0));  // nz
+        assert.ok(near(geo.normals[0]!, 0)); // nx
+        assert.ok(near(geo.normals[1]!, 1)); // ny
+        assert.ok(near(geo.normals[2]!, 0)); // nz
     });
 
     test("UV V-coordinate is flipped (1 - v)", () => {
@@ -102,19 +105,12 @@ describe("parseOBJ — triangle", () => {
 
 describe("parseOBJ — quad triangulation", () => {
     // A square quad face (4 verts) → 2 triangles = 6 indices
-    const OBJ = [
-        "v 0 0 0",
-        "v 1 0 0",
-        "v 1 1 0",
-        "v 0 1 0",
-        "vn 0 0 1",
-        "f 1//1 2//1 3//1 4//1",
-    ].join("\n");
+    const OBJ = ["v 0 0 0", "v 1 0 0", "v 1 1 0", "v 0 1 0", "vn 0 0 1", "f 1//1 2//1 3//1 4//1"].join("\n");
 
     test("produces 4 unique vertices and 6 indices (2 triangles)", () => {
         const geo = parseOBJ(OBJ);
         assert.equal(geo.vertexCount, 4);
-        assert.equal(geo.indexCount,  6);
+        assert.equal(geo.indexCount, 6);
     });
 
     test("fan triangulation: indices are [0,1,2, 0,2,3]", () => {
@@ -140,7 +136,7 @@ describe("parseOBJ — vertex deduplication", () => {
         const geo = parseOBJ(obj);
         // Verts 2 and 3 are shared → 4 unique output vertices total
         assert.equal(geo.vertexCount, 4);
-        assert.equal(geo.indexCount,  6);
+        assert.equal(geo.indexCount, 6);
     });
 });
 
@@ -149,15 +145,7 @@ describe("parseOBJ — vertex deduplication", () => {
 describe("parseOBJ — missing attributes", () => {
     test("computes flat normals when no vn present", () => {
         // Triangle in XY plane → normal should be (0,0,±1)
-        const obj = [
-            "v 0 0 0",
-            "v 1 0 0",
-            "v 0 1 0",
-            "vt 0 0",
-            "vt 1 0",
-            "vt 0 1",
-            "f 1/1 2/2 3/3",
-        ].join("\n");
+        const obj = ["v 0 0 0", "v 1 0 0", "v 0 1 0", "vt 0 0", "vt 1 0", "vt 0 1", "f 1/1 2/2 3/3"].join("\n");
         const geo = parseOBJ(obj);
         const nz = Math.abs(geo.normals[2]!);
         assert.ok(nz > 0.99, `expected |nz| ≈ 1, got ${nz}`);
@@ -165,17 +153,11 @@ describe("parseOBJ — missing attributes", () => {
 
     test("sets (0, 1) UVs when no vt present (f x//n form)", () => {
         // No vt lines → uvIdx=0 → srcUvs empty → u=0, v=1-0=1 (V-flip of zero)
-        const obj = [
-            "v 0 0 0",
-            "v 1 0 0",
-            "v 0 1 0",
-            "vn 0 0 1",
-            "f 1//1 2//1 3//1",
-        ].join("\n");
+        const obj = ["v 0 0 0", "v 1 0 0", "v 0 1 0", "vn 0 0 1", "f 1//1 2//1 3//1"].join("\n");
         const geo = parseOBJ(obj);
         assert.equal(geo.uvs.length, 6);
         for (let i = 0; i < 3; i++) {
-            assert.equal(geo.uvs[i * 2]!,     0, `u${i}`);
+            assert.equal(geo.uvs[i * 2]!, 0, `u${i}`);
             assert.equal(geo.uvs[i * 2 + 1]!, 1, `v${i}`);
         }
     });

@@ -1,5 +1,5 @@
 export type {ColorRgb, ColorRgba, ColorSpace, StrictColorRgb, StrictColorRgba} from "./color";
-export {colorRgb, colorRgba, setColorRgb, setColorRgba} from "./color";
+export {colorRgb, colorRgba, linearToSrgb, setColorRgb, setColorRgba, srgbToLinear} from "./color";
 export {computeTangents, Geometry} from "./geometry/geometry";
 export {
     createCone,
@@ -33,7 +33,7 @@ export type {PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} f
 export {Pass} from "./pass";
 export type {BlitPassOptions, ToneMapping} from "./passes/blit-pass";
 export {BlitPass} from "./passes/blit-pass";
-export type {DeferredScenePassOptions} from "./passes/deferred-scene-pass";
+export type {DeferredSceneOutput, DeferredScenePassOptions} from "./passes/deferred-scene-pass";
 export {DeferredScenePass} from "./passes/deferred-scene-pass";
 export type {EffectPassInputSlot, EffectPassOptions} from "./passes/effect-pass";
 export {EffectPass} from "./passes/effect-pass";

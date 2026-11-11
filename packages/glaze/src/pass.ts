@@ -23,9 +23,9 @@ export interface PassInputSlot {
     optional?: boolean;
 }
 
-export interface PassOutputSlot {
+export interface PassOutputSlot<Name extends string = string> {
     /** Name used in PassRenderContext.outputs and as TextureHandle slot identifier. */
-    name: string;
+    name: Name;
     spec: PassOutputSpec;
 }
 
@@ -46,12 +46,13 @@ export interface PassRenderContext {
     height: number;
 }
 
-export abstract class Pass {
+/** `Out` names the output slots, so `RenderGraph.addPass` can return a handle per name. */
+export abstract class Pass<Out extends string = string> {
     /** Named input texture slots this pass reads from. */
     abstract readonly inputSlots: PassInputSlot[];
 
     /** Named output texture slots this pass writes to. */
-    abstract readonly outputSlots: PassOutputSlot[];
+    abstract readonly outputSlots: PassOutputSlot<Out>[];
 
     /** Called once when the GPU device is ready. */
     abstract initialize(device: GPUDevice, canvasFormat: GPUTextureFormat): void;

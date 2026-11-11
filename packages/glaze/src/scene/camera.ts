@@ -1,6 +1,6 @@
-import { mat4, vec3 } from "gl-matrix";
+import {mat4, vec3} from "gl-matrix";
 
-import { Entity } from "./entity";
+import {Entity} from "./entity";
 
 export abstract class Camera extends Entity {
     abstract getProjectionMatrix(aspect: number): mat4;
@@ -33,7 +33,7 @@ export class PerspectiveCamera extends Camera {
     near: number;
     far: number;
 
-    constructor({ fov = Math.PI / 3, near = 0.1, far = 1000 }: PerspectiveCameraOptions = {}) {
+    constructor({fov = Math.PI / 3, near = 0.1, far = 1000}: PerspectiveCameraOptions = {}) {
         super();
         this.fov = fov;
         this.near = near;
@@ -64,14 +64,7 @@ export class OrthographicCamera extends Camera {
     near: number;
     far: number;
 
-    constructor({
-        left = -1,
-        right = 1,
-        top = 1,
-        bottom = -1,
-        near = 0.1,
-        far = 1000,
-    }: OrthographicCameraOptions = {}) {
+    constructor({left = -1, right = 1, top = 1, bottom = -1, near = 0.1, far = 1000}: OrthographicCameraOptions = {}) {
         super();
         this.left = left;
         this.right = right;

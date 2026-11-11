@@ -98,8 +98,7 @@ const TYPE_ELEMENT_COUNT: Record<string, number> = {
 
 /** Describes where image data lives — either an external file or inline bytes. */
 export type GltfTextureSource =
-    | {type: "uri"; uri: string}
-    | {type: "embedded"; data: Uint8Array<ArrayBuffer>; mimeType: string};
+    {type: "uri"; uri: string} | {type: "embedded"; data: Uint8Array<ArrayBuffer>; mimeType: string};
 
 /**
  * GPU-free material descriptor extracted from a GLTF primitive.

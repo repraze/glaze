@@ -1,281 +1,223 @@
 # @repraze/glaze
 
-A performant WebGPU rendering engine with class-based bindings and a composable render-pass pipeline. WebGL compatibility is not a goal — this library targets the WebGPU API exclusively.
+GlazeEngine: a WebGPU rendering engine with class-based bindings and a composable render-pass pipeline. A
+renderer, a render graph of passes, a deferred PBR scene pass with shadows, lights, materials, geometry and
+model loaders.
+
+**WebGPU only.** There is no WebGL fallback: it needs a browser with WebGPU in a secure context (Chrome and
+Edge, Safari 26+, recent Firefox). Detect it and show something else where it is missing.
+
+Docs and live demos: https://repraze.github.io/glaze/
+
+```bash
+npm install @repraze/glaze
+npm install -D @webgpu/types   # the WebGPU globals for TypeScript: add "@webgpu/types" to compilerOptions.types
+```
+
+ESM only, typed, side-effect free. [`gl-matrix`](https://glmatrix.net/) is its one dependency (vectors and
+matrices); import `vec3` / `mat4` from it to move entities.
 
 ---
 
-## Architecture overview
-
-```
-Renderer
-  └─ Pass chain: [Pass, Pass, ...]
-       ├─ ShaderPass         — fullscreen fragment-shader effects
-       └─ DeferredScenePass  — deferred 3-D scene renderer
-```
-
----
-
-## Color management
-
-### `color()` — parsing CSS hex to sRGB floats
+## A frame
 
 ```ts
-import { color, color4, setColor } from "@repraze/glaze";
+import {
+    BlitPass,
+    colorRgb,
+    createTorus,
+    DeferredScenePass,
+    DirectionalLight,
+    Mesh,
+    PBRMaterial,
+    PerspectiveCamera,
+    Renderer,
+    RenderGraph,
+    Scene,
+} from "@repraze/glaze";
 
-// Hex string → raw sRGB [r, g, b] (each channel = byte ÷ 255, no gamma)
-color("#ff6b35")          // → [1.0, 0.420, 0.208]
-color("#fff")             // → [1, 1, 1]
-color4("#ff6b35", 0.5)    // → [1.0, 0.420, 0.208, 0.5]
+const renderer = await Renderer.init(canvas); // throws without WebGPU or without a GPU adapter
 
-// Raw tuple → passes through unchanged
-color([0.5, 0.25, 0.75]) // → [0.5, 0.25, 0.75]
+const scene = new Scene();
+const camera = new PerspectiveCamera({fov: Math.PI / 4});
+camera.position[2] = 4;
+scene.add(camera);
+scene.activeCamera = camera;
+scene.add(new DirectionalLight({direction: [-0.5, -1, -0.6], intensity: 3}));
+const donut = new Mesh(createTorus(), new PBRMaterial({color: colorRgb("#ff9243"), roughness: 0.3}));
+scene.add(donut);
 
-// Zero-alloc mutation of an existing vec3 (hot-path / per-frame)
-setColor(scene.ambientColor, "#050508");
-```
+const graph = new RenderGraph();
+const {color} = graph.addPass(new DeferredScenePass({scene}));
+graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas"});
 
-`color()` is a generic utility — it maps hex bytes to 0–1 floats with no gamma transformation. This makes it suitable for any pass: generative shaders, texture generation, UI overlays, and 3-D scenes alike.
-
-### Display behaviour
-
-The renderer is neutral — it applies no automatic gamma correction. Values written to the canvas are displayed as-is by the browser's compositor. This means:
-
-- A `ShaderPass` that outputs `color("#ff6b35")` to the canvas shows the same colour as a CSS `background-color: #ff6b35`. ✓
-- `DeferredScenePass` processes its inputs in the colour space they arrive in. For PBR to be physically correct you should feed it truly linear values. The transfer-function utilities `srgbToLinear` and `linearToSrgb` are exported for passes that need to perform explicit colour-space conversions.
-
-### Transfer-function utilities
-
-```ts
-import { srgbToLinear, linearToSrgb } from "@repraze/glaze";
-
-// Useful for passes doing physically-correct PBR in linear light space
-const linearAlbedo = srgbToLinear(0.5); // ≈ 0.214
-const srgbOut      = linearToSrgb(0.214); // ≈ 0.5
-```
-
----
-
-## Renderer
-
-`Renderer` initialises the WebGPU device and canvas context. Passes are executed in order; each pass can read the output textures of all previous passes and may write to its own output textures or directly to the canvas.
-
-```ts
-import { Renderer } from "@repraze/glaze/renderer";
-
-const renderer = await Renderer.init(canvasElement);
-
-// Single frame
-renderer.renderFrame([noisePass, dotsPass]);
-
-// Animation loop
-const stop = renderer.startAnimation([noisePass, dotsPass]);
-// later…
-stop();
+const stop = renderer.startAnimation(() => {
+    donut.rotation[1] = performance.now() / 1000;
+    return graph;
+});
+// later: stop(); renderer.destroy();
 ```
 
 ---
 
-## Passes
+## Architecture
 
-A **Pass** is one step in the rendering pipeline. Each pass declares:
+```
+Renderer               device, canvas context, frame loop, textures between passes
+  └─ RenderGraph       passes in order; named output textures wired into later passes
+       ├─ ShaderPass         fullscreen WGSL fragment, textures in and out
+       ├─ EffectPass         ShaderPass + typed uniforms and external textures
+       ├─ DeferredScenePass  3D: shadows, G-buffer, PBR lighting
+       ├─ BlitPass           one texture to the canvas, tone mapped
+       └─ SplitViewPass      several textures in viewport rectangles
+```
 
-- `outputSpecs` — the textures it writes to (format + optional fixed size). An empty array means the pass renders directly to the canvas (must be the last pass).
-- `inputCount` — how many textures from the previous pass it expects as inputs.
+### Renderer
 
-The renderer automatically creates and manages the intermediate textures and wires them between passes.
+```ts
+const renderer = await Renderer.init(canvas, {alphaMode: "premultiplied"}); // alphaMode defaults to "opaque"
+renderer.renderFrame(graph); // one frame
+const stop = renderer.startAnimation(graph); // or a loop; also accepts () => graph
+renderer.resize(width, height); // after the canvas changed size
+renderer.destroy();
+```
+
+`renderer.device`, `.adapter`, `.context` and `.format` are public for your own resources.
+
+### Passes and the render graph
+
+A `Pass` declares named `inputSlots` and `outputSlots` (`{name, spec: {format, width?, height?, widthDivisor?,
+heightDivisor?}}`) and implements `initialize(device, format)`, `resize(width, height)` and `render(ctx)`. The
+renderer creates each output texture (canvas-sized unless fixed, or divided), calls `initialize` the first time
+it sees the pass, and hands `render` the views of its inputs and outputs.
+
+`graph.addPass(pass, inputs?, {canvasSlot?})` returns one handle per output slot, typed by the pass's slot
+names. Wire handles into later passes by input name; the pass marked with `canvasSlot` writes to the swap chain.
 
 ### ShaderPass
 
-Renders a fullscreen quad through a user-supplied WGSL fragment shader.
-
 ```ts
-import { ShaderPass } from "@repraze/glaze/passes/shader-pass";
-
-const noisePass = new ShaderPass({
+const noise = new ShaderPass({
     fragmentShader: /* wgsl */ `
         @fragment fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
-            let uv = in.uv * globals.resolution / 256.0;
-            return vec4<f32>(noise(uv, globals.time), 0.0, 0.0, 1.0);
-        }
-    `,
-    outputSpecs: [{ format: "rgba8unorm", width: 256, height: 256 }],
+            let v = fract(sin(dot(floor(in.pos.xy), vec2<f32>(12.9898, 78.233))) * 43758.5453);
+            return vec4<f32>(v, v, v, 1.0);
+        }`,
+    outputs: [{name: "noise", spec: {format: "rgba8unorm", widthDivisor: 8, heightDivisor: 8}}],
 });
+const dots = new ShaderPass({fragmentShader: DOTS_WGSL, inputs: [{name: "input0"}]});
+
+const graph = new RenderGraph();
+const {noise: field} = graph.addPass(noise);
+graph.addPass(dots, {input0: field}, {canvasSlot: "canvas"});
 ```
 
-**Do not redeclare** `QuadInput`, `globals`, `inputSampler`, or any `inputN` — they are all injected automatically. Your fragment source should only contain helper functions and the `@fragment fn fs_main` entry point.
+Injected into every fragment shader (don't redeclare them):
 
-**Auto-injected bindings** available in every fragment shader:
+| Binding                              | Declaration                                                                  |
+| ------------------------------------ | ---------------------------------------------------------------------------- |
+| vertex output                        | `struct QuadInput { @builtin(position) pos, @location(0) uv }`               |
+| `@group(0) @binding(0)`              | `globals: {time: f32, resolution: vec2<f32>}`                                |
+| `@group(1) @binding(0)`              | `inputSampler: sampler` (with inputs)                                        |
+| `@group(1) @binding(N)`, N = 1, 2, … | each input by name: `texture_2d<f32>`, or `texture_depth_2d` (`depth: true`) |
 
-| Binding              | Type                    | Description                        |
-|----------------------|-------------------------|------------------------------------|
-| `@group(0) @binding(0)` `globals` | `GlobalsUniform` | `time: f32`, `resolution: vec2<f32>` |
-| `@group(1) @binding(0)` `inputSampler` | `sampler` | Shared sampler for all input textures |
-| `@group(1) @binding(N)` `inputN`       | `texture_2d<f32>` | Each input texture (1-indexed) |
+### EffectPass, uniforms and bindings
 
-The vertex stage outputs a `QuadInput` struct:
+```ts
+const tint = Uniform.vec3([1, 0.57, 0.26]);
+const speed = Uniform.f32(1);
+const pattern = new TextureUniform("nearest"); // set pattern.texture = gpuTexture once loaded
 
-```wgsl
-struct QuadInput {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
+const pass = new EffectPass({
+    fragmentShader: `… effect.tint, effect.speed, textureSample(pattern, pattern_sampler, uv) …`,
+    uniforms: {tint, speed},
+    textures: {pattern},
+});
+speed.value = 2; // uploaded on the next frame
 ```
+
+`Uniform.f32 / i32 / u32 / vec2 / vec3 / vec4` (and `vec2i…vec4u`) lay out a uniform struct with WGSL
+alignment. The pass skips drawing until every `TextureUniform` has a texture.
 
 ### DeferredScenePass
 
-Renders a 3-D scene using deferred shading.
+Shadow maps, then a G-buffer, then one fullscreen lighting pass (Cook-Torrance BRDF, image-based ambient and
+reflections from `scene.environmentMap`). Up to 4 directional, 8 point and 4 spot lights; any can cast shadows.
 
-1. **G-buffer pass** — renders all geometry to albedo / normal / world-position textures.
-2. **Lighting accumulation** — a fullscreen pass that reads the G-buffer and accumulates contributions from every light in the scene.
+| Output     | Format                        | Contents                            |
+| ---------- | ----------------------------- | ----------------------------------- |
+| `color`    | `colorFormat` (`rgba16float`) | the lit scene                       |
+| `albedo`   | `rgba8unorm`                  | rgb base color, a ambient occlusion |
+| `normal`   | `rgba16float`                 | rgb world normal, a roughness       |
+| `worldPos` | `rgba16float`                 | rgb world position, a metallic      |
+| `emissive` | `rgba16float`                 | rgb emission, a receives shadow     |
+| `depth`    | `depth24plus`                 | depth                               |
 
-```ts
-import { DeferredScenePass } from "@repraze/glaze/passes/deferred-scene-pass";
-
-const scenePass = new DeferredScenePass({ scene });
-// renders to a single rgba16float output texture by default
-```
+Set `colorFormat: renderer.format` and `canvasSlot: "color"` to render straight to the canvas.
 
 ---
 
 ## Scene graph
 
 ```
-Scene
- └─ Entity (has localMatrix, children[])
-      ├─ Mesh      — geometry + material
-      ├─ Camera    — PerspectiveCamera | OrthographicCamera
-      └─ Light     — DirectionalLight | PointLight | SpotLight
+Scene (root, activeCamera, backgroundColor, ambientColor, environmentMap, backgroundMap, environmentColor)
+ └─ Entity (position, rotation [Euler XYZ radians], scale, enabled, children)
+      ├─ Mesh      geometry + material, castShadow, receiveShadow
+      ├─ Camera    PerspectiveCamera {fov, near, far} | OrthographicCamera {left, right, top, bottom, near, far}
+      └─ Light     DirectionalLight {direction} | PointLight {range} | SpotLight {direction, innerAngle, outerAngle, range}
 ```
 
-Children inherit the parent's world transform. World matrices are computed lazily each frame before rendering.
-
-### Entity
-
-```ts
-import { Entity } from "@repraze/glaze/scene/entity";
-
-entity.position.set(1, 2, 3);
-entity.rotation.set(0, Math.PI / 4, 0);  // Euler XYZ radians
-entity.scale.set(2, 2, 2);
-entity.add(child);
-```
-
-### Mesh
-
-```ts
-import { Mesh } from "@repraze/glaze/scene/mesh";
-import { createCube } from "@repraze/glaze/geometry/shapes";
-import { StandardMaterial } from "@repraze/glaze/material";
-
-const mesh = new Mesh(createCube({ size: 1 }), new StandardMaterial({ color: color("#ff8033") }));
-scene.add(mesh);
-```
-
-### Lights
-
-```ts
-import { DirectionalLight, PointLight, SpotLight } from "@repraze/glaze/scene/light";
-
-const sun  = new DirectionalLight({ direction: [0.5, -1, -0.5], color: color("#f2e6cc"), intensity: 1.5 });
-const bulb = new PointLight({ color: color("#ffcc66"), intensity: 3, range: 10 });
-const spot = new SpotLight({ innerAngle: Math.PI / 8, outerAngle: Math.PI / 4 });
-```
-
-### Cameras
-
-```ts
-import { PerspectiveCamera, OrthographicCamera } from "@repraze/glaze/scene/camera";
-
-const cam = new PerspectiveCamera({ fov: Math.PI / 3, near: 0.1, far: 1000 });
-cam.position.set(0, 2, 5);
-scene.activeCamera = cam;
-```
-
----
+Lights take `{color, intensity, castShadow}`. Children inherit their parent's transform; world matrices are
+updated by the scene pass each frame. Cameras must be in the tree.
 
 ## Geometry
 
-### Geometry class
+`Geometry({positions, normals, uvs, indices, tangents?})`, and factories that all take `flat?: boolean` (per-face
+normals): `createCube`, `createPlane`, `createQuad`, `createSphere`, `createIcosphere`, `createCylinder`,
+`createCone`, `createTorus`. `computeTangents(positions, normals, uvs, indices, vertexCount)` for normal maps.
+
+## Materials and textures
 
 ```ts
-import { Geometry } from "@repraze/glaze/geometry";
-
-// positions: Float32Array (3 floats/vertex)
-// normals:   Float32Array (3 floats/vertex)
-// uvs:       Float32Array (2 floats/vertex)
-// indices:   Uint32Array
-const geo = new Geometry({ positions, normals, uvs, indices });
+const gold = new PBRMaterial({color: colorRgb("#f0c040"), roughness: 0.1, metallic: 1, emissive: [0, 0, 0, 0]});
+gold.albedoMap = Texture.fromPixels(renderer.device, rgbaBytes, 256, 256); // also normalMap, ormMap, emissiveMap, heightMap
+gold.roughness = 0.3;
+gold.markDirty(); // after changing scalars
 ```
 
-### Shape factories
+`Texture.fromPixels(device, data, w, h)`, `Texture.fromURL(device, url)`, `Texture.fromBlob(device, blob)`.
+Meshes sharing a material share its GPU buffer and bind group. Emission is the rgb of `emissive` (alpha unused).
 
-All factories accept a `flat?: boolean` option. When `true`, the geometry is expanded into unshared triangles with per-face normals (flat shading).
+## Loaders
 
-| Function | Key options |
-|---|---|
-| `createCube(opts)` | `size`, `widthSegments`, `heightSegments`, `depthSegments` |
-| `createPlane(opts)` | `width`, `height`, `widthSegments`, `heightSegments` |
-| `createQuad(opts)` | `width`, `height` |
-| `createSphere(opts)` | `radius`, `widthSegments`, `heightSegments` |
-| `createIcosphere(opts)` | `radius`, `subdivisions` |
-| `createCylinder(opts)` | `radiusTop`, `radiusBottom`, `height`, `radialSegments`, `heightSegments`, `openEnded` |
-| `createCone(opts)` | `radius`, `height`, `radialSegments`, `heightSegments`, `openEnded` |
-| `createTorus(opts)` | `radius`, `tube`, `radialSegments`, `tubularSegments`, `arc` |
+`parseGLB(buffer)` / `loadGLBFromURL(url)` → `{geometry, material}[]`, with
+`createPBRMaterialFromGltf(device, material, resolveUri?)`; `parseOBJ(text)` / `loadOBJFromURL(url)`;
+`parseSTL(buffer)` (binary or text STL) / `loadSTLFromURL(url)`.
 
----
+## Color
 
-## Material
-
-### StandardMaterial
+The renderer applies no gamma: what a pass writes is what the canvas shows, so `colorRgb("#ff6b35")` in a
+ShaderPass matches CSS `#ff6b35`. Convert explicitly for linear-light work.
 
 ```ts
-import { StandardMaterial } from "@repraze/glaze/material";
+import {colorRgb, colorRgba, linearToSrgb, setColorRgb, srgbToLinear} from "@repraze/glaze";
 
-const mat = new StandardMaterial({
-    color: color("#ff8033"),    // albedo RGB (default [1,1,1])
-    roughness: 0.6,             // 0–1
-    metallic: 0.0,              // 0–1
-    emissive: color4("#ff4400", 0.8), // RGBA emission
-});
+colorRgb("#ff6b35"); // [1, 0.42, 0.21]: bytes ÷ 255, no gamma
+colorRgba("#ff6b35", 0.5); // [1, 0.42, 0.21, 0.5]
+setColorRgb(scene.ambientColor, "#050508"); // in place, for per-frame updates
+srgbToLinear(0.5); // ≈ 0.214
 ```
 
-Multiple mesh instances sharing the **same** `StandardMaterial` instance reuse the same GPU buffer and bind group — no redundant uploads.
+## Helpers
 
-Call `mat.markDirty()` after mutating properties to force a GPU uniform update on the next frame.
+`lerp`, `clamp`, `smoothstep`, `smootherstep`, `easeIn`, `easeOut`, `easeInOut`, `pingpong`, `oscillate`,
+`bounce` for animation.
 
----
+## Develop
 
-## Render targets
+From the repository root: `npm test` (node's test runner through tsx), `npm run typecheck`,
+`npm run build -w @repraze/glaze` (emits `dist/`).
 
-Passing `outputSpecs: []` (or omitting it on the last pass) directs the pass output to the canvas. Any non-empty `outputSpecs` array creates GPU textures that the next pass in the chain receives as inputs.
+## License
 
-Fixed-size output textures are created at the specified dimensions and are not resized with the canvas. Omitting `width`/`height` in a spec causes the texture to match the canvas size and be recreated on resize.
-
----
-
-## Animation & lifecycle
-
-```ts
-// Start/stop animation
-const stop = renderer.startAnimation(passes);
-stop();
-
-// Single frame (e.g. static renders, tests)
-renderer.renderFrame(passes);
-
-// Explicit resize (called automatically if ResizeObserver is used)
-renderer.resize(width, height);
-
-// Full teardown
-renderer.destroy();
-```
-
----
-
-## Math
-
-This library uses [`gl-matrix`](https://glmatrix.net/) for all vector/matrix math. Import it directly when needed:
-
-```ts
-import { mat4, vec3 } from "gl-matrix";
-```
+MIT

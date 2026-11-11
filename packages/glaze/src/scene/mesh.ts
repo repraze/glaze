@@ -1,6 +1,6 @@
-import type { Geometry } from "../geometry/geometry";
-import type { Material } from "../material/material";
-import { Entity } from "./entity";
+import type {Geometry} from "../geometry/geometry";
+import type {Material} from "../material/material";
+import {Entity} from "./entity";
 
 export class Mesh extends Entity {
     geometry: Geometry;

@@ -517,9 +517,12 @@ export interface DeferredScenePassOptions {
  *   emissive — rgba16float, rgb=emissive, a=receiveShadow
  *   depth    — depth24plus
  */
-export class DeferredScenePass extends Pass {
+/** The G-buffer and lit outputs a DeferredScenePass exposes to the graph. */
+export type DeferredSceneOutput = "color" | "albedo" | "normal" | "worldPos" | "emissive" | "depth";
+
+export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     readonly inputSlots: PassInputSlot[] = [];
-    readonly outputSlots: PassOutputSlot[];
+    readonly outputSlots: PassOutputSlot<DeferredSceneOutput>[];
 
     private readonly scene: Scene;
     private readonly colorFormat: GPUTextureFormat;
