@@ -1,0 +1,9 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@repraze/kernelkit/styles.css";
+
+:root {
+    --kk-font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+    --kk-font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+}
