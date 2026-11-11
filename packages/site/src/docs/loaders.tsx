@@ -5,12 +5,14 @@ import {
     DirectionalLight,
     Entity,
     loadGLBFromURL,
+    loadOBJFromURL,
     Mesh,
     parseOBJ,
     PBRMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
+    Texture,
 } from "@repraze/glaze";
 import {Badge} from "@repraze/kernelkit/components/badge";
 import {Spinner} from "@repraze/kernelkit/components/spinner";
@@ -34,20 +36,23 @@ export const doc = defineDoc({
         {
             title: "GLB model viewer",
             description:
-                "Ported from the repraze.com lab: Khronos glTF sample models fetched from GitHub, parsed, given their PBR materials and fitted to the view, under an environment map. Needs network access.",
+                "Ported from the repraze.com lab: Khronos glTF sample models, shipped with this site, parsed, given their PBR materials and fitted to the view, under an environment map.",
             component: ModelViewer,
             layout: "full",
         },
         {
-            title: "OBJ from text",
+            title: "OBJ from a file or text",
             description:
-                "parseOBJ on an inline string: positions and faces only, so the parser computes flat normals and tangents.",
+                "loadOBJFromURL on a shipped file, textured with Texture.fromURL: its labels read upright because OBJ's v-up texture coordinates are flipped on load. Or parseOBJ on an inline string: positions and faces only, so the parser computes flat normals and tangents.",
             component: ObjFromText,
             layout: "full",
         },
     ],
     notes: Notes,
-    sections: [{id: "materials-from-gltf", title: "Materials from glTF"}],
+    sections: [
+        {id: "materials-from-gltf", title: "Materials from glTF"},
+        {id: "sample-assets", title: "Sample assets"},
+    ],
     props: [
         {
             component: "GLB",
@@ -62,7 +67,13 @@ export const doc = defineDoc({
                     name: "createPBRMaterialFromGltf(device, descriptor, resolveUri?)",
                     type: "Promise<PBRMaterial>",
                     description:
-                        "Factors and maps (base color, normal, emissive, metallic-roughness) from the descriptor.",
+                        "Factors and maps from the descriptor: base color, normal (with scale), emissive, metallic-roughness, occlusion (with strength).",
+                },
+                {
+                    name: "planGltfMaterial(descriptor)",
+                    type: "GltfMaterialPlan",
+                    description:
+                        "The same mapping without a GPU: PBRMaterial options and which image goes in which map.",
                 },
                 {name: "GLBPrimitive", type: "{geometry; material: GltfMaterialDescriptor | null}"},
             ],
@@ -85,12 +96,29 @@ export const doc = defineDoc({
 
 function Notes() {
     return (
+        <>
+            <MaterialsNotes />
+            <SampleAssets />
+        </>
+    );
+}
+
+function MaterialsNotes() {
+    return (
         <section id="materials-from-gltf" className="flex scroll-mt-24 flex-col gap-3">
             <h2 className="font-mono text-xl font-semibold">Materials from glTF</h2>
             <p className="text-sm text-muted-foreground">
                 Parsing needs no GPU, so it can run in a worker or a test. Textures referenced by URI resolve against
                 the model&apos;s folder through <code className="font-mono text-foreground">resolveUri</code>; embedded
-                images decode from the binary chunk.
+                images decode from the binary chunk. Node transforms of the default scene are baked into each
+                primitive&apos;s geometry.
+            </p>
+            <p className="text-sm text-muted-foreground">
+                The metallic-roughness texture supplies roughness (green) and metallic (blue) only. Occlusion comes from
+                the occlusion texture, scaled by its strength, and is 1 without one; when both are the same image
+                (packed occlusion-roughness-metallic) it becomes the material&apos;s{" "}
+                <code className="font-mono text-foreground">ormMap</code>. glTF factors are linear and are converted to
+                the sRGB values Glaze works in. Textures on a second UV set are skipped: Glaze geometry has one.
             </p>
             <Code
                 code={`const primitives = await loadGLBFromURL(url);
@@ -133,9 +161,7 @@ export function ModelViewer() {
                             </Badge>
                         ) : null}
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                        Khronos glTF-Sample-Assets (CC0 / CC BY 4.0 / SCEA, see their repository).
-                    </p>
+                    <SampleCredit sample={MODELS.find((m) => m.value === model) ?? MODELS[0]!} />
                 </>
             }
         >
@@ -241,27 +267,152 @@ export function ModelViewer() {
     );
 }
 
-const SAMPLES = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models";
+// ─── Sample assets ────────────────────────────────────────────────────────────
 
-/**
- * Base-color-only samples. Models with a glTF metallicRoughness texture (Damaged Helmet, Avocado) render dark:
- * createPBRMaterialFromGltf binds that texture as the ORM map, whose red channel the scene pass reads as
- * * occlusion, and glTF leaves that channel unspecified.
- */
-const MODELS = [
-    {value: `${SAMPLES}/Duck/glTF-Binary/Duck.glb`, label: "Duck"},
-    {value: `${SAMPLES}/BoxTextured/glTF-Binary/BoxTextured.glb`, label: "Textured box"},
-    {value: `${SAMPLES}/Box/glTF-Binary/Box.glb`, label: "Box"},
+/** Shipped under public/models (each folder has the licence text and a README with source and commit). */
+const MODELS_URL = `${import.meta.env.BASE_URL}models/`;
+const KHRONOS_SAMPLES =
+    "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb";
+
+interface SampleModel {
+    /** URL of the GLB, under the site's base path. */
+    value: string;
+    label: string;
+    /** Folder under public/models. */
+    folder: string;
+    /** Model directory in glTF-Sample-Assets. */
+    source: string;
+    title: string;
+    credit: string;
+    licence: "CC0 1.0" | "CC BY 4.0";
+    /** What the model exercises. */
+    shows: string;
+}
+
+const sample = (folder: string, file: string, rest: Omit<SampleModel, "value" | "folder">): SampleModel => ({
+    value: `${MODELS_URL}${folder}/${file}`,
+    folder,
+    ...rest,
+});
+
+const MODELS: SampleModel[] = [
+    sample("avocado", "Avocado.glb", {
+        label: "Avocado",
+        source: "Avocado",
+        title: "Avocado",
+        credit: "Microsoft",
+        licence: "CC0 1.0",
+        shows: "base color, metallic-roughness and normal maps, supplied tangents, a node rotation",
+    }),
+    sample("clearcoat-wicker", "ClearcoatWicker.glb", {
+        label: "Wicker",
+        source: "ClearcoatWicker",
+        title: "Clearcoat Wicker",
+        credit: "Eric Chadwick",
+        licence: "CC0 1.0",
+        shows: "occlusion packed with metallic-roughness in one image, normal map, generated tangents",
+    }),
+    sample("carbon-fibre", "CarbonFibre.glb", {
+        label: "Carbon fibre",
+        source: "CarbonFibre",
+        title: "Carbon Fibre",
+        credit: "Eric Chadwick, © 2023 Wayfair",
+        licence: "CC BY 4.0",
+        shows: "a separate occlusion texture, normal map scale 2, factors without a metallic-roughness texture",
+    }),
+    sample("metal-rough-spheres", "MetalRoughSpheresNoTextures.glb", {
+        label: "Metal-rough spheres",
+        source: "MetalRoughSpheresNoTextures",
+        title: "Metal Rough Spheres (no textures)",
+        credit: "Krill Gavrilov",
+        licence: "CC0 1.0",
+        shows: "metallic and roughness factors only, no textures, one node transform per sphere",
+    }),
+    sample("texture-coordinate-test", "TextureCoordinateTest.glb", {
+        label: "Texture coordinates",
+        source: "TextureCoordinateTest",
+        title: "Texture Coordinate Test",
+        credit: "Ed Mackey, © 2017 Analytical Graphics, Inc.",
+        licence: "CC0 1.0",
+        shows: "texture orientation: each label sits in its own corner; base color factors tint one texture",
+    }),
 ];
+
+function LicenceLink({sample}: {sample: SampleModel}) {
+    return (
+        <a href={`${MODELS_URL}${sample.folder}/LICENSE.txt`} className="underline underline-offset-4">
+            {sample.licence}
+        </a>
+    );
+}
+
+/** The credit line under the viewer, for the model on screen. */
+function SampleCredit({sample}: {sample: SampleModel}) {
+    return (
+        <p className="text-xs text-muted-foreground">
+            &ldquo;{sample.title}&rdquo; by {sample.credit}, <LicenceLink sample={sample} />, from the{" "}
+            <a href={`${KHRONOS_SAMPLES}/Models/${sample.source}`} className="underline underline-offset-4">
+                Khronos glTF Sample Assets
+            </a>
+            .
+        </p>
+    );
+}
+
+function SampleAssets() {
+    return (
+        <section id="sample-assets" className="flex scroll-mt-24 flex-col gap-3">
+            <h2 className="font-mono text-xl font-semibold">Sample assets</h2>
+            <p className="text-sm text-muted-foreground">
+                The demos load models this site ships, from <code className="font-mono text-foreground">models/</code>{" "}
+                under its base path: nothing is fetched from elsewhere. They come unmodified from the{" "}
+                <a href={KHRONOS_SAMPLES} className="underline underline-offset-4">
+                    Khronos glTF Sample Assets
+                </a>{" "}
+                (commit 8f49239); the OBJ and its image are converted from Texture Coordinate Test. Each folder holds
+                the licence text and a README with the source.
+            </p>
+            <ul className="flex list-disc flex-col gap-1 pl-5 text-sm text-muted-foreground">
+                {MODELS.map((m) => (
+                    <li key={m.folder}>
+                        <span className="text-foreground">{m.title}</span> by {m.credit}, <LicenceLink sample={m} />:{" "}
+                        {m.shows}.
+                    </li>
+                ))}
+            </ul>
+        </section>
+    );
+}
+
+const TEXTURE_COORDINATE_TEST = MODELS.find((m) => m.folder === "texture-coordinate-test")!;
+
+const OBJ_SOURCES = [
+    {value: "file", label: "Texture Coordinate Test (file)"},
+    {value: "text", label: "Gem (inline text)"},
+] as const;
+type ObjSource = (typeof OBJ_SOURCES)[number]["value"];
 
 export function ObjFromText() {
     const colors = useSceneColors();
+    const [source, setSource] = useState<ObjSource>("file");
+    const live = useLatest(source);
     return (
-        <DemoStage>
+        <DemoStage
+            controls={
+                <>
+                    <ControlSelect label="Source" value={source} options={OBJ_SOURCES} onChange={setSource} />
+                    {source === "file" ? <SampleCredit sample={TEXTURE_COORDINATE_TEST} /> : null}
+                </>
+            }
+        >
             <GlazeCanvas
-                label="A small faceted gem, parsed from OBJ text, turning slowly"
-                setup={() => {
-                    const geometry = parseOBJ(GEM_OBJ);
+                label="An OBJ model turning slowly: four textured squares with corner labels, or a faceted gem"
+                setup={async ({renderer}) => {
+                    const folder = `${MODELS_URL}${TEXTURE_COORDINATE_TEST.folder}/`;
+                    const [squares, texture] = await Promise.all([
+                        loadOBJFromURL(`${folder}TextureCoordinateTest.obj`),
+                        Texture.fromURL(renderer.device, `${folder}TextureCoordinateTest.png`),
+                    ]);
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
@@ -279,17 +430,33 @@ export function ObjFromText() {
                         ),
                     );
                     const gem = new Mesh(
-                        geometry,
+                        parseOBJ(GEM_OBJ),
                         palette.material(new PBRMaterial({roughness: 0.15, metallic: 0.3}), (c) => c.hues.purple),
                     );
-                    scene.add(gem);
+                    const labelled = new PBRMaterial({roughness: 0.7}); // white base: the image is the color
+                    labelled.albedoMap = texture;
+                    const card = new Mesh(squares, labelled);
+                    let shown: Mesh | null = null;
 
                     const graph = new RenderGraph();
                     const {color} = graph.addPass(new DeferredScenePass({scene}));
                     graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas"});
                     return ({time}) => {
                         palette.apply();
-                        vec3.set(gem.rotation, 0.2, time * 0.6, 0);
+                        const next = live.current === "file" ? card : gem;
+                        if (next !== shown) {
+                            if (shown) {
+                                scene.remove(shown);
+                            }
+                            scene.add(next);
+                            shown = next;
+                        }
+                        // the card sways to stay readable; the gem turns
+                        if (next === card) {
+                            vec3.set(card.rotation, 0, Math.sin(time * 0.6) * 0.5, 0);
+                        } else {
+                            vec3.set(gem.rotation, 0.2, time * 0.6, 0);
+                        }
                         return graph;
                     };
                 }}
