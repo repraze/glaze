@@ -14,7 +14,6 @@ import {
     SpotLight,
     type ToneMapping,
 } from "@repraze/glaze";
-import {Badge} from "@repraze/kernelkit/components/badge";
 import {
     CardAction,
     CardDescription,
@@ -29,7 +28,7 @@ import {vec3} from "gl-matrix";
 import {useState} from "react";
 
 import {PipelineDiagram} from "@/components/pipeline-diagram";
-import {ControlSwitch, DemoStage} from "@/glaze/demo-stage";
+import {ControlStats, ControlSwitch, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
 import {makeEnvironments} from "@/glaze/helpers";
 import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
@@ -160,17 +159,7 @@ export function Glance() {
                             onChange={(on) => setParts((p) => ({...p, [name]: on}))}
                         />
                     ))}
-                    <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                        {status === null ? (
-                            <Spinner />
-                        ) : (
-                            status.map((fact) => (
-                                <Badge key={fact} variant="outline">
-                                    {fact}
-                                </Badge>
-                            ))
-                        )}
-                    </div>
+                    <ControlStats facts={status} pending={<Spinner />} />
                     <p className="text-sm text-muted-foreground" aria-live="polite">
                         {flicked === 0
                             ? "Click a sprinkle to flick it off."

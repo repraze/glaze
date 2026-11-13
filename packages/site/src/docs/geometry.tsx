@@ -9,11 +9,10 @@ import {
     RenderGraph,
     Scene,
 } from "@repraze/glaze";
-import {Badge} from "@repraze/kernelkit/components/badge";
 import {vec3} from "gl-matrix";
 import {useState} from "react";
 
-import {ControlSelect, ControlSwitch, DemoStage} from "@/glaze/demo-stage";
+import {ControlSelect, ControlStats, ControlSwitch, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
 import {makeShape, type ShapeKind, SHAPES} from "@/glaze/helpers";
 import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
@@ -133,10 +132,7 @@ export function Shapes() {
                 <>
                     <ControlSelect label="Factory" value={shape} options={SHAPES} onChange={setShape} />
                     <ControlSwitch label="Flat shading" checked={flat} onChange={setFlat} />
-                    <div className="flex flex-wrap gap-1">
-                        <Badge variant="outline">{stats.vertices} vertices</Badge>
-                        <Badge variant="outline">{stats.triangles} triangles</Badge>
-                    </div>
+                    <ControlStats facts={[`${stats.vertices} vertices`, `${stats.triangles} triangles`]} />
                 </>
             }
         >

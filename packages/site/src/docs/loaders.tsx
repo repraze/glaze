@@ -21,7 +21,7 @@ import {Spinner} from "@repraze/kernelkit/components/spinner";
 import {vec3} from "gl-matrix";
 import {useState} from "react";
 
-import {ControlSelect, DemoStage} from "@/glaze/demo-stage";
+import {ControlSelect, ControlStats, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
 import {makeEnvironments} from "@/glaze/helpers";
 import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
@@ -155,7 +155,9 @@ const box = computeWorldBounds(model.root);         // frame it
 export function ModelViewer() {
     const colors = useSceneColors();
     const [model, setModel] = useState(MODELS[0]!.value);
-    const [status, setStatus] = useState<{state: "loading" | "ready" | "failed"; detail?: string}>({state: "loading"});
+    const [status, setStatus] = useState<{state: "loading" | "ready" | "failed"; detail?: string; facts?: string[]}>({
+        state: "loading",
+    });
     const live = useLatest(model);
     return (
         <DemoStage
@@ -172,7 +174,7 @@ export function ModelViewer() {
                     />
                     <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                         {status.state === "loading" ? <Spinner /> : null}
-                        {status.state === "ready" ? <Badge variant="outline">{status.detail}</Badge> : null}
+                        {status.state === "ready" ? <ControlStats facts={status.facts ?? []} /> : null}
                         {status.state === "failed" ? (
                             <Badge color="danger" variant="soft">
                                 {status.detail}
@@ -243,7 +245,11 @@ export function ModelViewer() {
                         const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
                         setStatus({
                             state: "ready",
-                            detail: `${plural(model.nodes.length, "node")} · ${plural(model.meshes.length, "mesh", "meshes")} · ${plural(model.materials.length, "material")}`,
+                            facts: [
+                                plural(model.nodes.length, "node"),
+                                plural(model.meshes.length, "mesh", "meshes"),
+                                plural(model.materials.length, "material"),
+                            ],
                         });
                     };
 
@@ -390,7 +396,7 @@ function SampleAssets() {
 const TEXTURE_COORDINATE_TEST = MODELS.find((m) => m.folder === "texture-coordinate-test")!;
 
 const OBJ_SOURCES = [
-    {value: "file", label: "Texture Coordinate Test (file)"},
+    {value: "file", label: "UV test (file)"},
     {value: "text", label: "Gem (inline text)"},
 ] as const;
 type ObjSource = (typeof OBJ_SOURCES)[number]["value"];

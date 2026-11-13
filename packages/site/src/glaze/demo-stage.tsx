@@ -1,3 +1,4 @@
+import {Badge} from "@repraze/kernelkit/components/badge";
 import {Label} from "@repraze/kernelkit/components/label";
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from "@repraze/kernelkit/components/select";
 import {Slider} from "@repraze/kernelkit/components/slider";
@@ -179,6 +180,24 @@ export function ControlGroup({label, children}: {label: string; children: ReactN
         <div className="flex flex-col gap-3">
             <span className="text-xs font-medium text-muted-foreground">{label}</span>
             {children}
+        </div>
+    );
+}
+
+/**
+ * Facts about the scene (counts, timings) as outline badges that wrap: one badge per fact, so a narrow panel
+ * stacks them instead of overflowing. A spinner stands in while `facts` is null.
+ */
+export function ControlStats({facts, pending}: {facts: readonly string[] | null; pending?: ReactNode}) {
+    return (
+        <div data-slot="demo-stats" className="flex min-w-0 flex-wrap items-center gap-1">
+            {facts === null
+                ? pending
+                : facts.map((fact) => (
+                      <Badge key={fact} variant="outline" className="max-w-full">
+                          <span className="truncate">{fact}</span>
+                      </Badge>
+                  ))}
         </div>
     );
 }

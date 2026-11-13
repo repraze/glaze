@@ -45,12 +45,13 @@ export function PipelineDiagram({highlight, className}: {highlight?: PipelineSta
     return (
         <figure
             data-slot="pipeline-diagram"
-            className={cn("flex flex-col gap-3 rounded-xl border border-border bg-card p-4", className)}
+            className={cn("@container flex flex-col gap-3 rounded-xl border border-border bg-card p-4", className)}
         >
             <figcaption className="font-mono text-xs text-muted-foreground uppercase">
                 Renderer · one RenderGraph per frame
             </figcaption>
-            <ol className="flex flex-col items-stretch gap-2 lg:flex-row">
+            {/* a row only when the diagram itself is wide (the home page), stacked in the docs column and on phones */}
+            <ol className="flex flex-col items-stretch gap-2 @5xl:flex-row">
                 {STAGES.map((stage) => (
                     <Fragment key={stage.id}>
                         <li
@@ -62,7 +63,7 @@ export function PipelineDiagram({highlight, className}: {highlight?: PipelineSta
                             <div className="flex flex-col gap-0.5">
                                 <span
                                     className={cn(
-                                        "truncate font-mono text-xs font-semibold",
+                                        "font-mono text-xs font-semibold break-words",
                                         highlight === stage.id && "text-primary-text",
                                     )}
                                 >
@@ -81,10 +82,10 @@ export function PipelineDiagram({highlight, className}: {highlight?: PipelineSta
                         {stage.edge ? (
                             <li
                                 aria-hidden
-                                className="flex items-center justify-center gap-1 text-muted-foreground lg:flex-col lg:self-center"
+                                className="flex items-center justify-center gap-1 text-muted-foreground @5xl:flex-col @5xl:self-center"
                             >
-                                <ArrowDownIcon className="size-4 lg:hidden" />
-                                <ArrowRightIcon className="hidden size-4 lg:block" />
+                                <ArrowDownIcon className="size-4 @5xl:hidden" />
+                                <ArrowRightIcon className="hidden size-4 @5xl:block" />
                                 <span className="font-mono text-[10px]">{stage.edge}</span>
                             </li>
                         ) : null}
