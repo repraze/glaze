@@ -355,6 +355,12 @@ const MAX_SPOT = 4;
 const SHADOW_MAP_SIZE = 1024;
 const POINT_SHADOW_MAP_SIZE = 512;
 const SHADOW_BIAS = 0.002;
+/** Normal offset, in shadow texels at a grazing light (see shadowLookup). */
+const SHADOW_NORMAL_OFFSET = "1.5";
+/** Directional shadows cover ±DIRECTIONAL_SHADOW_EXTENT world units. */
+const DIRECTIONAL_SHADOW_EXTENT = 12;
+/** World size of one directional shadow texel, as a WGSL literal. */
+const DIRECTIONAL_SHADOW_TEXEL = ((2 * DIRECTIONAL_SHADOW_EXTENT) / SHADOW_MAP_SIZE).toFixed(6);
 
 const POINT_SHADOW_MATRICES_SIZE = MAX_POINT * 6 * 64;
 
@@ -494,6 +500,14 @@ fn pcfShadow(shadowMap: texture_depth_2d_array, layer: i32, lsMatrix: mat4x4<f32
     return lit * 0.25;
 }
 
+// Normal offset: where to look a point up in a shadow map. Nudged off the surface along its normal by about a
+// shadow texel (texel: its world size there), more as the light grazes: a face turning edge-on to the light
+// otherwise shadows itself in stair-stepped bands that don't follow its edges.
+fn shadowLookup(worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>, texel: f32) -> vec3<f32> {
+    let sinTheta = sqrt(1.0 - clamp(dot(N, L), 0.0, 1.0) * clamp(dot(N, L), 0.0, 1.0));
+    return worldPos + N * (texel * ${SHADOW_NORMAL_OFFSET} * sinTheta);
+}
+
 fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f32, worldPos: vec3<f32>, receiveShadow: f32) -> vec3<f32> {
     let roughness = clamp(roughnessIn, 0.05, 1.0);
     let V     = normalize(lighting.cameraPosition.xyz - worldPos);
@@ -512,7 +526,8 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let L  = normalize(-dl.direction.xyz);
         var shadow = 1.0;
         if (dl.direction.w > 0.5) {
-            let raw = pcfShadow(dirShadowMaps, i32(i), dl.lightSpaceMatrix, worldPos);
+            let at  = shadowLookup(worldPos, N, L, ${DIRECTIONAL_SHADOW_TEXEL});
+            let raw = pcfShadow(dirShadowMaps, i32(i), dl.lightSpaceMatrix, at);
             shadow = mix(1.0, raw, receiveShadow);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
@@ -539,7 +554,9 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
             }
             let layer    = i32(i) * 6 + faceIdx;
             let lsMatrix = pointShadowMatrices.matrices[layer];
-            let raw      = pcfShadow(pointShadowMaps, layer, lsMatrix, worldPos);
+            // a 90° face: a texel spans 2 · distance / size
+            let at       = shadowLookup(worldPos, N, L, 2.0 * dist / f32(${POINT_SHADOW_MAP_SIZE}));
+            let raw      = pcfShadow(pointShadowMaps, layer, lsMatrix, at);
             shadow       = mix(1.0, raw, receiveShadow);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
@@ -559,7 +576,10 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         );
         var shadow = 1.0;
         if (sl.direction.w > 0.5) {
-            let raw = pcfShadow(spotShadowMaps, i32(i), sl.lightSpaceMatrix, worldPos);
+            // the cone spans 2 · tan(outer) · distance over the map
+            let cosOuter = max(sl.angles.y, 0.01);
+            let texel    = 2.0 * dist * sqrt(1.0 - cosOuter * cosOuter) / cosOuter / f32(${SHADOW_MAP_SIZE});
+            let raw = pcfShadow(spotShadowMaps, i32(i), sl.lightSpaceMatrix, shadowLookup(worldPos, N, L, texel));
             shadow = mix(1.0, raw, receiveShadow);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
@@ -1811,7 +1831,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         mat4.lookAt(view, eye, [0, 0, 0], up);
 
         const proj = mat4.create();
-        mat4.orthoZO(proj, -12, 12, -12, 12, 0.1, 50);
+        const e = DIRECTIONAL_SHADOW_EXTENT;
+        mat4.orthoZO(proj, -e, e, -e, e, 0.1, 50);
 
         const lsMatrix = mat4.create();
         mat4.multiply(lsMatrix, proj, view);
