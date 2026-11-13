@@ -60,7 +60,18 @@ export const doc = defineDoc({
                 {
                     name: "Texture.fromBlob(device, blob)",
                     type: "Promise<Texture>",
-                    description: "Decode with createImageBitmap.",
+                    description: "Decode with createImageBitmap (scaled down if larger than the GPU allows).",
+                },
+                {
+                    name: "Texture.fromFloat32(device, rgba, width, height)",
+                    type: "Texture",
+                    description:
+                        "HDR: linear float RGBA stored as half floats, for skies and environments brighter than 1.",
+                },
+                {
+                    name: "Texture.fromHDR(device, url)",
+                    type: "Promise<Texture>",
+                    description: "A Radiance .hdr (RGBE) environment, the usual format for HDRIs.",
                 },
                 {name: "view", type: "GPUTextureView", description: "Bound by materials and the scene pass."},
                 {

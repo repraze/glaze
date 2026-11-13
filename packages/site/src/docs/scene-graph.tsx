@@ -66,7 +66,8 @@ export const doc = defineDoc({
                     name: "environmentMap",
                     type: "Texture | null",
                     default: "null",
-                    description: "Equirectangular map for image-based light.",
+                    description:
+                        "Equirectangular map for image-based light: prefiltered once on the GPU, so reflections blur with roughness and diffuse surfaces take its light too. HDR (Texture.fromHDR) for a sky brighter than 1.",
                 },
                 {
                     name: "backgroundMap",

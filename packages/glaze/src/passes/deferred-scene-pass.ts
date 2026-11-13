@@ -14,6 +14,7 @@ import type {Scene} from "../scene/scene";
 import {type Cascade, fitCascades, lightView, MAX_CASCADES} from "../scene/shadow-cascades";
 import {SkinnedMesh} from "../scene/skin";
 import type {Texture, TextureSampling, WrapMode} from "../texture";
+import {ENV_SPECULAR_LEVELS, EnvironmentPrefilter} from "./environment";
 
 // ─── WGSL shaders ─────────────────────────────────────────────────────────────
 
@@ -518,7 +519,8 @@ ${COLOR_WGSL}
 ${LIGHT_STRUCTS_WGSL}
 
 @group(3) @binding(0) var<uniform> lighting: LightingUniforms;
-@group(3) @binding(1) var environmentMap:    texture_2d<f32>;
+@group(3) @binding(1) var environmentMap:    texture_2d<f32>; // prefiltered by roughness
+@group(3) @binding(8) var irradianceMap:     texture_2d<f32>;
 @group(3) @binding(2) var envSampler:        sampler;
 @group(3) @binding(3) var dirShadowMaps:     texture_depth_2d_array;
 @group(3) @binding(4) var spotShadowMaps:    texture_depth_2d_array;
@@ -717,9 +719,6 @@ fn F_Schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
     return F0 + (vec3<f32>(1.0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-fn F_SchlickRoughness(cosTheta: f32, F0: vec3<f32>, roughness: f32) -> vec3<f32> {
-    return F0 + (max(vec3<f32>(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
 
 const INV_TWO_PI: f32 = 0.15915494;
 const INV_PI:     f32 = 0.31830988;
@@ -730,8 +729,25 @@ fn sampleEquirect(dir: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(phi * INV_TWO_PI + 0.5, 0.5 - theta * INV_PI);
 }
 
-fn sampleEnvMap(dir: vec3<f32>) -> vec3<f32> {
-    return textureSampleLevel(environmentMap, envSampler, sampleEquirect(dir), 0.0).rgb;
+// The environment's light from 'dir', blurred for 'roughness' (its mips are GGX-prefiltered levels).
+fn sampleEnvSpecular(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
+    let level = roughness * ${ENV_SPECULAR_LEVELS - 1}.0;
+    return textureSampleLevel(environmentMap, envSampler, sampleEquirect(dir), level).rgb;
+}
+
+// The environment's diffuse light around normal N (cosine-weighted average, already divided by π).
+fn sampleIrradiance(N: vec3<f32>) -> vec3<f32> {
+    return textureSampleLevel(irradianceMap, envSampler, sampleEquirect(N), 0.0).rgb;
+}
+
+// The split-sum's environment BRDF, scale and bias on F0, fitted analytically (Karis, "Physically Based Shading
+// on Mobile"): no lookup texture.
+fn envBRDF(roughness: f32, NdotV: f32) -> vec2<f32> {
+    let c0 = vec4<f32>(-1.0, -0.0275, -0.572, 0.022);
+    let c1 = vec4<f32>(1.0, 0.0425, 1.04, -0.04);
+    let r = roughness * c0 + c1;
+    let a004 = min(r.x * r.x, exp2(-9.28 * NdotV)) * r.x + r.y;
+    return vec2<f32>(-1.04, 1.04) * a004 + r.zw;
 }
 
 // Point and spot falloff: inverse square (intensity 1 at distance 1 lights like a directional light of 1), faded
@@ -742,7 +758,8 @@ fn falloff(d: f32, reach: f32) -> f32 {
     return window * window / max(d * d, 1e-4);
 }
 
-fn brdf_direct(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, albedo: vec3<f32>, roughness: f32, metallic: f32, F0: vec3<f32>, NdotV: f32) -> vec3<f32> {
+// 'energy' scales the specular lobe back up by what single scattering loses on rough surfaces.
+fn brdf_direct(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, albedo: vec3<f32>, roughness: f32, metallic: f32, F0: vec3<f32>, NdotV: f32, energy: vec3<f32>) -> vec3<f32> {
     let H     = normalize(V + L);
     let NdotL = max(dot(N, L), 0.0);
     let NdotH = max(dot(N, H), 0.0);
@@ -750,7 +767,7 @@ fn brdf_direct(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, albedo: vec3<f32>, roug
     let D = D_GGX(NdotH, roughness);
     let G = G_Smith(NdotV, NdotL, roughness);
     let F = F_Schlick(HdotV, F0);
-    let specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
+    let specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001) * energy;
     let diffuse  = (1.0 - metallic) * albedo / PI;
     return (diffuse + specular) * NdotL;
 }
@@ -916,11 +933,23 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
     let F0    = mix(vec3<f32>(0.04), albedo, metallic);
     let rotation = shadowNoise(pixel);
 
-    let F_ibl = F_SchlickRoughness(NdotV, F0, roughness);
-    let kD    = (1.0 - F_ibl) * (1.0 - metallic);
-    let R     = reflect(-V, N);
-    let indirect_diffuse  = lighting.ambientColor.rgb    * albedo * ao * kD;
-    let indirect_specular = sampleEnvMap(R) * lighting.environmentColor.rgb * F_ibl * ao;
+    // Image-based light (split sum), with multiple scattering (Fdez-Agüera 2019): rough metals keep their
+    // energy instead of darkening, and the diffuse part takes only what the specular leaves.
+    let ab      = envBRDF(roughness, NdotV);
+    let FssEss  = F0 * ab.x + ab.y;
+    let Ess     = ab.x + ab.y;
+    let Ems     = 1.0 - Ess;
+    let Favg    = F0 + (1.0 - F0) / 21.0;
+    let Fms     = FssEss * Favg / (1.0 - Ems * Favg);
+    let specIbl = FssEss + Fms * Ems;
+    let kD      = (1.0 - specIbl) * (1.0 - metallic);
+    let energy  = 1.0 + F0 * (1.0 / max(Ess, 0.01) - 1.0);
+    let R       = reflect(-V, N);
+    // environmentColor.w: 1 with an environment map, whose irradiance lights diffuse surfaces too
+    let diffuseLight      = lighting.ambientColor.rgb
+                          + sampleIrradiance(N) * lighting.environmentColor.rgb * lighting.environmentColor.w;
+    let indirect_diffuse  = diffuseLight * albedo * ao * kD;
+    let indirect_specular = sampleEnvSpecular(R, roughness) * lighting.environmentColor.rgb * specIbl * ao;
     var colour = indirect_diffuse + indirect_specular;
 
     for (var i = 0u; i < lighting.counts.x; i++) {
@@ -930,7 +959,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         if (dl.direction.w > 0.0 && receiveShadow > 0.0 && dot(N, L) > 0.0) {
             shadow = mix(1.0, directionalShadow(i, worldPos, N, L, rotation), receiveShadow * dl.direction.w);
         }
-        colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
+        colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV, energy)
                   * dl.colorIntensity.rgb * dl.colorIntensity.w * shadow;
     }
 
@@ -959,7 +988,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
             let raw   = perspectiveShadow(pointShadowMaps, layer, pointShadowMatrices.matrices[layer], worldPos, N, L, texel, pl.shadow, pl.shadowBias, f32(${sizes.point}), rotation);
             shadow    = mix(1.0, raw, receiveShadow * pl.flags.x);
         }
-        colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
+        colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV, energy)
                   * pl.colorIntensity.rgb * (pl.colorIntensity.w * attn * shadow);
     }
 
@@ -980,7 +1009,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
             let raw = perspectiveShadow(spotShadowMaps, i32(i), sl.lightSpaceMatrix, worldPos, N, L, texel, sl.shadow, sl.shadowBias, f32(${sizes.spot}), rotation);
             shadow = mix(1.0, raw, receiveShadow * sl.direction.w);
         }
-        colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
+        colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV, energy)
                   * sl.colorIntensity.rgb * (sl.colorIntensity.w * attn * spotAttn * shadow);
     }
     if (lighting.cameraForward.w > 0.5 && lighting.counts.x > 0u && lighting.directionalLights[0].direction.w > 0.5) {
@@ -1018,7 +1047,8 @@ fn outputColor(c: vec3<f32>) -> vec4<f32> {
 @group(0) @binding(2) var posTex:            texture_2d<f32>;
 @group(0) @binding(3) var<uniform> lighting: LightingUniforms;
 @group(0) @binding(4) var emissiveTex:       texture_2d<f32>;
-@group(0) @binding(5) var environmentMap:    texture_2d<f32>;
+@group(0) @binding(5) var environmentMap:    texture_2d<f32>; // prefiltered by roughness
+@group(0) @binding(8) var irradianceMap:     texture_2d<f32>;
 @group(0) @binding(6) var envSampler:        sampler;
 @group(0) @binding(7) var backgroundMap:     texture_2d<f32>;
 
@@ -1294,6 +1324,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private defaultNormalView!: GPUTextureView;
     private texSampler!: GPUSampler;
     private envSampler!: GPUSampler;
+    /** Environment maps prefiltered for image-based lighting (made on first use). */
+    private envPrefilter: EnvironmentPrefilter | null = null;
     /** Material samplers by their settings' key (see samplerKey). */
     private readonly samplers = new Map<number, GPUSampler>();
 
@@ -1531,6 +1563,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         this.meshCache.clear();
         this.materialCache.forEach(destroyMaterialResources);
         this.materialCache.clear();
+        this.envPrefilter?.destroy();
+        this.envPrefilter = null;
         this.geometryCache.forEach(destroyGeometryResources);
         this.geometryCache.clear();
     }
@@ -1612,6 +1646,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             label: "DeferredScene:environment",
             magFilter: "linear",
             minFilter: "linear",
+            mipmapFilter: "linear", // between the prefiltered roughness levels
             addressModeU: "repeat",
             addressModeV: "clamp-to-edge",
         });
@@ -1631,6 +1666,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 {binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
                 {binding: 6, visibility: GPUShaderStage.FRAGMENT, sampler: {type: "filtering"}},
                 {binding: 7, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
+                {binding: 8, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
             ],
         });
 
@@ -1690,6 +1726,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 {binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: {type: "comparison"}},
                 {binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: depthArray},
                 {binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}},
+                {binding: 8, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
             ],
         });
         this.forwardPipelineLayout = device.createPipelineLayout({
@@ -2340,7 +2377,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const {outputs} = ctx;
 
         // Build lighting bind group each frame so G-buffer views are always current.
-        const envView = this.scene.environmentMap?.srgbView ?? this.defaultWhiteView;
+        const env = this.environment();
         const bgView = this.scene.backgroundMap?.srgbView ?? this.defaultWhiteView;
         const lightingBG = this.device.createBindGroup({
             label: "DeferredScene:lightingBindGroup",
@@ -2351,9 +2388,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 {binding: 2, resource: outputs["worldPos"]!},
                 {binding: 3, resource: {buffer: this.lightingBuffer}},
                 {binding: 4, resource: outputs["emissive"]!},
-                {binding: 5, resource: envView},
+                {binding: 5, resource: env.specular},
                 {binding: 6, resource: this.envSampler},
                 {binding: 7, resource: bgView},
+                {binding: 8, resource: env.irradiance},
             ],
         });
 
@@ -2369,24 +2407,34 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         pass.end();
     }
 
+    /** The scene's environment as image-based lighting reads it (white placeholders without one). */
+    private environment(): {specular: GPUTextureView; irradiance: GPUTextureView} {
+        const map = this.scene.environmentMap;
+        if (map === null) {
+            return {specular: this.defaultWhiteView, irradiance: this.defaultWhiteView};
+        }
+        return (this.envPrefilter ??= new EnvironmentPrefilter(this.device)).get(map);
+    }
+
     /** See-through meshes over the lit scene, farthest first; double-sided ones back faces, then front faces. */
     private renderTransparent(encoder: GPUCommandEncoder, ctx: PassRenderContext): void {
         const {outputs} = ctx;
-        const envView = this.scene.environmentMap?.srgbView ?? this.defaultWhiteView;
-        if (this.forwardLightingBindGroup === null || envView !== this.forwardEnvView) {
-            this.forwardEnvView = envView;
+        const env = this.environment();
+        if (this.forwardLightingBindGroup === null || env.specular !== this.forwardEnvView) {
+            this.forwardEnvView = env.specular;
             this.forwardLightingBindGroup = this.device.createBindGroup({
                 label: "DeferredScene:forwardLighting",
                 layout: this.forwardLightingLayout,
                 entries: [
                     {binding: 0, resource: {buffer: this.lightingBuffer}},
-                    {binding: 1, resource: envView},
+                    {binding: 1, resource: env.specular},
                     {binding: 2, resource: this.envSampler},
                     {binding: 3, resource: this.dirShadowTex.createView({dimension: "2d-array"})},
                     {binding: 4, resource: this.spotShadowTex.createView({dimension: "2d-array"})},
                     {binding: 5, resource: this.shadowSampler},
                     {binding: 6, resource: this.pointShadowTex.createView({dimension: "2d-array"})},
                     {binding: 7, resource: {buffer: this.pointShadowMatricesBuffer}},
+                    {binding: 8, resource: env.irradiance},
                 ],
             });
         }
@@ -2616,7 +2664,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         f32[ENVIRONMENT_SLOT] = srgbToLinear(env[0]) * srgbToLinear(sky?.[0] ?? 1);
         f32[ENVIRONMENT_SLOT + 1] = srgbToLinear(env[1]) * srgbToLinear(sky?.[1] ?? 1);
         f32[ENVIRONMENT_SLOT + 2] = srgbToLinear(env[2]) * srgbToLinear(sky?.[2] ?? 1);
-        f32[ENVIRONMENT_SLOT + 3] = 1.0;
+        f32[ENVIRONMENT_SLOT + 3] = this.scene.environmentMap !== null ? 1.0 : 0.0; // its irradiance counts
 
         f32.set(this.currentInvVP, INV_VP_SLOT);
         if (cam) {

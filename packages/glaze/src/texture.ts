@@ -70,15 +70,24 @@ export class Texture {
     };
     /** Which UV set and how it is transformed (default: the first set, untransformed). */
     transform: UvTransform = {offset: [0, 0], scale: [1, 1], rotation: 0, uvSet: 0};
+    /** Half-float pixels (from `fromFloat32` / `fromHDR`): values above 1, already linear light. */
+    readonly hdr: boolean;
     private readonly tex: GPUTexture;
 
     private constructor(tex: GPUTexture, colorSpace: ColorSpace) {
         this.tex = tex;
         this.width = tex.width;
         this.height = tex.height;
-        this.colorSpace = colorSpace;
+        this.hdr = tex.format === HDR_FORMAT;
+        this.colorSpace = this.hdr ? "linear-srgb" : colorSpace;
         this.view = tex.createView();
-        this.srgbView = tex.createView({format: SRGB_FORMAT});
+        // half floats hold linear light already: both views read them as they are
+        this.srgbView = this.hdr ? this.view : tex.createView({format: SRGB_FORMAT});
+    }
+
+    /** The GPU texture (for passes that process it, like an environment's prefiltering). */
+    get texture(): GPUTexture {
+        return this.tex;
     }
 
     get mipLevelCount(): number {
@@ -98,6 +107,46 @@ export class Texture {
         return new Texture(tex, options.colorSpace ?? "srgb");
     }
 
+    /**
+     * An HDR texture from linear float RGBA (4 floats a pixel), stored as half floats: environments and skies
+     * brighter than 1 (a sun in the sky lights like one). Mip levels are generated.
+     */
+    static fromFloat32(
+        device: GPUDevice,
+        data: Float32Array,
+        width: number,
+        height: number,
+        {mipmaps = true}: Pick<TextureOptions, "mipmaps"> = {},
+    ): Texture {
+        const tex = device.createTexture({
+            size: {width, height},
+            format: HDR_FORMAT,
+            mipLevelCount: mipmaps ? mipLevelCount(width, height) : 1,
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+        const half = new Uint16Array(width * height * 4);
+        for (let i = 0; i < half.length; i++) {
+            half[i] = toHalf(data[i] ?? 0);
+        }
+        device.queue.writeTexture({texture: tex}, half, {bytesPerRow: width * 8}, {width, height});
+        generateMipmaps(device, tex, "linear-srgb");
+        return new Texture(tex, "linear-srgb");
+    }
+
+    /** A Radiance `.hdr` (RGBE) image as an HDR texture: the usual format for environment maps. */
+    static async fromHDR(
+        device: GPUDevice,
+        url: string,
+        options: Pick<TextureOptions, "mipmaps"> = {},
+    ): Promise<Texture> {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Texture: failed to fetch '${url}' (${response.status})`);
+        }
+        const {data, width, height} = parseRGBE(await response.arrayBuffer());
+        return Texture.fromFloat32(device, data, width, height, options);
+    }
+
     static async fromURL(device: GPUDevice, url: string, options: TextureOptions = {}): Promise<Texture> {
         const response = await fetch(url);
         if (!response.ok) {
@@ -107,8 +156,22 @@ export class Texture {
     }
 
     static async fromBlob(device: GPUDevice, blob: Blob, options: TextureOptions = {}): Promise<Texture> {
-        // Pixels as stored: no color-space conversion or premultiplication (normal and ORM maps are data).
-        const bitmap = await createImageBitmap(blob, {colorSpaceConversion: "none", premultiplyAlpha: "none"});
+        // Pixels as stored: no color-space conversion or premultiplication (normal and ORM maps are data). An image
+        // larger than the GPU allows is scaled down to fit.
+        const max = device.limits.maxTextureDimension2D;
+        let bitmap = await createImageBitmap(blob, {colorSpaceConversion: "none", premultiplyAlpha: "none"});
+        if (bitmap.width > max || bitmap.height > max) {
+            const scale = max / Math.max(bitmap.width, bitmap.height);
+            const resized = await createImageBitmap(bitmap, {
+                colorSpaceConversion: "none",
+                premultiplyAlpha: "none",
+                resizeWidth: Math.max(1, Math.floor(bitmap.width * scale)),
+                resizeHeight: Math.max(1, Math.floor(bitmap.height * scale)),
+                resizeQuality: "high",
+            });
+            bitmap.close();
+            bitmap = resized;
+        }
         const tex = createTexture(device, bitmap.width, bitmap.height, options);
         device.queue.copyExternalImageToTexture(
             {source: bitmap},
@@ -143,6 +206,101 @@ export class Texture {
 }
 
 const SRGB_FORMAT = "rgba8unorm-srgb";
+const HDR_FORMAT = "rgba16float";
+
+const f32 = new Float32Array(1);
+const u32 = new Uint32Array(f32.buffer);
+
+/** A float's IEEE half bits (round to nearest; overflow to infinity, tiny values to subnormals or zero). */
+export function toHalf(value: number): number {
+    f32[0] = value;
+    const x = u32[0]!;
+    const sign = (x >>> 16) & 0x8000;
+    const exponent = ((x >>> 23) & 0xff) - 127 + 15;
+    let mantissa = x & 0x7fffff;
+    if (((x >>> 23) & 0xff) === 0xff) {
+        return sign | 0x7c00 | (mantissa !== 0 ? 0x200 : 0); // inf / NaN
+    }
+    if (exponent >= 0x1f) {
+        return sign | 0x7c00;
+    }
+    if (exponent <= 0) {
+        if (exponent < -10) {
+            return sign;
+        }
+        mantissa |= 0x800000;
+        const shift = 14 - exponent;
+        return sign | ((mantissa + (1 << (shift - 1))) >>> shift);
+    }
+    const half = sign | (exponent << 10) | (mantissa >>> 13);
+    return half + ((mantissa >>> 12) & 1); // round (a carry into the exponent is still correct)
+}
+
+/** Decodes a Radiance .hdr file (RGBE, flat or run-length encoded scanlines) to linear float RGBA, top row first. */
+export function parseRGBE(buffer: ArrayBuffer): {data: Float32Array; width: number; height: number} {
+    const bytes = new Uint8Array(buffer);
+    let pos = 0;
+    const line = (): string => {
+        let s = "";
+        while (pos < bytes.length && bytes[pos] !== 0x0a) {
+            s += String.fromCharCode(bytes[pos++]!);
+        }
+        pos++;
+        return s;
+    };
+    if (!line().startsWith("#?")) {
+        throw new Error("HDR: not a Radiance file");
+    }
+    for (let l = line(); l !== ""; l = line()) {
+        if (l.startsWith("FORMAT=") && l !== "FORMAT=32-bit_rle_rgbe") {
+            throw new Error(`HDR: unsupported ${l}`);
+        }
+    }
+    const size = /^-Y (\d+) \+X (\d+)$/.exec(line().trim());
+    if (size === null) {
+        throw new Error("HDR: only -Y H +X W images are supported");
+    }
+    const height = Number(size[1]);
+    const width = Number(size[2]);
+    const data = new Float32Array(width * height * 4);
+    const scan = new Uint8Array(width * 4);
+    for (let y = 0; y < height; y++) {
+        const rle =
+            width >= 8 && width < 0x8000 && bytes[pos] === 2 && bytes[pos + 1] === 2 && (bytes[pos + 2]! & 0x80) === 0;
+        if (rle) {
+            pos += 4;
+            for (let c = 0; c < 4; c++) {
+                for (let x = 0; x < width;) {
+                    let count = bytes[pos++]!;
+                    if (count > 128) {
+                        count -= 128;
+                        const v = bytes[pos++]!;
+                        for (let k = 0; k < count; k++) {
+                            scan[x++ * 4 + c] = v;
+                        }
+                    } else {
+                        for (let k = 0; k < count; k++) {
+                            scan[x++ * 4 + c] = bytes[pos++]!;
+                        }
+                    }
+                }
+            }
+        } else {
+            scan.set(bytes.subarray(pos, pos + width * 4));
+            pos += width * 4;
+        }
+        for (let x = 0; x < width; x++) {
+            const e = scan[x * 4 + 3]!;
+            const f = e === 0 ? 0 : Math.pow(2, e - 136); // 2^(e - 128) / 256
+            const o = (y * width + x) * 4;
+            data[o] = scan[x * 4]! * f;
+            data[o + 1] = scan[x * 4 + 1]! * f;
+            data[o + 2] = scan[x * 4 + 2]! * f;
+            data[o + 3] = 1;
+        }
+    }
+    return {data, width, height};
+}
 
 function createTexture(device: GPUDevice, width: number, height: number, {mipmaps = true}: TextureOptions): GPUTexture {
     return device.createTexture({
@@ -199,7 +357,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 }
 `;
 
-type MipFormat = "rgba8unorm" | typeof SRGB_FORMAT;
+type MipFormat = "rgba8unorm" | typeof SRGB_FORMAT | typeof HDR_FORMAT;
 const mipPipelines = new WeakMap<GPUDevice, Map<MipFormat, {pipeline: GPURenderPipeline}>>();
 
 /**
@@ -210,7 +368,8 @@ export function generateMipmaps(device: GPUDevice, texture: GPUTexture, colorSpa
     if (texture.mipLevelCount <= 1) {
         return;
     }
-    const format: MipFormat = colorSpace === "srgb" ? SRGB_FORMAT : "rgba8unorm";
+    const format: MipFormat =
+        texture.format === HDR_FORMAT ? HDR_FORMAT : colorSpace === "srgb" ? SRGB_FORMAT : "rgba8unorm";
     let perFormat = mipPipelines.get(device);
     if (perFormat === undefined) {
         perFormat = new Map();
