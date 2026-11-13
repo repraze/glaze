@@ -1,15 +1,17 @@
 import {
     BlitPass,
-    createTorus,
     DeferredScenePass,
     DirectionalLight,
+    type Entity,
+    loadGltf,
     Mesh,
-    PBRMaterial,
     PerspectiveCamera,
+    PointerInput,
     RenderGraph,
     Scene,
-    setColorRgb,
+    SpotLight,
 } from "@repraze/glaze";
+import {Badge} from "@repraze/kernelkit/components/badge";
 import {
     CardAction,
     CardDescription,
@@ -18,13 +20,16 @@ import {
     LinkCard,
     LinkCardArrow,
 } from "@repraze/kernelkit/components/card";
+import {Spinner} from "@repraze/kernelkit/components/spinner";
 import {Link} from "@tanstack/react-router";
 import {vec3} from "gl-matrix";
+import {useState} from "react";
 
 import {PipelineDiagram} from "@/components/pipeline-diagram";
-import {DemoStage} from "@/glaze/demo-stage";
-import {GlazeCanvas} from "@/glaze/glaze-canvas";
-import {paintScene, tint, useSceneColors} from "@/glaze/scene-colors";
+import {ControlSwitch, DemoStage} from "@/glaze/demo-stage";
+import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
+import {makeEnvironments} from "@/glaze/helpers";
+import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
 export const doc = defineDoc({
@@ -36,7 +41,8 @@ export const doc = defineDoc({
     demos: [
         {
             title: "At a glance",
-            description: "A torus, two lights and the deferred scene pass, tone mapped to the canvas by a BlitPass.",
+            description:
+                "A donut loaded from one glTF file: named nodes, 140 sprinkles sharing one geometry, a baked dough texture and a lace doily cut by an alpha mask. Toggle parts by name, flick sprinkles off with a click, drag to orbit.",
             component: Glance,
             layout: "full",
         },
@@ -114,44 +120,139 @@ const stop = renderer.startAnimation(graph);`}
     );
 }
 
+const DONUT_URL = `${import.meta.env.BASE_URL}models/donut/donut.glb`;
+
+const PARTS = ["Icing", "Sprinkles", "Doily"] as const;
+
 export function Glance() {
     const colors = useSceneColors();
+    const [parts, setParts] = useState<Record<(typeof PARTS)[number], boolean>>({
+        Icing: true,
+        Sprinkles: true,
+        Doily: true,
+    });
+    const [status, setStatus] = useState<string[] | null>(null);
+    const [flicked, setFlicked] = useState(0);
+    const live = useLatest(parts);
     return (
-        <DemoStage>
+        <DemoStage
+            controls={
+                <>
+                    {PARTS.map((name) => (
+                        <ControlSwitch
+                            key={name}
+                            label={name}
+                            checked={parts[name]}
+                            onChange={(on) => setParts((p) => ({...p, [name]: on}))}
+                        />
+                    ))}
+                    <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                        {status === null ? (
+                            <Spinner />
+                        ) : (
+                            status.map((fact) => (
+                                <Badge key={fact} variant="outline">
+                                    {fact}
+                                </Badge>
+                            ))
+                        )}
+                    </div>
+                    <p className="text-sm text-muted-foreground" aria-live="polite">
+                        {flicked === 0
+                            ? "Click a sprinkle to flick it off."
+                            : `${flicked} sprinkle${flicked === 1 ? "" : "s"} flicked.`}
+                    </p>
+                </>
+            }
+        >
             <GlazeCanvas
-                label="A torus in the site's accent color turning under a key light"
-                setup={({orbitControls}) => {
+                label="A glazed donut with pink icing and sprinkles on a lace doily, loaded from a glTF file"
+                setup={async ({renderer, canvas, orbitControls}) => {
+                    const started = performance.now();
                     const scene = new Scene();
-                    vec3.set(scene.environmentColor, 0.25, 0.25, 0.3);
+                    const palette = paletteBinder(colors);
+                    palette.scene(scene);
+                    // reflections for the glossy icing (the sky isn't shown: the page's background stays)
+                    scene.environmentMap = makeEnvironments(renderer.device).get("sky") ?? null;
+                    vec3.set(scene.environmentColor, 0.55, 0.55, 0.6);
 
-                    const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbitControls(camera, {distance: 4.5, elevation: 25});
+                    const camera = new PerspectiveCamera({fov: Math.PI / 4, near: 0.05, far: 50});
                     scene.add(camera);
                     scene.activeCamera = camera;
+                    orbitControls(camera, {distance: 3.6, elevation: 38, target: [0, 0.2, 0], spin: 9});
 
-                    const key = new DirectionalLight({direction: [-0.5, -1, -0.6], intensity: 3});
-                    const fill = new DirectionalLight({direction: [0.8, -0.2, 0.4]});
+                    // a spot light for crisp shadows: sprinkles on the icing, the donut on the lace
+                    const key = palette.light(
+                        new SpotLight({
+                            intensity: 14,
+                            range: 14,
+                            outerAngle: Math.PI / 7,
+                            innerAngle: Math.PI / 12,
+                            castShadow: true,
+                        }),
+                        (c) => c.key,
+                    );
+                    vec3.set(key.position, 2.2, 4.2, 1.6);
+                    key.lookAt([0, 0, 0]);
+                    const fill = palette.light(
+                        new DirectionalLight({direction: [0.7, -0.4, -0.6], intensity: 0.8}),
+                        (c) => c.fill,
+                    );
                     scene.add(key).add(fill);
 
-                    const glaze = new PBRMaterial({roughness: 0.25, metallic: 0.1});
-                    const donut = new Mesh(
-                        createTorus({radius: 0.8, tube: 0.34, radialSegments: 48, tubularSegments: 96}),
-                        glaze,
-                    );
-                    scene.add(donut);
+                    const model = await loadGltf(renderer.device, DONUT_URL);
+                    scene.add(model.root);
+                    const doily = model.root.find("Doily");
+                    if (doily instanceof Mesh) {
+                        doily.castShadow = false; // flat under everything: nothing to shade
+                    }
+                    const loadMs = Math.round(performance.now() - started);
+                    setStatus([
+                        `${model.nodes.length} nodes`,
+                        `${model.meshes.length} meshes`,
+                        `${model.materials.length} materials`,
+                        `${loadMs} ms`,
+                    ]);
+
+                    // flick sprinkles: picking works on loaded meshes like any other
+                    const input = new PointerInput(canvas, {scene});
+                    const flying: {mesh: Entity; velocity: vec3; spin: number}[] = [];
+                    const sprinkles = model.root.find("Sprinkles")!;
+                    for (const sprinkle of sprinkles.children) {
+                        input.on(sprinkle, "pointerenter", () => (canvas.style.cursor = "pointer"));
+                        input.on(sprinkle, "pointerleave", () => (canvas.style.cursor = ""));
+                        input.on(sprinkle, "click", (e) => {
+                            e.stopPropagation();
+                            sprinkle.collider = null; // can't be clicked twice
+                            const out = e.hit?.normal ?? vec3.fromValues(0, 1, 0);
+                            flying.push({
+                                mesh: sprinkle,
+                                velocity: vec3.fromValues(out[0] * 1.5, 2.2, out[2] * 1.5),
+                                spin: 12 + Math.random() * 10,
+                            });
+                            setFlicked((n) => n + 1);
+                        });
+                    }
 
                     const graph = new RenderGraph();
                     const {color} = graph.addPass(new DeferredScenePass({scene}));
-                    graph.addPass(new BlitPass(), {color}, {canvasSlot: "canvas"});
+                    graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas"});
 
-                    return ({time}) => {
-                        // TermiColor, read every frame: the scene follows the page's mode and accent
-                        const c = colors.current;
-                        paintScene(scene, c);
-                        setColorRgb(key.color, c.key);
-                        setColorRgb(fill.color, c.fill);
-                        tint(glaze, c.accent);
-                        donut.setEuler(0.9 + Math.sin(time * 0.6) * 0.2, time * 0.5, 0);
+                    return ({delta}) => {
+                        palette.apply();
+                        for (const name of PARTS) {
+                            model.root.find(name)!.enabled = live.current[name];
+                        }
+                        for (let i = flying.length - 1; i >= 0; i--) {
+                            const f = flying[i]!;
+                            f.velocity[1] -= 9.8 * delta;
+                            vec3.scaleAndAdd(f.mesh.position, f.mesh.position, f.velocity, delta);
+                            f.mesh.rotateZ(f.spin * delta);
+                            if (f.mesh.position[1] < -3) {
+                                f.mesh.enabled = false;
+                                flying.splice(i, 1);
+                            }
+                        }
                         return graph;
                     };
                 }}
