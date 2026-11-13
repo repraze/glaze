@@ -18,7 +18,6 @@ import {useState} from "react";
 
 import {ControlSlider, ControlSwitch, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
-import {orbit} from "@/glaze/helpers";
 import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -180,12 +179,12 @@ export function Hierarchy() {
         >
             <GlazeCanvas
                 label="A glowing sun with a ringed planet orbiting it and a small moon orbiting the planet"
-                setup={() => {
+                setup={({orbitControls}) => {
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 9, elevation: 35});
+                    orbitControls(camera, {distance: 9, elevation: 35});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     scene.add(

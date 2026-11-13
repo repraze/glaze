@@ -16,7 +16,6 @@ import {vec3} from "gl-matrix";
 
 import {DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas} from "@/glaze/glaze-canvas";
-import {orbit} from "@/glaze/helpers";
 import {paintScene, tint, useSceneColors, wgslColor} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -195,11 +194,11 @@ export function FirstScene() {
         <DemoStage>
             <GlazeCanvas
                 label="A cube in the site's accent color spinning above a floor, casting a shadow"
-                setup={() => {
+                setup={({orbitControls}) => {
                     // 1. the scene and a camera
                     const scene = new Scene();
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 6, elevation: 30, target: [0, 0.5, 0]});
+                    orbitControls(camera, {distance: 6, elevation: 30, target: [0, 0.5, 0]});
                     scene.add(camera);
                     scene.activeCamera = camera;
 

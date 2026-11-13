@@ -14,7 +14,7 @@ import {useState} from "react";
 
 import {ControlSegmented, ControlSelect, ControlSwitch, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
-import {makeShape, orbit, type ShapeKind, SHAPES} from "@/glaze/helpers";
+import {makeShape, type ShapeKind, SHAPES} from "@/glaze/helpers";
 import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -119,7 +119,7 @@ export function Viewer() {
         >
             <GlazeCanvas
                 label="Four views of one shape: its base color, its normals, its world positions and its emission"
-                setup={() => {
+                setup={({orbitControls}) => {
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
@@ -127,6 +127,7 @@ export function Viewer() {
                     const camera = new PerspectiveCamera({fov: Math.PI / 3});
                     scene.add(camera);
                     scene.activeCamera = camera;
+                    orbitControls(camera, {distance: 4, elevation: 20, spin: 17});
                     scene.add(
                         palette.light(
                             new DirectionalLight({direction: [-0.5, -0.8, -0.3], intensity: 4}),
@@ -166,7 +167,6 @@ export function Viewer() {
                             scene.add(mesh);
                             key = `${shape}:${flat}`;
                         }
-                        orbit(camera, {distance: 4, elevation: 20, azimuth: time * 17});
                         mesh!.setEuler(0, time * 0.5, 0);
                         return graph;
                     };
@@ -186,12 +186,12 @@ export function OneChannel() {
         >
             <GlazeCanvas
                 label="One G-buffer output of a rotating shape, shown full size"
-                setup={() => {
+                setup={({orbitControls}) => {
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 3});
-                    orbit(camera, {distance: 3.6, elevation: 25});
+                    orbitControls(camera, {distance: 3.6, elevation: 25});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     scene.add(

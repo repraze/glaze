@@ -132,3 +132,35 @@ describe("OrbitControls auto-rotate", () => {
         assert.ok(controls.azimuth > before + 0.1 + 0.2);
     });
 });
+
+describe("OrbitControls captureScroll", () => {
+    const wheel = {
+        deltaX: 0,
+        deltaY: 30,
+        legacyDeltaY: 0,
+        discrete: false,
+        ctrlKey: false,
+        shiftKey: false,
+        height: 100,
+    };
+    const press = {
+        pointerId: 1,
+        pointerType: "mouse",
+        button: 0,
+        x: 0,
+        y: 0,
+        shiftKey: false,
+        ctrlKey: false,
+        metaKey: false,
+    };
+    test("off: the page keeps scrolling until the canvas is pressed, and again after the pointer leaves", () => {
+        const controls = new OrbitControls(camAt(0, 0, 5), {captureScroll: false});
+        assert.equal(controls.wheel(wheel as never), false);
+        assert.equal(controls.wheel({...wheel, ctrlKey: true} as never), true, "pinch always zooms");
+        controls.pointerDown(press as never);
+        controls.pointerUp(press as never);
+        assert.equal(controls.wheel(wheel as never), true);
+        controls.hover(press as never, false);
+        assert.equal(controls.wheel(wheel as never), false);
+    });
+});

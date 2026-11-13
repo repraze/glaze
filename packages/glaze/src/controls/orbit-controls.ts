@@ -38,6 +38,12 @@ export interface OrbitControlsOptions {
      * "pan-y" leaves one-finger vertical swipes to scroll the page (horizontal drags and two fingers still orbit).
      */
     touchAction?: string;
+    /**
+     * Take plain wheel and two-finger scrolling at all times (default true). False suits a canvas in a scrolling
+     * page: the page keeps the scroll until the user presses inside the canvas, and again once the pointer leaves
+     * it. Pinch always zooms the scene.
+     */
+    captureScroll?: boolean;
 }
 
 const TAU = Math.PI * 2;
@@ -83,6 +89,7 @@ export class OrbitControls implements PointerConsumer {
     autoRotate: number;
     autoRotateDelay: number;
     touchAction: string;
+    captureScroll: boolean;
 
     /** Current orbit, in spherical coordinates around the target (azimuth 0 looks from +Z, π/2 from +X). */
     distance = 1;
@@ -103,6 +110,8 @@ export class OrbitControls implements PointerConsumer {
     /** Seconds since the user last touched the controls (auto-rotation waits for autoRotateDelay). */
     private idle = Infinity;
     private wheelBurst: {mouse: boolean; at: number} | null = null;
+    /** With captureScroll off: whether the user engaged the canvas (pressed in it, pointer still inside). */
+    private engaged = false;
 
     constructor(camera: Camera, options: OrbitControlsOptions = {}) {
         this.camera = camera;
@@ -122,6 +131,7 @@ export class OrbitControls implements PointerConsumer {
         this.autoRotate = options.autoRotate ?? 0;
         this.autoRotateDelay = options.autoRotateDelay ?? 2;
         this.touchAction = options.touchAction ?? "none";
+        this.captureScroll = options.captureScroll ?? true;
         this.syncFromCamera();
     }
 
@@ -261,6 +271,7 @@ export class OrbitControls implements PointerConsumer {
         }
         this.pointers.set(p.pointerId, {x: p.x, y: p.y, mode});
         this.idle = 0;
+        this.engaged = true;
         if (this.pointers.size === 2) {
             this.pinch = this.pinchState();
         }
@@ -307,6 +318,12 @@ export class OrbitControls implements PointerConsumer {
         }
     }
 
+    hover(_p: InputPointer, inside: boolean): void {
+        if (!inside) {
+            this.engaged = false;
+        }
+    }
+
     pointerUp(p: InputPointer): void {
         this.pointers.delete(p.pointerId);
         this.pinch = this.pointers.size >= 2 ? this.pinchState() : null;
@@ -324,6 +341,9 @@ export class OrbitControls implements PointerConsumer {
             this.idle = 0;
             this.zoom(Math.exp(w.deltaY * 0.01 * this.zoomSpeed));
             return true;
+        }
+        if (!this.captureScroll && !this.engaged) {
+            return false; // the page scrolls
         }
         if (!this.trackpadGestures || this.isMouseWheel(w)) {
             if (!this.enableZoom) {

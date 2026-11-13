@@ -25,7 +25,6 @@ import {useState} from "react";
 import {PipelineDiagram} from "@/components/pipeline-diagram";
 import {ControlSelect, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
-import {orbit} from "@/glaze/helpers";
 import {paintScene, tint, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -198,10 +197,10 @@ export function ChainDemo() {
         >
             <GlazeCanvas
                 label="Three faceted spheres in TermiColor hues on a floor, rendered then post-processed by the chosen pass"
-                setup={() => {
+                setup={({orbitControls}) => {
                     const scene = new Scene();
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 7, elevation: 28, azimuth: 20, target: [0, 0.6, 0]});
+                    orbitControls(camera, {distance: 7, elevation: 28, azimuth: 20, target: [0, 0.6, 0]});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     const sun = new DirectionalLight({direction: [-0.5, -1, -0.4], intensity: 4, castShadow: true});

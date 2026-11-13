@@ -14,7 +14,7 @@ import {useState} from "react";
 import {ControlGroup, ControlSelect, ControlSlider, ControlSwitch, DemoStage} from "@/glaze/demo-stage";
 import {buildPostFragment, COLOR_METHODS, type ColorMethod, DITHER_PATTERNS, type DitherPattern} from "@/glaze/dither";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
-import {makeShape, orbit, type ShapeKind, SHAPES} from "@/glaze/helpers";
+import {makeShape, type ShapeKind, SHAPES} from "@/glaze/helpers";
 import {paintScene, perTheme, type SceneColors, tint, useSceneColors, wgslColor} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -211,10 +211,10 @@ export function Dithering() {
                 label="A faceted shape in the site's accent, pixelated and dithered by a post-processing shader"
                 maxPixelRatio={1}
                 pixelated
-                setup={() => {
+                setup={({orbitControls}) => {
                     const scene = new Scene();
                     const camera = new PerspectiveCamera({fov: Math.PI / 3});
-                    orbit(camera, {distance: 4, elevation: 17});
+                    orbitControls(camera, {distance: 4, elevation: 17});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     const keyLight = new DirectionalLight({direction: [0.4, -0.8, -0.5], intensity: 4});

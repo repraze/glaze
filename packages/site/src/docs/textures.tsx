@@ -14,7 +14,7 @@ import {useState} from "react";
 
 import {ControlSegmented, ControlSelect, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
-import {type EnvironmentId, ENVIRONMENTS, makeEnvironments, makePattern, orbit, type PatternId} from "@/glaze/helpers";
+import {type EnvironmentId, ENVIRONMENTS, makeEnvironments, makePattern, type PatternId} from "@/glaze/helpers";
 import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -109,7 +109,7 @@ export function FromPixels() {
         >
             <GlazeCanvas
                 label="A cube wrapped in a greyscale pattern, in front of a gradient sky"
-                setup={({renderer}) => {
+                setup={({renderer, orbitControls}) => {
                     const size = 128;
                     const patterns = new Map(
                         PATTERNS.map((p) => [
@@ -125,7 +125,7 @@ export function FromPixels() {
 
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 4, elevation: 25});
+                    orbitControls(camera, {distance: 4, elevation: 25});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     scene.add(
@@ -165,7 +165,7 @@ export function FromCanvas() {
         <DemoStage>
             <GlazeCanvas
                 label="A cube whose faces read Glaze in the site's accent color"
-                setup={async ({renderer}) => {
+                setup={async ({renderer, orbitControls}) => {
                     // draw a label with the 2D API, then decode it into a GPU texture
                     const label = new OffscreenCanvas(256, 256);
                     const ctx = label.getContext("2d")!;
@@ -189,7 +189,7 @@ export function FromCanvas() {
 
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 4, elevation: 20});
+                    orbitControls(camera, {distance: 4, elevation: 20});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     scene.add(

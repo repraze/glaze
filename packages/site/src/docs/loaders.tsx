@@ -21,7 +21,7 @@ import {useState} from "react";
 
 import {ControlSelect, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
-import {makeEnvironments, orbit} from "@/glaze/helpers";
+import {makeEnvironments} from "@/glaze/helpers";
 import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -167,12 +167,12 @@ export function ModelViewer() {
         >
             <GlazeCanvas
                 label="A glTF sample model turning slowly under two lights"
-                setup={({renderer}) => {
+                setup={({renderer, orbitControls}) => {
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 4, near: 0.01, far: 100});
-                    orbit(camera, {distance: 4, elevation: 15});
+                    orbitControls(camera, {distance: 4, elevation: 15});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     scene.add(
@@ -407,7 +407,7 @@ export function ObjFromText() {
         >
             <GlazeCanvas
                 label="An OBJ model turning slowly: four textured squares with corner labels, or a faceted gem"
-                setup={async ({renderer}) => {
+                setup={async ({renderer, orbitControls}) => {
                     const folder = `${MODELS_URL}${TEXTURE_COORDINATE_TEST.folder}/`;
                     const [squares, texture] = await Promise.all([
                         loadOBJFromURL(`${folder}TextureCoordinateTest.obj`),
@@ -417,7 +417,7 @@ export function ObjFromText() {
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 4.5, elevation: 20});
+                    orbitControls(camera, {distance: 4.5, elevation: 20});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     scene.add(

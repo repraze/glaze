@@ -20,7 +20,6 @@ import {useState} from "react";
 
 import {ControlGroup, ControlSlider, ControlSwitch, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
-import {orbit} from "@/glaze/helpers";
 import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -157,7 +156,7 @@ export function MovingLights() {
         >
             <GlazeCanvas
                 label="Red, green and blue lights circling a metal torus on a floor, casting colored shadows"
-                setup={() => {
+                setup={({orbitControls}) => {
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
@@ -165,6 +164,7 @@ export function MovingLights() {
                     const camera = new PerspectiveCamera({fov: Math.PI / 3, near: 0.1, far: 200});
                     scene.add(camera);
                     scene.activeCamera = camera;
+                    orbitControls(camera, {distance: 7, elevation: 30, target: [0, 0.6, 0], spin: 7});
 
                     const floor = new Mesh(
                         createPlane({width: 40, height: 40, widthSegments: 10, heightSegments: 10}),
@@ -231,11 +231,10 @@ export function MovingLights() {
                     graph.addPass(new BlitPass(), {color}, {canvasSlot: "canvas"});
 
                     let t = 0;
-                    return ({time, delta}) => {
+                    return ({delta}) => {
                         palette.apply();
                         const cfg = live.current;
                         t += delta * cfg.speed;
-                        orbit(camera, {distance: 7, elevation: 30, azimuth: time * 7, target: [0, 0.6, 0]});
                         sunLight.enabled = cfg.sun;
                         spotLight.enabled = cfg.spot;
                         const [red, green, blue] = bulbs as [PointLight, PointLight, PointLight];

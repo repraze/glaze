@@ -24,7 +24,6 @@ import {vec3} from "gl-matrix";
 import {PipelineDiagram} from "@/components/pipeline-diagram";
 import {DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas} from "@/glaze/glaze-canvas";
-import {orbit} from "@/glaze/helpers";
 import {paintScene, tint, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -121,12 +120,12 @@ export function Glance() {
         <DemoStage>
             <GlazeCanvas
                 label="A torus in the site's accent color turning under a key light"
-                setup={() => {
+                setup={({orbitControls}) => {
                     const scene = new Scene();
                     vec3.set(scene.environmentColor, 0.25, 0.25, 0.3);
 
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 4.5, elevation: 25});
+                    orbitControls(camera, {distance: 4.5, elevation: 25});
                     scene.add(camera);
                     scene.activeCamera = camera;
 

@@ -272,9 +272,12 @@ renderer.startAnimation(({delta}) => (controls.update(delta), graph));
 - **Gestures**: a press is offered to consumers by priority until one claims it; the claimer alone gets its moves,
   and every consumer offered it gets the release. Scene picking is at `SCENE_PICKING_PRIORITY` (100) and claims when a
   handler calls `capture()`; controls sit at 0. Implement `PointerConsumer` for your own (a gizmo above 100).
-- **OrbitControls**: drag rotates, wheel or pinch zooms, right-drag, shift-drag or two fingers pan. `damping` eases
-  frame-rate independently; distance and polar limits; `rotate` / `zoom` / `pan` / `setOrbit` drive it from code.
-  Attaching sets `touch-action: none` on the canvas.
+- **OrbitControls**: drag rotates, wheel or pinch zooms, right-drag, shift-drag or two fingers pan. On a trackpad
+  (`trackpadGestures`), pinch zooms, a two-finger swipe rotates and Shift + swipe pans; a mouse wheel still zooms.
+  `damping` eases frame-rate independently; distance and polar limits (steady through the poles: no roll);
+  `autoRotate` spins while idle; `rotate` / `zoom` / `pan` / `setOrbit` drive it from code. For a canvas in a
+  scrolling page, `captureScroll: false` leaves the wheel to the page until the canvas is pressed, and
+  `touchAction: "pan-y"` (default `"none"`) lets one-finger vertical swipes scroll it.
 
 ## Bounds and rays
 

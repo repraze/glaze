@@ -94,6 +94,30 @@ export const doc = defineDoc({
                 {name: "minPolarAngle / maxPolarAngle", type: "number", default: "0.01 / π − 0.01"},
                 {name: "rotateSpeed / zoomSpeed / panSpeed", type: "number", default: "1"},
                 {name: "enableRotate / enableZoom / enablePan", type: "boolean", default: "true"},
+                {
+                    name: "trackpadGestures",
+                    type: "boolean",
+                    default: "true",
+                    description: "Pinch zooms, two-finger swipe rotates, Shift + swipe pans.",
+                },
+                {
+                    name: "autoRotate / autoRotateDelay",
+                    type: "number",
+                    default: "0 / 2",
+                    description: "Rad/s idle spin; resume delay.",
+                },
+                {
+                    name: "captureScroll",
+                    type: "boolean",
+                    default: "true",
+                    description: "False: the page keeps the wheel until the canvas is pressed.",
+                },
+                {
+                    name: "touchAction",
+                    type: "string",
+                    default: '"none"',
+                    description: '"pan-y" lets one finger scroll the page.',
+                },
             ],
         },
     ],
@@ -279,6 +303,8 @@ export function PickDragOrbit() {
                         minDistance: 3,
                         maxDistance: 16,
                         maxPolarAngle: Math.PI / 2 - 0.05,
+                        captureScroll: false, // the page scrolls until you press in the canvas
+                        touchAction: "pan-y",
                     }).attach(input);
 
                     let hovered: Pickable | null = null;

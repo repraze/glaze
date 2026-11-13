@@ -20,7 +20,7 @@ import {useState} from "react";
 import {PipelineDiagram} from "@/components/pipeline-diagram";
 import {ControlSelect, ControlSlider, ControlSwitch, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
-import {type EnvironmentId, ENVIRONMENTS, makeEnvironments, orbit} from "@/glaze/helpers";
+import {type EnvironmentId, ENVIRONMENTS, makeEnvironments} from "@/glaze/helpers";
 import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -157,7 +157,7 @@ export function LitScene() {
         >
             <GlazeCanvas
                 label="A small still life of a torus, a cube, a cone and a sphere on a floor, lit by a sun and two colored lights"
-                setup={({renderer}) => {
+                setup={({renderer, orbitControls}) => {
                     const environments = makeEnvironments(renderer.device);
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
@@ -165,6 +165,7 @@ export function LitScene() {
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
                     scene.add(camera);
                     scene.activeCamera = camera;
+                    orbitControls(camera, {distance: 6.5, elevation: 28, target: [0, 0.4, 0], spin: 8});
 
                     const sun = palette.light(
                         new DirectionalLight({direction: [-0.6, -1, -0.5], intensity: 3}),
@@ -223,7 +224,6 @@ export function LitScene() {
                     return ({time}) => {
                         palette.apply();
                         const cfg = live.current;
-                        orbit(camera, {distance: 6.5, elevation: 28, azimuth: time * 8, target: [0, 0.4, 0]});
                         sun.castShadow = cfg.shadows;
                         warm.enabled = cool.enabled = cfg.points;
                         vec3.set(warm.position, Math.cos(time) * 2.2, 1.2, Math.sin(time) * 2.2);
@@ -247,12 +247,12 @@ export function Direct() {
         <DemoStage>
             <GlazeCanvas
                 label="A metallic orange torus on a dark background, rendered without tone mapping"
-                setup={({renderer}) => {
+                setup={({renderer, orbitControls}) => {
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 4, elevation: 20});
+                    orbitControls(camera, {distance: 4, elevation: 20});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     scene.add(

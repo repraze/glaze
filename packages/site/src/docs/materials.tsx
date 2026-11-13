@@ -21,7 +21,6 @@ import {
     makeEnvironments,
     makeShape,
     makeTextureSets,
-    orbit,
     type ShapeKind,
     SHAPES,
     TEXTURE_SETS,
@@ -228,14 +227,14 @@ export function Inspector() {
         >
             <GlazeCanvas
                 label="A single shape with the chosen material, turning in front of an environment map"
-                setup={({renderer}) => {
+                setup={({renderer, orbitControls}) => {
                     const sets = makeTextureSets(renderer.device);
                     const environments = makeEnvironments(renderer.device);
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 3});
-                    orbit(camera, {distance: 3.4, elevation: 20});
+                    orbitControls(camera, {distance: 3.4, elevation: 20});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     scene.add(
@@ -416,13 +415,13 @@ export function PbrGrid() {
         >
             <GlazeCanvas
                 label="Twenty-five grey spheres in a grid, from matte to mirror and from plastic to metal"
-                setup={({renderer}) => {
+                setup={({renderer, orbitControls}) => {
                     const environments = makeEnvironments(renderer.device);
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 13, elevation: 10, azimuth: 8});
+                    orbitControls(camera, {distance: 13, elevation: 10, azimuth: 8});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     const key = palette.light(

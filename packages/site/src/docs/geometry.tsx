@@ -15,7 +15,7 @@ import {useState} from "react";
 
 import {ControlSelect, ControlSwitch, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
-import {makeShape, orbit, type ShapeKind, SHAPES} from "@/glaze/helpers";
+import {makeShape, type ShapeKind, SHAPES} from "@/glaze/helpers";
 import {paletteBinder, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
@@ -142,12 +142,12 @@ export function Shapes() {
         >
             <GlazeCanvas
                 label="The chosen shape in orange, turning slowly"
-                setup={() => {
+                setup={({orbitControls}) => {
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 4.2, elevation: 25});
+                    orbitControls(camera, {distance: 4.2, elevation: 25});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     scene.add(
@@ -199,7 +199,7 @@ export function Custom() {
         <DemoStage>
             <GlazeCanvas
                 label="A faceted tetrahedron with four differently lit faces, spinning"
-                setup={() => {
+                setup={({orbitControls}) => {
                     // four corners, then one triangle per face with its own vertices (flat normals)
                     const c = [
                         [1, 1, 1],
@@ -241,7 +241,7 @@ export function Custom() {
 
                     palette.scene(scene);
                     const camera = new PerspectiveCamera({fov: Math.PI / 4});
-                    orbit(camera, {distance: 5, elevation: 20});
+                    orbitControls(camera, {distance: 5, elevation: 20});
                     scene.add(camera);
                     scene.activeCamera = camera;
                     scene.add(

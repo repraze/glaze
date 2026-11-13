@@ -1,4 +1,11 @@
-import {Renderer, type RenderGraph} from "@repraze/glaze";
+import {
+    type Camera,
+    OrbitControls,
+    type OrbitControlsOptions,
+    PointerInput,
+    Renderer,
+    type RenderGraph,
+} from "@repraze/glaze";
 import {Button} from "@repraze/kernelkit/components/button";
 import {
     Empty,
@@ -25,9 +32,25 @@ export interface GlazeFrameInfo {
 /** Returns the graph to render this frame (build it once and return the same one, or rebuild it per frame). */
 export type GlazeFrame = (frame: GlazeFrameInfo) => RenderGraph;
 
+/** Where an orbit starts: like the `orbit` helper (degrees), plus a slow spin while idle. */
+export interface OrbitView {
+    distance: number;
+    elevation?: number;
+    azimuth?: number;
+    target?: [number, number, number];
+    /** Degrees per second while nobody touches it (frozen under reduced motion). */
+    spin?: number;
+}
+
 export interface GlazeSetupContext {
     renderer: Renderer;
     canvas: HTMLCanvasElement;
+    /**
+     * Orbit controls on this canvas for `camera`, placed at `view`: updated every frame and removed on unmount.
+     * Docs-friendly defaults: the page keeps wheel scrolling until the canvas is pressed, and one-finger vertical
+     * swipes scroll the page on touch screens.
+     */
+    orbitControls(camera: Camera, view: OrbitView, options?: OrbitControlsOptions): OrbitControls;
 }
 
 /** Builds the scene once the device is ready, and returns the per-frame callback. */
@@ -84,6 +107,24 @@ export function GlazeCanvas({
         let last = 0;
         let time = 0;
         const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+        let input: PointerInput | null = null;
+        const orbits: {controls: OrbitControls; spin: number}[] = [];
+        const orbitControls = (camera: Camera, view: OrbitView, options: OrbitControlsOptions = {}) => {
+            input ??= new PointerInput(canvas);
+            const {distance, elevation = 20, azimuth = 0, target = [0, 0, 0], spin = 0} = view;
+            const controls = new OrbitControls(camera, {
+                target,
+                minDistance: distance * 0.3,
+                maxDistance: distance * 4,
+                captureScroll: false,
+                touchAction: "pan-y",
+                ...options,
+            });
+            controls.setOrbit(distance, (azimuth * Math.PI) / 180, Math.PI / 2 - (elevation * Math.PI) / 180);
+            controls.attach(input);
+            orbits.push({controls, spin: (spin * Math.PI) / 180});
+            return controls;
+        };
 
         const resize = () => {
             if (canvas.clientWidth === 0 || canvas.clientHeight === 0) {
@@ -119,6 +160,10 @@ export function GlazeCanvas({
             if (!reducedMotion.matches) {
                 time += delta;
             }
+            for (const {controls, spin} of orbits) {
+                controls.autoRotate = reducedMotion.matches ? 0 : spin;
+                controls.update(delta);
+            }
             try {
                 renderer.renderFrame(frame({time, delta, width: canvas.width, height: canvas.height}), time);
             } catch (error) {
@@ -145,7 +190,7 @@ export function GlazeCanvas({
                     return;
                 }
                 renderer = created;
-                const callback = await setupRef.current({renderer: created, canvas});
+                const callback = await setupRef.current({renderer: created, canvas, orbitControls});
                 if (disposed) {
                     return;
                 }
@@ -179,6 +224,7 @@ export function GlazeCanvas({
             intersection.disconnect();
             size.disconnect();
             cancelAnimationFrame(raf);
+            input?.dispose();
             renderer?.destroy();
         };
     }, [maxPixelRatio, alphaMode]);
