@@ -151,7 +151,7 @@ describe("parseGltf", () => {
         }
     });
 
-    test("reads animations: tracks on the node entities, normalized rotations, interpolation; weights skipped", async () => {
+    test("reads animations: tracks on the node entities, normalized rotations, interpolation", async () => {
         const model = await parseGltf(
             noDevice,
             triangleGltf((json) => {
@@ -198,7 +198,8 @@ describe("parseGltf", () => {
         const clip = model.animations[0]!;
         assert.equal(clip.name, "Spin");
         assert.equal(clip.duration, 2);
-        assert.equal(clip.tracks.length, 2); // weights skipped
+        assert.equal(clip.tracks.length, 3);
+        assert.equal(clip.tracks[2]!.path, "weights");
         const sprinkle = model.root.find("Sprinkle B")!;
         assert.equal(clip.tracks[0]!.target, sprinkle);
 
@@ -253,5 +254,63 @@ describe("parseGltf", () => {
         assert.ok(
             near(model.skins[0]!.inverseBindMatrices.subarray(0, 16), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
         );
+    });
+
+    test("reads morph targets (sparse deltas), default weights, and weights animations", async () => {
+        const model = await parseGltf(
+            noDevice,
+            triangleGltf((json) => {
+                // sparse: one element (vertex 2) moves by (0, 0, 1); times and a weights track 0 → 1
+                const bytes = new Uint8Array(4 + 12 + 8 + 8);
+                new Uint32Array(bytes.buffer, 0, 1)[0] = 2;
+                new Float32Array(bytes.buffer, 4, 3).set([0, 0, 1]);
+                new Float32Array(bytes.buffer, 16, 2).set([0, 1]);
+                new Float32Array(bytes.buffer, 24, 2).set([0, 1]);
+                (json.buffers as unknown[]).push({
+                    byteLength: bytes.length,
+                    uri: `data:application/octet-stream;base64,${Buffer.from(bytes).toString("base64")}`,
+                });
+                const views = json.bufferViews as unknown[];
+                const accessors = json.accessors as unknown[];
+                const v = views.length;
+                views.push(
+                    {buffer: 1, byteOffset: 0, byteLength: 4},
+                    {buffer: 1, byteOffset: 4, byteLength: 12},
+                    {buffer: 1, byteOffset: 16, byteLength: 8},
+                    {buffer: 1, byteOffset: 24, byteLength: 8},
+                );
+                const a = accessors.length;
+                accessors.push(
+                    {
+                        componentType: 5126,
+                        count: 3,
+                        type: "VEC3",
+                        sparse: {count: 1, indices: {bufferView: v, componentType: 5125}, values: {bufferView: v + 1}},
+                    },
+                    {bufferView: v + 2, componentType: 5126, count: 2, type: "SCALAR"},
+                    {bufferView: v + 3, componentType: 5126, count: 2, type: "SCALAR"},
+                );
+                const mesh = (json.meshes as {primitives: Record<string, unknown>[]; weights?: number[]}[])[0]!;
+                mesh.primitives[0]!.targets = [{POSITION: a}];
+                mesh.weights = [0.25];
+                (json.nodes as Record<string, unknown>[])[2]!.weights = [0.5];
+                json.animations = [
+                    {
+                        samplers: [{input: a + 1, output: a + 2}],
+                        channels: [{sampler: 0, target: {node: 2, path: "weights"}}],
+                    },
+                ];
+            }),
+        );
+        const a = model.root.find("Sprinkle A") as Mesh;
+        const b = model.root.find("Sprinkle B") as Mesh;
+        assert.deepEqual(Array.from(a.geometry.morphTargets![0]!.positions), [0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        assert.equal(a.morphWeights[0], 0.25); // the mesh's default
+        assert.equal(b.morphWeights[0], 0.5); // the node's own
+        const mixer = new AnimationMixer();
+        mixer.clipAction(model.animations[0]!).play();
+        mixer.update(0.75);
+        assert.ok(Math.abs(b.morphWeights[0]! - 0.75) < 1e-6);
+        assert.equal(a.morphWeights[0], 0.25); // other nodes untouched
     });
 });

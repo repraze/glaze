@@ -16,6 +16,7 @@ export {
 } from "./color";
 export type {OrbitControlsOptions} from "./controls/orbit-controls";
 export {OrbitControls} from "./controls/orbit-controls";
+export type {GeometryOptions, MorphTarget} from "./geometry/geometry";
 export {computeTangents, Geometry} from "./geometry/geometry";
 export {
     createCone,

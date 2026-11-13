@@ -155,6 +155,7 @@ async function buildModel(
                           uvs: data.uvs,
                           indices: data.indices,
                           ...(data.joints && data.weights ? {joints: data.joints, weights: data.weights} : {}),
+                          ...(data.morphTargets.length > 0 ? {morphTargets: data.morphTargets} : {}),
                           tangents:
                               data.tangents ??
                               computeTangents(
@@ -196,6 +197,15 @@ async function buildModel(
             });
         }
         entity.name = node.name ?? gltfMesh?.name ?? `node${nodeIndex}`;
+        // morph weights: the node's, else the mesh's defaults
+        const defaults = node.weights ?? gltfMesh?.weights;
+        if (defaults !== undefined) {
+            for (const m of entity instanceof Mesh ? [entity] : entity.children) {
+                if (m instanceof Mesh) {
+                    m.morphWeights.set(defaults.slice(0, m.morphWeights.length));
+                }
+            }
+        }
         setLocalTransform(entity, node);
         return entity;
     });
@@ -274,7 +284,7 @@ async function buildModel(
 
 /**
  * glTF animations as clips. Node translation / rotation / scale channels become tracks on the node's entity;
- * morph target weights are skipped (not supported yet).
+ * morph target weights become `weights` tracks on the node (driving the mesh, or the meshes under it).
  */
 function readAnimations(json: GltfJson, buffers: ArrayBuffer[], nodes: Entity[]): AnimationClip[] {
     return (json.animations ?? []).map((animation, index) => {
@@ -283,7 +293,7 @@ function readAnimations(json: GltfJson, buffers: ArrayBuffer[], nodes: Entity[])
             const target = channel.target.node !== undefined ? nodes[channel.target.node] : undefined;
             const sampler = animation.samplers[channel.sampler];
             const path = channel.target.path;
-            if (target === undefined || sampler === undefined || path === "weights") {
+            if (target === undefined || sampler === undefined) {
                 continue;
             }
             tracks.push({

@@ -23,14 +23,14 @@ export const doc = defineDoc({
     title: "Animation",
     category: "Scene",
     description:
-        "glTF animations load as clips: keyframe tracks on the model's entities. An AnimationMixer plays them through actions, with speed, looping and weights, and crossfades from one to another. Skinned meshes bend with their skeleton's joints.",
+        "glTF animations load as clips: keyframe tracks on the model's entities. An AnimationMixer plays them through actions, with speed, looping and weights, and crossfades from one to another. Skinned meshes bend with their skeleton's joints; morph targets blend shapes by weight.",
     engineFile: "animation/mixer.ts",
     order: 6,
     demos: [
         {
             title: "Clockwork",
             description:
-                "One glTF file, two clips over the same nodes. Run swings the pendulum (linear rotation), bounces the ball (cubic spline) and squashes it (linear scale), turns the gears, blinks the lamp (step) and waves the stalk, a skinned tube on a chain of four bones. Switch to Idle: the mixer crossfades between them.",
+                "One glTF file, two clips over the same nodes. Run swings the pendulum (linear rotation), bounces the ball (cubic spline) and squashes it (linear scale), turns the gears, blinks the lamp (step), waves the stalk (a skinned tube on four bones) and swells its bulb's ridges (a morph target). Switch to Idle: the mixer crossfades between them.",
             component: Clockwork,
             layout: "full",
         },
@@ -40,6 +40,7 @@ export const doc = defineDoc({
         {id: "clips-and-actions", title: "Clips and actions"},
         {id: "blending", title: "Blending"},
         {id: "skinning", title: "Skinning"},
+        {id: "morph-targets", title: "Morph targets"},
     ],
     props: [
         {
@@ -88,6 +89,21 @@ export const doc = defineDoc({
                     type: "Collider | null",
                     default: "null",
                     description: "Its triangles move: put colliders on the joints to pick it.",
+                },
+            ],
+        },
+        {
+            component: "Mesh (morph targets)",
+            rows: [
+                {
+                    name: "morphWeights",
+                    type: "Float32Array",
+                    description: "One weight per morph target of its geometry; the pass uses the first 8.",
+                },
+                {
+                    name: "geometry.morphTargets",
+                    type: "{positions, normals?}[]",
+                    description: "Per-vertex deltas at weight 1.",
                 },
             ],
         },
@@ -178,6 +194,20 @@ action.weight = 0.5;        // half this clip, half whatever else plays (or the 
                     code={`const head = model.root.find("Head")!;      // a joint
 head.collider = sphereCollider(0.15);       // picks follow the animation
 input.on(head, "click", () => wave.play());`}
+                />
+            </section>
+            <section id="morph-targets" className="flex scroll-mt-24 flex-col gap-3">
+                <h2 className="font-mono text-xl font-semibold">Morph targets</h2>
+                <p className="text-sm text-muted-foreground">
+                    A morph target is a shape the mesh can blend toward: per-vertex position (and normal) deltas, added
+                    by <code className="font-mono text-foreground">mesh.morphWeights</code>. glTF meshes bring their
+                    targets (sparse accessors included) and default weights; weights channels animate them like any
+                    track, and they blend before skinning, as the spec says. The deltas live on the GPU once per
+                    geometry, so a weight change costs a few floats.
+                </p>
+                <Code
+                    code={`const face = model.root.find("Face") as Mesh;
+face.morphWeights[0] = 0.8; // smile, by hand: no clip needed`}
                 />
             </section>
         </div>

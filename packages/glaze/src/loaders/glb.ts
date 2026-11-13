@@ -15,6 +15,12 @@ interface GltfAccessor {
     type: string; // "SCALAR", "VEC2", "VEC3", "VEC4"
     /** Integer data mapped to 0..1 (unsigned) or -1..1 (signed), as quantized UVs and normals use. */
     normalized?: boolean;
+    /** A few elements replaced (on zeros, without a bufferView): how morph targets usually store their deltas. */
+    sparse?: {
+        count: number;
+        indices: {bufferView: number; byteOffset?: number; componentType: number};
+        values: {bufferView: number; byteOffset?: number};
+    };
 }
 
 interface GltfBufferView {
@@ -63,6 +69,8 @@ interface GltfImageDef {
 /** @internal */
 export interface GltfMeshPrimitive {
     attributes: Record<string, number>;
+    /** Morph targets: per target, accessors of POSITION / NORMAL / TANGENT deltas. */
+    targets?: Record<string, number>[];
     indices?: number;
     mode?: number;
     material?: number;
@@ -72,6 +80,8 @@ export interface GltfMeshPrimitive {
 export interface GltfMesh {
     name?: string;
     primitives: GltfMeshPrimitive[];
+    /** Default morph target weights. */
+    weights?: number[];
 }
 
 /** @internal */
@@ -79,6 +89,8 @@ export interface GltfNode {
     name?: string;
     mesh?: number;
     skin?: number;
+    /** Morph target weights for this node's mesh (over the mesh's defaults). */
+    weights?: number[];
     children?: number[];
     matrix?: number[];
     translation?: [number, number, number];
@@ -210,6 +222,43 @@ export function readAccessor(json: GltfJson, buffers: ArrayBuffer[], accessorInd
 
 function readAccessorRaw(json: GltfJson, buffers: ArrayBuffer[], accessorIndex: number): ArrayLike<number> {
     const accessor = json.accessors![accessorIndex]!;
+    const dense = readAccessorDense(json, buffers, accessor);
+    const sparse = accessor.sparse;
+    if (sparse === undefined) {
+        return dense;
+    }
+    // copy (the dense data may be a view on the file) and overwrite the listed elements
+    const elem = TYPE_ELEMENT_COUNT[accessor.type] ?? 1;
+    const out = new (dense.constructor as new (n: number) => ArrayLike<number> & {[i: number]: number})(dense.length);
+    for (let i = 0; i < dense.length; i++) {
+        out[i] = dense[i]!;
+    }
+    const view = (bufferView: number, byteOffset: number, componentType: number, count: number) => {
+        const bv = json.bufferViews![bufferView]!;
+        const ct = COMPONENT_TYPES[componentType]!;
+        return new ct.ctor(buffers[bv.buffer]!, (bv.byteOffset ?? 0) + byteOffset, count);
+    };
+    const indices = view(
+        sparse.indices.bufferView,
+        sparse.indices.byteOffset ?? 0,
+        sparse.indices.componentType,
+        sparse.count,
+    );
+    const values = view(
+        sparse.values.bufferView,
+        sparse.values.byteOffset ?? 0,
+        accessor.componentType,
+        sparse.count * elem,
+    );
+    for (let i = 0; i < sparse.count; i++) {
+        for (let k = 0; k < elem; k++) {
+            out[indices[i]! * elem + k] = values[i * elem + k]!;
+        }
+    }
+    return out;
+}
+
+function readAccessorDense(json: GltfJson, buffers: ArrayBuffer[], accessor: GltfAccessor): ArrayLike<number> {
     const elemCount = TYPE_ELEMENT_COUNT[accessor.type] ?? 1;
     const totalCount = accessor.count * elemCount;
     const ct = COMPONENT_TYPES[accessor.componentType];
@@ -366,6 +415,7 @@ export function readPrimitive(
     indices: Uint32Array;
     joints: Uint16Array | null;
     weights: Float32Array | null;
+    morphTargets: {positions: Float32Array; normals?: Float32Array}[];
 } | null {
     // Only TRIANGLES (mode 4, also the default)
     if (prim.mode !== undefined && prim.mode !== 4) {
@@ -410,7 +460,14 @@ export function readPrimitive(
             }
         }
     }
-    return {positions, normals, uvs, tangents, indices, joints, weights};
+    const morphTargets = (prim.targets ?? []).map((target) => ({
+        positions:
+            target["POSITION"] !== undefined
+                ? toFloat32(readAccessor(json, buffers, target["POSITION"]))
+                : new Float32Array(vertexCount * 3),
+        ...(target["NORMAL"] !== undefined ? {normals: toFloat32(readAccessor(json, buffers, target["NORMAL"]))} : {}),
+    }));
+    return {positions, normals, uvs, tangents, indices, joints, weights, morphTargets};
 }
 
 /** @internal Splits a GLB file into its JSON and binary chunk (the file's buffer 0). */

@@ -13,6 +13,8 @@ What it exercises in `loadGltf` and `AnimationMixer`:
 - a skin: the `Stalk` tube is weighted to a chain of four bones (`Bone 1`…`Bone 4`, each ring blended between
   the two around it), with inverse bind matrices; the `Bulb` is a rigid mesh parented to the last bone
 - `JOINTS_0` as unsigned bytes, `WEIGHTS_0` as floats
+- a morph target: the `Bulb` has a "ridges" target (position deltas along its normals, a pumpkin), with default
+  weights `[0]` on the mesh and a `weights` channel that swells it twice per `Run` cycle
 - `KHR_materials_emissive_strength` on the lamp
 
 Part of this repository, under its MIT licence.

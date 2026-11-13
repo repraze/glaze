@@ -14,6 +14,45 @@ import {SkinnedMesh} from "../scene/skin";
 
 // ─── WGSL shaders ─────────────────────────────────────────────────────────────
 
+/** The per-mesh uniforms (192 bytes), shared by every mesh shader. */
+const MODEL_UNIFORMS_WGSL = /* wgsl */ `
+struct ModelUniforms {
+    model:        mat4x4<f32>,
+    normalMatrix: mat4x4<f32>,
+    flags:        vec4<f32>,   // x = receiveShadow
+    morph:        vec4<f32>,   // x = morph targets, y = vertices
+    morphWeights: array<vec4<f32>, 2>,
+};
+`;
+
+/**
+ * Morph targets: per target and vertex, a position and a normal delta (group 1 binding 2), added by the mesh's
+ * weights. Before skinning, as glTF defines.
+ */
+const MORPH_WGSL = /* wgsl */ `
+@group(1) @binding(2) var<storage, read> morphDeltas: array<vec4<f32>>;
+
+struct Morphed {
+    position: vec3<f32>,
+    normal:   vec3<f32>,
+};
+
+fn applyMorphs(vertex: u32, position: vec3<f32>, normal: vec3<f32>) -> Morphed {
+    var out = Morphed(position, normal);
+    let count    = u32(model.morph.x);
+    let vertices = u32(model.morph.y);
+    for (var t = 0u; t < count; t++) {
+        let w = model.morphWeights[t / 4u][t % 4u];
+        if (w != 0.0) {
+            let at = (t * vertices + vertex) * 2u;
+            out.position += morphDeltas[at].xyz * w;
+            out.normal   += morphDeltas[at + 1u].xyz * w;
+        }
+    }
+    return out;
+}
+`;
+
 /**
  * Skinning: the mesh's joint matrices (mesh space) at group 1 binding 1, next to its model uniforms, and the
  * blend of the four a vertex follows.
@@ -27,26 +66,32 @@ fn skinMatrix(joints: vec4<u32>, weights: vec4<f32>) -> mat4x4<f32> {
 }
 `;
 
-function buildShadowShader(skinned = false): string {
+/** A shadow vertex stage's extra inputs and its local position, for skinned and / or morphed meshes. */
+function shadowVertex(skinned: boolean, morphed: boolean): {inputs: string; local: string} {
+    const inputs =
+        (skinned ? ", @location(4) joints: vec4<u32>, @location(5) weights: vec4<f32>" : "") +
+        (morphed ? ", @builtin(vertex_index) vertex: u32" : "");
+    const base = morphed ? "applyMorphs(vertex, position, vec3<f32>(0.0)).position" : "position";
+    const local = skinned ? `skinMatrix(joints, weights) * vec4<f32>(${base}, 1.0)` : `vec4<f32>(${base}, 1.0)`;
+    return {inputs, local};
+}
+
+function buildShadowShader(skinned = false, morphed = false): string {
+    const v = shadowVertex(skinned, morphed);
     return /* wgsl */ `
 struct ShadowLightUniforms {
     lightSpaceMatrix: mat4x4<f32>,
 };
-
-struct ShadowModelUniforms {
-    model: mat4x4<f32>,
-};
+${MODEL_UNIFORMS_WGSL}
 
 @group(0) @binding(0) var<uniform> light: ShadowLightUniforms;
-@group(1) @binding(0) var<uniform> model: ShadowModelUniforms;
+@group(1) @binding(0) var<uniform> model: ModelUniforms;
 ${skinned ? SKIN_WGSL : ""}
+${morphed ? MORPH_WGSL : ""}
 
 @vertex
-fn vs_shadow(@location(0) position: vec3<f32>${
-        skinned ? ", @location(4) joints: vec4<u32>, @location(5) weights: vec4<f32>" : ""
-    }) -> @builtin(position) vec4<f32> {
-    let local = ${skinned ? "skinMatrix(joints, weights) * vec4<f32>(position, 1.0)" : "vec4<f32>(position, 1.0)"};
-    return light.lightSpaceMatrix * model.model * local;
+fn vs_shadow(@location(0) position: vec3<f32>${v.inputs}) -> @builtin(position) vec4<f32> {
+    return light.lightSpaceMatrix * model.model * ${v.local};
 }
 `;
 }
@@ -55,20 +100,18 @@ fn vs_shadow(@location(0) position: vec3<f32>${
  * Shadow casters with alpha: the albedo alpha decides which texels block light. "mask" cuts like the G-buffer;
  * "blend" keeps a share of shadow texels equal to alpha (2×2 ordered; the PCF reads it back as a partial shadow).
  */
-function buildAlphaShadowShader(alpha: "mask" | "blend", skinned = false): string {
+function buildAlphaShadowShader(alpha: "mask" | "blend", skinned = false, morphed = false): string {
+    const v = shadowVertex(skinned, morphed);
     return /* wgsl */ `
 struct ShadowLightUniforms {
     lightSpaceMatrix: mat4x4<f32>,
 };
 
-struct ShadowModelUniforms {
-    model: mat4x4<f32>,
-};
-
+${MODEL_UNIFORMS_WGSL}
 ${MATERIAL_UNIFORMS_WGSL}
 
 @group(0) @binding(0) var<uniform> light: ShadowLightUniforms;
-@group(1) @binding(0) var<uniform> model: ShadowModelUniforms;
+@group(1) @binding(0) var<uniform> model: ModelUniforms;
 @group(2) @binding(0) var<uniform> mat: MaterialUniforms;
 @group(2) @binding(1) var albedoMap: texture_2d<f32>;
 @group(2) @binding(2) var matSampler: sampler;
@@ -79,14 +122,12 @@ struct ShadowVarying {
 };
 
 ${skinned ? SKIN_WGSL : ""}
+${morphed ? MORPH_WGSL : ""}
 
 @vertex
-fn vs_shadow(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>${
-        skinned ? ", @location(4) joints: vec4<u32>, @location(5) weights: vec4<f32>" : ""
-    }) -> ShadowVarying {
+fn vs_shadow(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>${v.inputs}) -> ShadowVarying {
     var out: ShadowVarying;
-    let local = ${skinned ? "skinMatrix(joints, weights) * vec4<f32>(position, 1.0)" : "vec4<f32>(position, 1.0)"};
-    out.pos = light.lightSpaceMatrix * model.model * local;
+    out.pos = light.lightSpaceMatrix * model.model * ${v.local};
     out.uv = uv;
     return out;
 }
@@ -116,6 +157,8 @@ export interface GBufferFeatures {
     doubleSided?: boolean;
     /** Deformed by a skin's joints (a SkinnedMesh with joints and weights). */
     skinned?: boolean;
+    /** Has morph targets (blend shapes), weighted by mesh.morphWeights. */
+    morphed?: boolean;
 }
 
 /** A mesh drawn with skinning: a SkinnedMesh with a skin, whose geometry has joints and weights. */
@@ -123,13 +166,19 @@ function isSkinned(mesh: Mesh): mesh is SkinnedMesh {
     return mesh instanceof SkinnedMesh && mesh.skin !== null && mesh.geometry.skinned;
 }
 
-function getGBufferFeatures(mat: PBRMaterial, skinned = false): GBufferFeatures {
+/** A mesh whose geometry has morph targets. */
+function isMorphed(mesh: Mesh): boolean {
+    return mesh.geometry.morphTargets !== undefined;
+}
+
+function getGBufferFeatures(mat: PBRMaterial, skinned = false, morphed = false): GBufferFeatures {
     return {
         parallaxMapping: mat.heightMap != null,
         normalMapping: mat.normalMap != null,
         alpha: mat.alphaMode,
         doubleSided: mat.doubleSided,
         skinned,
+        morphed,
     };
 }
 
@@ -139,7 +188,8 @@ function featureKey(f: GBufferFeatures): string {
         (f.normalMapping ? "N" : "") +
         (f.alpha === "mask" ? "M" : f.alpha === "blend" ? "B" : "") +
         (f.doubleSided ? "2" : "") +
-        (f.skinned ? "S" : "")
+        (f.skinned ? "S" : "") +
+        (f.morphed ? "T" : "")
     );
 }
 
@@ -170,12 +220,7 @@ struct CameraUniforms {
     position:       vec4<f32>,
 };
 
-struct ModelUniforms {
-    model:        mat4x4<f32>,
-    normalMatrix: mat4x4<f32>,
-    flags:        vec4<f32>,   // x = receiveShadow
-};
-
+${MODEL_UNIFORMS_WGSL}
 ${MATERIAL_UNIFORMS_WGSL}
 
 @group(0) @binding(0) var<uniform> camera:     CameraUniforms;
@@ -199,9 +244,15 @@ struct VertexInput {
     @location(4) joints:   vec4<u32>,
     @location(5) weights:  vec4<f32>,`
             : ""
+    }${
+        f.morphed
+            ? `
+    @builtin(vertex_index) vertex: u32,`
+            : ""
     }
 };
 ${f.skinned ? SKIN_WGSL : ""}
+${f.morphed ? MORPH_WGSL : ""}
 
 struct VertexOutput {
     @builtin(position) clipPos:      vec4<f32>,
@@ -213,16 +264,26 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {${
+        f.morphed
+            ? `
+    // blend shapes first, then the skin
+    let shaped     = applyMorphs(input.vertex, input.position, input.normal);
+    let basePos    = shaped.position;
+    let baseNormal = shaped.normal;`
+            : `
+    let basePos    = input.position;
+    let baseNormal = input.normal;`
+    }${
         f.skinned
             ? `
     // the joints' movement from the bind pose, in mesh space (rigid joints: it also turns normals)
     let skin    = skinMatrix(input.joints, input.weights);
-    let local   = skin * vec4<f32>(input.position, 1.0);
-    let normal  = (skin * vec4<f32>(input.normal, 0.0)).xyz;
+    let local   = skin * vec4<f32>(basePos, 1.0);
+    let normal  = (skin * vec4<f32>(baseNormal, 0.0)).xyz;
     let tangent = (skin * vec4<f32>(input.tangent.xyz, 0.0)).xyz;`
             : `
-    let local   = vec4<f32>(input.position, 1.0);
-    let normal  = input.normal;
+    let local   = vec4<f32>(basePos, 1.0);
+    let normal  = baseNormal;
     let tangent = input.tangent.xyz;`
     }
     let worldPos = model.model * local;
@@ -901,6 +962,8 @@ interface GeometryGPUResources {
     vertexBuffer: GPUBuffer;
     /** Joints and weights (24 bytes a vertex), for skinned geometry. */
     skinBuffer: GPUBuffer | null;
+    /** Morph target deltas (storage, 32 bytes a vertex per target). */
+    morphBuffer: GPUBuffer | null;
     indexBuffer: GPUBuffer;
     indexCount: number;
 }
@@ -917,6 +980,8 @@ interface MeshGPUResources {
     /** Skinned meshes: joint matrices (storage), sized for `jointCount`. */
     jointBuffer: GPUBuffer | null;
     jointCount: number;
+    /** Drawn with its geometry's morph targets. */
+    morphed: boolean;
 }
 
 /** The interleaved vertex buffer (position, normal, uv, tangent; 48 bytes), with only `locations` read. */
@@ -990,14 +1055,15 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
     // G-buffer pipeline cache (one compiled variant per GBufferFeatures combination)
     private gbufferPipelineLayout!: GPUPipelineLayout;
-    private gbufferSkinnedPipelineLayout!: GPUPipelineLayout;
     private gbufferPipelineCache = new Map<string, GPURenderPipeline>();
     private lightingPipeline!: GPURenderPipeline;
 
     private cameraBindGroupLayout!: GPUBindGroupLayout;
     private modelBindGroupLayout!: GPUBindGroupLayout;
-    /** Model uniforms plus the joint matrices (storage), for skinned meshes. */
-    private skinnedModelBindGroupLayout!: GPUBindGroupLayout;
+    /** Model bind group layouts by "skinned:morphed": the uniforms, plus joint matrices and / or morph deltas. */
+    private readonly modelLayouts = new Map<string, GPUBindGroupLayout>();
+    /** G-buffer and forward pipeline layouts by kind and model layout. */
+    private readonly pipelineLayouts = new Map<string, GPUPipelineLayout>();
     private materialBindGroupLayout!: GPUBindGroupLayout;
     private lightingBindGroupLayout!: GPUBindGroupLayout;
     private shadowSceneBindGroupLayout!: GPUBindGroupLayout;
@@ -1037,7 +1103,6 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     // Transparent ("blend") pass: forward-shaded, sorted back to front
     private forwardPipelineCache = new Map<string, GPURenderPipeline>();
     private forwardPipelineLayout!: GPUPipelineLayout;
-    private forwardSkinnedPipelineLayout!: GPUPipelineLayout;
     private forwardLightingLayout!: GPUBindGroupLayout;
     private forwardLightingBindGroup: GPUBindGroup | null = null;
     private forwardEnvView: GPUTextureView | null = null;
@@ -1064,7 +1129,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     // Per-frame scratch, reused: no allocation per mesh per frame
     private readonly opaqueDraws: {mesh: Mesh; material: PBRMaterial; features: GBufferFeatures; key: string}[] = [];
     private readonly blendDraws: {mesh: Mesh; depth: number}[] = [];
-    private readonly modelData = new Float32Array(36);
+    private readonly modelData = new Float32Array(48);
     private readonly normalMatrix = mat4.create();
     private readonly tmpCenter = vec3.create();
 
@@ -1177,7 +1242,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 this.meshBounds(mesh, this.tmpCenter);
                 blend.push({mesh, depth: vec3.squaredDistance(this.tmpCenter, eye)});
             } else {
-                const features = getGBufferFeatures(mesh.material, isSkinned(mesh));
+                const features = getGBufferFeatures(mesh.material, isSkinned(mesh), isMorphed(mesh));
                 opaque.push({mesh, material: mesh.material, features, key: featureKey(features)});
             }
         }
@@ -1216,6 +1281,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         for (const g of this.geometryCache.values()) {
             g.vertexBuffer.destroy();
             g.skinBuffer?.destroy();
+            g.morphBuffer?.destroy();
             g.indexBuffer.destroy();
         }
         this.geometryCache.clear();
@@ -1241,14 +1307,6 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
                     buffer: {type: "uniform"},
                 },
-            ],
-        });
-
-        this.skinnedModelBindGroupLayout = device.createBindGroupLayout({
-            label: "DeferredScene:skinnedModelLayout",
-            entries: [
-                {binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}},
-                {binding: 1, visibility: GPUShaderStage.VERTEX, buffer: {type: "read-only-storage"}},
             ],
         });
 
@@ -1304,13 +1362,6 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
         this.gbufferPipelineLayout = device.createPipelineLayout({
             bindGroupLayouts: [this.cameraBindGroupLayout, this.modelBindGroupLayout, this.materialBindGroupLayout],
-        });
-        this.gbufferSkinnedPipelineLayout = device.createPipelineLayout({
-            bindGroupLayouts: [
-                this.cameraBindGroupLayout,
-                this.skinnedModelBindGroupLayout,
-                this.materialBindGroupLayout,
-            ],
         });
 
         this.lightingBindGroupLayout = device.createBindGroupLayout({
@@ -1393,14 +1444,6 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 this.forwardLightingLayout,
             ],
         });
-        this.forwardSkinnedPipelineLayout = device.createPipelineLayout({
-            bindGroupLayouts: [
-                this.cameraBindGroupLayout,
-                this.skinnedModelBindGroupLayout,
-                this.materialBindGroupLayout,
-                this.forwardLightingLayout,
-            ],
-        });
 
         this.cameraBindGroup = device.createBindGroup({
             label: "DeferredScene:camera",
@@ -1445,22 +1488,84 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         });
     }
 
+    /** The model bind group layout: uniforms (0), joint matrices (1) if skinned, morph deltas (2) if morphed. */
+    private modelLayout(skinned: boolean, morphed: boolean): GPUBindGroupLayout {
+        if (!skinned && !morphed) {
+            return this.modelBindGroupLayout;
+        }
+        const key = `${skinned}:${morphed}`;
+        let layout = this.modelLayouts.get(key);
+        if (layout === undefined) {
+            layout = this.device.createBindGroupLayout({
+                label: `DeferredScene:modelLayout[${key}]`,
+                entries: [
+                    {
+                        binding: 0,
+                        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                        buffer: {type: "uniform"},
+                    },
+                    ...(skinned
+                        ? [
+                              {
+                                  binding: 1,
+                                  visibility: GPUShaderStage.VERTEX,
+                                  buffer: {type: "read-only-storage" as const},
+                              },
+                          ]
+                        : []),
+                    ...(morphed
+                        ? [
+                              {
+                                  binding: 2,
+                                  visibility: GPUShaderStage.VERTEX,
+                                  buffer: {type: "read-only-storage" as const},
+                              },
+                          ]
+                        : []),
+                ],
+            });
+            this.modelLayouts.set(key, layout);
+        }
+        return layout;
+    }
+
+    /** The G-buffer or forward pipeline layout for a model layout. */
+    private pipelineLayout(kind: "gbuffer" | "forward", skinned: boolean, morphed: boolean): GPUPipelineLayout {
+        if (!skinned && !morphed) {
+            return kind === "gbuffer" ? this.gbufferPipelineLayout : this.forwardPipelineLayout;
+        }
+        const key = `${kind}:${skinned}:${morphed}`;
+        let layout = this.pipelineLayouts.get(key);
+        if (layout === undefined) {
+            const groups = [
+                this.cameraBindGroupLayout,
+                this.modelLayout(skinned, morphed),
+                this.materialBindGroupLayout,
+            ];
+            layout = this.device.createPipelineLayout({
+                bindGroupLayouts: kind === "gbuffer" ? groups : [...groups, this.forwardLightingLayout],
+            });
+            this.pipelineLayouts.set(key, layout);
+        }
+        return layout;
+    }
+
     /** The shadow pipeline for a caster: depth only when opaque, alpha-tested for mask / blend, skinned or not. */
-    private shadowPipelineFor(material: PBRMaterial | null, skinned = false): GPURenderPipeline {
+    private shadowPipelineFor(material: PBRMaterial | null, skinned = false, morphed = false): GPURenderPipeline {
         const alpha = material?.alphaMode ?? "opaque";
         const doubleSided = material?.doubleSided ?? false;
-        if (alpha === "opaque" && !doubleSided && !skinned) {
+        if (alpha === "opaque" && !doubleSided && !skinned && !morphed) {
             return this.shadowPipeline;
         }
-        const key = alpha + (doubleSided ? "2" : "") + (skinned ? "S" : "");
+        const key = alpha + (doubleSided ? "2" : "") + (skinned ? "S" : "") + (morphed ? "T" : "");
         let pipeline = this.shadowPipelines.get(key);
         if (pipeline === undefined) {
-            const modelLayout = skinned ? this.skinnedModelBindGroupLayout : this.modelBindGroupLayout;
+            const modelLayout = this.modelLayout(skinned, morphed);
             const skin = skinned ? [SKIN_LAYOUT] : [];
             const opaque = alpha === "opaque";
             const module = this.device.createShaderModule({
                 label: `Shadow[${key}]`,
-                code: opaque ? buildShadowShader(skinned) : buildAlphaShadowShader(alpha, skinned),
+                code: opaque ? buildShadowShader(skinned, morphed) : buildAlphaShadowShader(alpha, skinned, morphed),
             });
             pipeline = this.device.createRenderPipeline({
                 label: `DeferredScene:shadow[${key}]`,
@@ -1493,7 +1598,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             });
             pipeline = this.device.createRenderPipeline({
                 label: `DeferredScene:forward[${key}]`,
-                layout: features.skinned ? this.forwardSkinnedPipelineLayout : this.forwardPipelineLayout,
+                layout: this.pipelineLayout("forward", !!features.skinned, !!features.morphed),
                 vertex: {
                     module,
                     entryPoint: "vs_main",
@@ -1533,7 +1638,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             });
             pipeline = this.device.createRenderPipeline({
                 label: `DeferredScene:gbuffer[${key || "flat"}]`,
-                layout: features.skinned ? this.gbufferSkinnedPipelineLayout : this.gbufferPipelineLayout,
+                layout: this.pipelineLayout("gbuffer", !!features.skinned, !!features.morphed),
                 vertex: {
                     module,
                     entryPoint: "vs_main",
@@ -1688,7 +1793,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 continue;
             }
             const material = mesh.material instanceof PBRMaterial ? mesh.material : null;
-            const pipeline = this.shadowPipelineFor(material, res.jointBuffer !== null);
+            const pipeline = this.shadowPipelineFor(material, res.jointBuffer !== null, res.morphed);
             let rank = ranks.get(pipeline);
             if (rank === undefined) {
                 rank = ranks.size;
@@ -2022,7 +2127,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             if (!res) {
                 continue;
             }
-            const features = getGBufferFeatures(material, res.jointBuffer !== null);
+            const features = getGBufferFeatures(material, res.jointBuffer !== null, res.morphed);
             pass.setBindGroup(1, res.modelBindGroup);
             pass.setBindGroup(
                 2,
@@ -2084,6 +2189,14 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         data.set(model, 0);
         data.set(normalMatrix, 16);
         data[32] = mesh.receiveShadow ? 1.0 : 0.0;
+        // morph targets: count (up to 8), vertices, then the weights
+        const targets = Math.min(mesh.geometry.morphTargets?.length ?? 0, 8);
+        data[36] = targets;
+        data[37] = mesh.geometry.vertexCount;
+        data.fill(0, 40, 48);
+        for (let t = 0; t < targets; t++) {
+            data[40 + t] = mesh.morphWeights[t] ?? 0;
+        }
         this.device.queue.writeBuffer(buffer, 0, data);
     }
 
@@ -2319,13 +2432,23 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 });
                 device.queue.writeBuffer(skinBuffer, 0, skinData);
             }
+            const morphData = geo.buildMorphBuffer();
+            let morphBuffer: GPUBuffer | null = null;
+            if (morphData !== null) {
+                morphBuffer = device.createBuffer({
+                    label: "Geometry:morph",
+                    size: morphData.byteLength,
+                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+                });
+                device.queue.writeBuffer(morphBuffer, 0, morphData);
+            }
             const indexBuffer = device.createBuffer({
                 label: "Geometry:index",
                 size: geo.indices.byteLength,
                 usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
             });
             device.queue.writeBuffer(indexBuffer, 0, geo.indices);
-            res = {vertexBuffer, skinBuffer, indexBuffer, indexCount: geo.indexCount};
+            res = {vertexBuffer, skinBuffer, morphBuffer, indexBuffer, indexCount: geo.indexCount};
             this.geometryCache.set(geo, res);
         }
         return res;
@@ -2336,7 +2459,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const geo = this.geometryResources(mesh.geometry);
         const modelBuffer = device.createBuffer({
             label: "Mesh:model",
-            size: 144,
+            size: 192,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         const jointCount = skinned ? (mesh as SkinnedMesh).skin!.joints.length : 0;
@@ -2347,15 +2470,15 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                   usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
               })
             : null;
+        const morphed = geo.morphBuffer !== null;
         const modelBindGroup = device.createBindGroup({
             label: "Mesh:modelBindGroup",
-            layout: jointBuffer ? this.skinnedModelBindGroupLayout : this.modelBindGroupLayout,
-            entries: jointBuffer
-                ? [
-                      {binding: 0, resource: {buffer: modelBuffer}},
-                      {binding: 1, resource: {buffer: jointBuffer}},
-                  ]
-                : [{binding: 0, resource: {buffer: modelBuffer}}],
+            layout: this.modelLayout(jointBuffer !== null, morphed),
+            entries: [
+                {binding: 0, resource: {buffer: modelBuffer}},
+                ...(jointBuffer ? [{binding: 1, resource: {buffer: jointBuffer}}] : []),
+                ...(morphed ? [{binding: 2, resource: {buffer: geo.morphBuffer!}}] : []),
+            ],
         });
         return {
             geometry: mesh.geometry,
@@ -2367,6 +2490,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             modelBindGroup,
             jointBuffer,
             jointCount,
+            morphed,
         };
     }
 
@@ -2395,9 +2519,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 m[8]! * m[8]! + m[9]! * m[9]! + m[10]! * m[10]!,
             ),
         );
+        const reach = mesh.geometry.morphTargets !== undefined ? mesh.geometry.morphReach * scale : 0;
         if (!isSkinned(mesh)) {
             vec3.transformMat4(center, bounds.center as vec3, m);
-            return bounds.radius * scale;
+            return bounds.radius * scale + reach;
         }
         // the bind-pose sphere no longer holds once joints move: take the joints' spread, padded by the mesh's
         // own radius (a vertex sits within it of some joint)
@@ -2415,6 +2540,6 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             const w = joint.worldMatrix;
             spread = Math.max(spread, Math.hypot(w[12]! - center[0], w[13]! - center[1], w[14]! - center[2]));
         }
-        return spread + bounds.radius * scale;
+        return spread + bounds.radius * scale + reach;
     }
 }

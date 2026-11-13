@@ -2,8 +2,11 @@ import {quat} from "gl-matrix";
 
 import type {Entity} from "../scene/entity";
 
-/** What a track animates: an entity's position, rotation quaternion or scale (glTF's channel paths). */
-export type TrackPath = "translation" | "rotation" | "scale";
+/**
+ * What a track animates (glTF's channel paths): an entity's position, rotation quaternion or scale, or the
+ * morph target weights of its mesh (or of the meshes under it).
+ */
+export type TrackPath = "translation" | "rotation" | "scale" | "weights";
 
 /**
  * How values change between keyframes (glTF's interpolation modes):
@@ -19,7 +22,10 @@ export interface AnimationTrack {
     readonly path: TrackPath;
     /** Key times in seconds, increasing. */
     readonly times: Float32Array;
-    /** Values, flat: 3 per key (translation, scale) or 4 (rotation), ×3 for CUBICSPLINE (in, value, out). */
+    /**
+     * Values, flat: 3 per key (translation, scale), 4 (rotation) or one per morph target (weights), ×3 for
+     * CUBICSPLINE (in, value, out).
+     */
     readonly values: Float32Array;
     readonly interpolation: Interpolation;
 }
@@ -38,9 +44,13 @@ export class AnimationClip {
     }
 }
 
-/** Components per value for a path. */
-export function trackStride(path: TrackPath): number {
-    return path === "rotation" ? 4 : 3;
+/** Components per value: 3, 4 for rotations, or the morph target count for weights. */
+export function trackStride(track: Pick<AnimationTrack, "path" | "times" | "values" | "interpolation">): number {
+    if (track.path === "weights") {
+        const keys = Math.max(track.times.length, 1) * (track.interpolation === "CUBICSPLINE" ? 3 : 1);
+        return Math.floor(track.values.length / keys);
+    }
+    return track.path === "rotation" ? 4 : 3;
 }
 
 /**
@@ -80,12 +90,13 @@ const qa = quat.create();
 const qb = quat.create();
 
 /**
- * Samples a track at `time` into `out` (3 or 4 components), and returns the key index for the next call's
+ * Samples a track at `time` into `out` (trackStride components), and returns the key index for the next call's
  * hint. Rotations come out normalized.
  */
 export function sampleTrack(track: AnimationTrack, time: number, out: Float32Array | number[], hint = 0): number {
     const {times, values, interpolation} = track;
-    const n = trackStride(track.path);
+    const n = trackStride(track);
+    const rotation = track.path === "rotation";
     const cubic = interpolation === "CUBICSPLINE";
     const keyStride = cubic ? n * 3 : n;
     const valueAt = cubic ? n : 0; // a cubic key is [in-tangent, value, out-tangent]
@@ -98,7 +109,7 @@ export function sampleTrack(track: AnimationTrack, time: number, out: Float32Arr
         for (let k = 0; k < n; k++) {
             out[k] = values[at + k]!;
         }
-        if (n === 4) {
+        if (rotation) {
             normalize4(out);
         }
         return i;
@@ -111,7 +122,7 @@ export function sampleTrack(track: AnimationTrack, time: number, out: Float32Arr
     if (interpolation === "LINEAR") {
         const a = i * keyStride;
         const b = (i + 1) * keyStride;
-        if (n === 4) {
+        if (rotation) {
             quat.set(qa, values[a]!, values[a + 1]!, values[a + 2]!, values[a + 3]!);
             quat.set(qb, values[b]!, values[b + 1]!, values[b + 2]!, values[b + 3]!);
             quat.slerp(qa, qa, qb, s);
@@ -144,7 +155,7 @@ export function sampleTrack(track: AnimationTrack, time: number, out: Float32Arr
         const m1 = values[b + k]! * dt; // in-tangent of key i + 1
         out[k] = h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1;
     }
-    if (n === 4) {
+    if (rotation) {
         normalize4(out);
     }
     return i;

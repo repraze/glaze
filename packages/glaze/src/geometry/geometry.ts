@@ -11,6 +11,16 @@ export interface GeometryOptions {
     joints?: Uint16Array;
     /** Skinning: 4 weights per vertex, summing to 1. */
     weights?: Float32Array;
+    /** Blend shapes: per target, position deltas (3 a vertex) and optionally normal deltas. */
+    morphTargets?: MorphTarget[];
+}
+
+/** A blend shape: how far each vertex (and its normal) moves at weight 1. */
+export interface MorphTarget {
+    /** 3 floats a vertex. */
+    positions: Float32Array;
+    /** 3 floats a vertex; none: normals stay. */
+    normals?: Float32Array;
 }
 
 export class Geometry {
@@ -27,11 +37,14 @@ export class Geometry {
     readonly joints?: Uint16Array;
     /** Skinning: 4 weights per vertex. */
     readonly weights?: Float32Array;
+    /** Blend shapes, weighted per mesh by `mesh.morphWeights`. */
+    readonly morphTargets?: readonly MorphTarget[];
 
     readonly vertexCount: number;
     readonly indexCount: number;
 
-    constructor({positions, normals, uvs, indices, tangents, joints, weights}: GeometryOptions) {
+    constructor({positions, normals, uvs, indices, tangents, joints, weights, morphTargets}: GeometryOptions) {
+        this.morphTargets = morphTargets !== undefined && morphTargets.length > 0 ? morphTargets : undefined;
         if ((joints === undefined) !== (weights === undefined)) {
             throw new Error("Geometry: joints and weights go together");
         }
@@ -83,6 +96,47 @@ export class Geometry {
         }
         return out;
     }
+
+    /**
+     * The morph targets for the GPU: per target, per vertex, a position delta then a normal delta (two vec4s,
+     * 32 bytes). Null without targets.
+     */
+    buildMorphBuffer(): Float32Array | null {
+        const targets = this.morphTargets;
+        if (targets === undefined) {
+            return null;
+        }
+        const n = this.vertexCount;
+        const out = new Float32Array(targets.length * n * 8);
+        targets.forEach((target, t) => {
+            for (let i = 0; i < n; i++) {
+                const at = (t * n + i) * 8;
+                for (let k = 0; k < 3; k++) {
+                    out[at + k] = target.positions[i * 3 + k] ?? 0;
+                    out[at + 4 + k] = target.normals?.[i * 3 + k] ?? 0;
+                }
+            }
+        });
+        return out;
+    }
+
+    /** How far any morph target moves any vertex: what bounds grow by when weights are up to 1. */
+    get morphReach(): number {
+        if (this._morphReach !== null) {
+            return this._morphReach;
+        }
+        let reach = 0;
+        for (const target of this.morphTargets ?? []) {
+            for (let i = 0; i < target.positions.length; i += 3) {
+                reach = Math.max(
+                    reach,
+                    Math.hypot(target.positions[i]!, target.positions[i + 1]!, target.positions[i + 2]!),
+                );
+            }
+        }
+        return (this._morphReach = reach);
+    }
+    private _morphReach: number | null = null;
 
     /** Drops the cached bounds after `positions` were edited in place; they are recomputed on next use. */
     updateBounds(): void {

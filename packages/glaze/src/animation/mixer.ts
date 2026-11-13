@@ -1,5 +1,6 @@
 import type {Entity} from "../scene/entity";
-import {type AnimationClip, sampleTrack, type TrackPath, trackStride} from "./clip";
+import {Mesh} from "../scene/mesh";
+import {type AnimationClip, type AnimationTrack, sampleTrack, type TrackPath, trackStride} from "./clip";
 
 /** What happens at the end of a clip: start over, stop on the last frame, or play back and forth. */
 export type LoopMode = "repeat" | "once" | "pingpong";
@@ -128,12 +129,15 @@ function mod(a: number, n: number): number {
 interface Binding {
     readonly target: Entity;
     readonly path: TrackPath;
+    /** Weights tracks: the meshes whose morphWeights they drive (the target, or the meshes under it). */
+    readonly meshes: readonly Mesh[];
     readonly rest: Float32Array;
     readonly sum: Float32Array;
     weight: number;
 }
 
-const sample = new Float32Array(4);
+/** Sampling scratch: room for a quaternion, or up to 256 morph target weights. */
+const sample = new Float32Array(256);
 
 /**
  * Plays animation clips on entities. Call `update(delta)` once per frame: each enabled action advances, and
@@ -162,7 +166,7 @@ export class AnimationMixer {
             this.actions.set(clip, action);
             this.trackBindings.set(
                 action,
-                clip.tracks.map((track) => this.bind(track.target, track.path)),
+                clip.tracks.map((track) => this.bind(track)),
             );
         }
         return action;
@@ -212,7 +216,8 @@ export class AnimationMixer {
         }
     }
 
-    private bind(target: Entity, path: TrackPath): Binding {
+    private bind(track: AnimationTrack): Binding {
+        const {target, path} = track;
         let byPath = this.bindings.get(target);
         if (byPath === undefined) {
             byPath = new Map();
@@ -220,14 +225,27 @@ export class AnimationMixer {
         }
         let binding = byPath.get(path);
         if (binding === undefined) {
+            const meshes =
+                path === "weights"
+                    ? target instanceof Mesh
+                        ? [target]
+                        : target.children.filter((c): c is Mesh => c instanceof Mesh)
+                    : [];
+            const n = Math.min(trackStride(track), sample.length);
             const source =
-                path === "translation" ? target.position : path === "rotation" ? target.quaternion : target.scale;
-            const n = trackStride(path);
+                path === "translation"
+                    ? target.position
+                    : path === "rotation"
+                      ? target.quaternion
+                      : path === "scale"
+                        ? target.scale
+                        : (meshes[0]?.morphWeights ?? new Float32Array(n));
             binding = {
                 target,
                 path,
-                rest: Float32Array.from({length: n}, (_, k) => source[k]!),
-                sum: new Float32Array(4),
+                meshes,
+                rest: Float32Array.from({length: n}, (_, k) => source[k] ?? 0),
+                sum: new Float32Array(Math.max(n, 4)),
                 weight: 0,
             };
             byPath.set(path, binding);
@@ -246,7 +264,7 @@ function accumulate(binding: Binding, value: Float32Array, weight: number): void
             sum[k] = sum[k]! + value[k]! * w;
         }
     } else {
-        for (let k = 0; k < 3; k++) {
+        for (let k = 0; k < binding.rest.length; k++) {
             sum[k] = sum[k]! + value[k]! * weight;
         }
     }
@@ -255,7 +273,7 @@ function accumulate(binding: Binding, value: Float32Array, weight: number): void
 
 function apply(binding: Binding): void {
     const {sum, rest, path, target} = binding;
-    const n = trackStride(path);
+    const n = rest.length;
     const total = binding.weight;
     if (total < 1) {
         // the rest pose makes up the remaining weight
@@ -277,6 +295,13 @@ function apply(binding: Binding): void {
         target.quaternion[1] = sum[1]! / len;
         target.quaternion[2] = sum[2]! / len;
         target.quaternion[3] = sum[3]! / len;
+    } else if (path === "weights") {
+        for (const mesh of binding.meshes) {
+            const weights = mesh.morphWeights;
+            for (let k = 0; k < Math.min(n, weights.length); k++) {
+                weights[k] = sum[k]!;
+            }
+        }
     } else {
         const out = path === "translation" ? target.position : target.scale;
         out[0] = sum[0]!;

@@ -281,13 +281,31 @@ const materials = [
 ];
 
 const meshes = [];
-function mesh(name, geometry, material) {
-    meshes.push({
-        name,
-        primitives: [{attributes: {...geometry, indices: undefined}, indices: geometry.indices, material}],
-    });
-    delete meshes.at(-1).primitives[0].attributes.indices;
+/** A one-primitive mesh; `targets` adds morph targets (position deltas, flat), with weights starting at 0. */
+function mesh(name, geometry, material, targets = []) {
+    const {indices, ...attributes} = geometry;
+    const primitive = {attributes, indices, material};
+    if (targets.length > 0) {
+        primitive.targets = targets.map((deltas) => {
+            const d = new Float32Array(deltas);
+            return {POSITION: accessor(d, "VEC3", 5126, {fields: bounds(d, 3)})};
+        });
+    }
+    meshes.push({name, primitives: [primitive], ...(targets.length > 0 ? {weights: targets.map(() => 0)} : {})});
     return meshes.length - 1;
+}
+
+/** "Ridges": a sphere's vertices pushed out along their normals by a ribbed pattern around Y (a pumpkin). */
+function ridges(geometry, depth, ribs) {
+    const out = [];
+    for (let i = 0; i < geometry.positions.length; i += 3) {
+        const [nx, ny, nz] = geometry.normals.slice(i, i + 3);
+        const theta = Math.atan2(nz, nx);
+        const side = Math.sqrt(Math.max(0, 1 - ny * ny)); // none at the poles
+        const push = depth * side * (0.5 + 0.5 * Math.cos(ribs * theta));
+        out.push(r6(nx * push), r6(ny * push * 0.3), r6(nz * push));
+    }
+    return out;
 }
 
 const baseMesh = mesh("Base", addGeometry(box(3.2, 0.24, 1.6)), 0);
@@ -301,7 +319,8 @@ const ballMesh = mesh("Ball", addGeometry(sphere(0.18)), 4);
 const lampMesh = mesh("Lamp", addGeometry(sphere(0.09, 20, 10)), 5);
 const STALK = {x: 0.15, y: 0.24, z: 0.5, segment: 0.3, bones: 4};
 const stalkMesh = mesh("Stalk", addGeometry(stalk(STALK.x, STALK.y, STALK.z, 0.05, STALK.segment, STALK.bones)), 3);
-const bulbMesh = mesh("Bulb", addGeometry(sphere(0.11, 24, 12)), 4);
+const bulbShape = sphere(0.11, 32, 16);
+const bulbMesh = mesh("Bulb", addGeometry(bulbShape), 4, [ridges(bulbShape, 0.05, 8)]);
 
 const nodes = [];
 function node(def) {
@@ -356,7 +375,8 @@ function clip(name, channels) {
     for (const [target, path, interpolation, times, values] of channels) {
         const t = new Float32Array(times);
         const input = accessor(t, "SCALAR", 5126, {fields: bounds(t, 1)});
-        const output = accessor(new Float32Array(values), path === "rotation" ? "VEC4" : "VEC3", 5126);
+        const type = path === "rotation" ? "VEC4" : path === "weights" ? "SCALAR" : "VEC3";
+        const output = accessor(new Float32Array(values), type, 5126);
         samplers.push({input, output, interpolation});
         out.push({sampler: samplers.length - 1, target: {node: target, path}});
     }
@@ -446,6 +466,8 @@ clip("Run", [
     [ball, "translation", "CUBICSPLINE", bounceTimes, bounceValues],
     [ball, "scale", "LINEAR", squashTimes, squashValues],
     ...boneNodes.map((bone, i) => [bone, "rotation", "LINEAR", ...wave(0.32, 2, i * 0.7)]),
+    // the bulb's ridges swell twice a cycle (a morph target weight)
+    [bulb, "weights", "LINEAR", [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2], [0, 1, 0.2, 1, 0, 1, 0.2, 1, 0]],
     [
         lamp,
         "scale",
@@ -463,6 +485,7 @@ clip("Idle", [
     [ball, "scale", "LINEAR", [0, 4], [1, 1, 1, 1, 1, 1]],
     [lamp, "scale", "STEP", [0, 4], [...lampOff, ...lampOff]],
     ...boneNodes.map((bone, i) => [bone, "rotation", "LINEAR", ...wave(0.08, 4, i * 0.5)]),
+    [bulb, "weights", "LINEAR", [0, 4], [0, 0]],
 ]);
 
 // ─── GLB ──────────────────────────────────────────────────────────────────────
