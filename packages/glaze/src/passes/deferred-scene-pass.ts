@@ -629,7 +629,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
         this.scene.updateWorldMatrices();
 
-        const meshes = this.scene.collectMeshes();
+        const visible = this.scene.activeCamera?.visibleLayers ?? 0xffffffff;
+        const meshes = this.scene.collectMeshes().filter((m) => (m.layers & visible) !== 0);
         const dirLights = this.scene.collectDirectionalLights().slice(0, MAX_DIRECTIONAL);
         const pointLights = this.scene.collectPointLights().slice(0, MAX_POINT);
         const spotLights = this.scene.collectSpotLights().slice(0, MAX_SPOT);

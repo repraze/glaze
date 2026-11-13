@@ -65,6 +65,17 @@ export const doc = defineDoc({
                 },
                 {name: "getViewMatrix()", type: "mat4", description: "Inverse of the world matrix."},
                 {name: "getViewProjectionMatrix(aspect)", type: "mat4"},
+                {
+                    name: "getRay(out, ndcX, ndcY, aspect)",
+                    type: "Ray",
+                    description: "World ray through a screen point, for raycast.",
+                },
+                {
+                    name: "visibleLayers",
+                    type: "number",
+                    default: "ALL_LAYERS",
+                    description: "Renders meshes whose layers intersect it.",
+                },
             ],
         },
     ],

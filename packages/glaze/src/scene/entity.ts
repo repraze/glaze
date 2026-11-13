@@ -1,5 +1,15 @@
 import {mat4, quat, type ReadonlyVec3, vec3} from "gl-matrix";
 
+import type {Collider} from "./collider";
+
+/** Every layer bit set: the default query and visibility mask. */
+export const ALL_LAYERS = 0xffffffff;
+
+/** The mask with only layer `n` (0..31) set, Blender-style: `entity.layers = layer(0) | layer(3)`. */
+export function layer(n: number): number {
+    return (1 << n) >>> 0;
+}
+
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 
@@ -25,6 +35,15 @@ export class Entity {
     readonly children: Entity[] = [];
     parent: Entity | null = null;
     enabled: boolean = true;
+
+    /**
+     * The layers this entity is on, a 32-bit mask (default: layer 0). One mask for everything: `raycast` queries
+     * and a camera's `visibleLayers` match it with a bitwise AND. Not inherited: each entity has its own.
+     */
+    layers: number = 1;
+
+    /** The shape `raycast` hits this entity by, in local space; null (the default, except on meshes) for none. */
+    collider: Collider | null = null;
 
     position: vec3 = vec3.fromValues(0, 0, 0);
     /** Local rotation, a unit quaternion (x, y, z, w). Set it from angles with `setEuler`. */

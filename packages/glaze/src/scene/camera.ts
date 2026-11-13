@@ -1,9 +1,29 @@
 import {mat4} from "gl-matrix";
 
-import {Entity} from "./entity";
+import {type Ray, ray} from "../math/ray";
+import {ALL_LAYERS, Entity} from "./entity";
+
+const tmpWorld = mat4.create();
+const tmpInvProj = mat4.create();
 
 export abstract class Camera extends Entity {
+    /** The layers this camera renders: a mesh shows when `mesh.layers & camera.visibleLayers` is non-zero. */
+    visibleLayers: number = ALL_LAYERS;
+
     abstract getProjectionMatrix(aspect: number): mat4;
+
+    /**
+     * The world-space ray through a point in normalised device coordinates (x right, y up, -1..1), from the near
+     * plane, with a unit direction. Uses the camera's current transform (not last frame's).
+     */
+    getRay(out: Ray, ndcX: number, ndcY: number, aspect: number): Ray {
+        // inverse(P · V) = world · inverse(P), and V is the inverse of the world matrix.
+        const invProj = mat4.invert(tmpInvProj, this.getProjectionMatrix(aspect));
+        if (invProj === null) {
+            return ray.copy(out, {origin: this.getWorldPosition(), direction: this.getWorldDirection()});
+        }
+        return ray.fromNdc(out, mat4.multiply(tmpInvProj, this.computeWorldMatrix(tmpWorld), invProj), ndcX, ndcY);
+    }
 
     getViewMatrix(): mat4 {
         const view = mat4.create();

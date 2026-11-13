@@ -14,5 +14,7 @@ export class Mesh extends Entity {
         this.material = material;
         this.castShadow = true;
         this.receiveShadow = true;
+        // Hit by its own triangles; the bounds are only computed by the first raycast that reaches it.
+        this.collider = {kind: "geometry"};
     }
 }

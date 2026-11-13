@@ -96,6 +96,18 @@ export const doc = defineDoc({
                     default: "true",
                     description: "False hides the entity and its subtree.",
                 },
+                {
+                    name: "layers",
+                    type: "number",
+                    default: "layer(0)",
+                    description: "32-bit mask matched by raycast and a camera's visibleLayers.",
+                },
+                {
+                    name: "collider",
+                    type: "Collider | null",
+                    default: "null (meshes: their geometry)",
+                    description: "What raycast hits; independent of rendering.",
+                },
                 {name: "children / parent", type: "Entity[] / Entity | null"},
                 {name: "add(child) / remove(child)", type: "this"},
                 {name: "setEuler(x, y, z)", type: "this", description: "Rotation from Euler angles in radians."},

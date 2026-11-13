@@ -222,6 +222,33 @@ setColorRgb(scene.ambientColor, "#050508"); // in place, for per-frame updates
 srgbToLinear(0.5); // ≈ 0.214
 ```
 
+## Picking
+
+`raycast(sceneOrEntity, ray, {layers?, filter?, maxDistance?})` returns **every** hit, nearest first:
+`{entity, distance, point, normal, faceIndex, uv}`. Take `hits[0]`, or the first one behind something with
+`hits.find(...)`.
+
+```ts
+import {boxCollider, Entity, layer, ray, raycast} from "@repraze/glaze";
+
+const r = camera.getRay(ray.create(), ndcX, ndcY, width / height); // NDC: x right, y up, -1..1
+const [hit] = raycast(scene, r, {layers: layer(0) | layer(2)});
+
+// widen a small target with an invisible proxy: hits report the proxy, walk `parent` to its owner
+const hitbox = new Entity();
+hitbox.collider = boxCollider([1, 1, 1]);
+button.add(hitbox);
+```
+
+- **Colliders** are what a ray hits, separate from rendering: `boxCollider(size | min, max)`,
+  `sphereCollider(radius, center?)`, `geometryCollider(geometry?, {cullBackFace})`, on any entity. A mesh starts with
+  its own geometry (bounds computed on first hit test, back faces culled like the renderer); `mesh.collider = null`
+  takes it out of picking for free.
+- **Layers**: one 32-bit mask per entity (`entity.layers`, default `layer(0)`), not inherited. `raycast` tests
+  `entity.layers & layers`; a camera renders the meshes on its `visibleLayers` (default `ALL_LAYERS`).
+- Layers and `filter` skip only that entity, never its children; a disabled entity skips its subtree. World matrices
+  are refreshed first.
+
 ## Bounds and rays
 
 In gl-matrix's style (plain data, free functions, `out` first, aliasing allowed): `box3` and `sphere` for bounding
