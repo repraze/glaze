@@ -101,12 +101,16 @@ function GraphSlide() {
         const dots = perTheme(
             (c) =>
                 new ShaderPass({
+                    // Each dot blinks at a fixed rate from a hash of its cell. Taking the rate from the noise (which
+                    // drifts with time) made sin(time * rate(time)) speed up the longer the page stayed open.
                     fragmentShader: /* wgsl */ `
+                        fn cellHash(p: vec2<f32>) -> f32 { return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453); }
                         @fragment fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
                             let cell = floor(in.pos.xy / 14.0);
                             let h = textureSample(input0, inputSampler, (cell + 0.5) / ceil(globals.resolution / 14.0)).r;
                             let d = length(fract(in.pos.xy / 14.0) - 0.5) * 14.0;
-                            let blink = 0.5 + 0.5 * sin(globals.time * (1.0 + h * 3.0) + h * 20.0);
+                            let rnd = cellHash(cell);
+                            let blink = 0.5 + 0.5 * sin(globals.time * (1.0 + rnd * 3.0) + rnd * 6.283185);
                             let dot = (1.0 - smoothstep(3.5, 5.5, d)) * blink;
                             let hue = mix(${wgslColor(c.accent)}, ${wgslColor(c.hues.purple)}, h);
                             return vec4<f32>(mix(${wgslColor(c.background)}, hue, dot), 1.0);
