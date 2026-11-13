@@ -7,9 +7,34 @@ function isBinarySTL(buffer: ArrayBuffer): boolean {
         return false;
     }
     const triangleCount = new DataView(buffer).getUint32(80, true);
-    // Binary STL is exactly 84 + 50*n bytes. Use this to distinguish from
-    // ASCII files that happen to start with "solid".
-    return buffer.byteLength === 84 + triangleCount * 50;
+    // Binary STL is 84 + 50·n bytes. Exactly that size settles it, even for a header that starts with "solid".
+    if (buffer.byteLength === 84 + triangleCount * 50) {
+        return true;
+    }
+    // Some exporters pad binary files: then it is ASCII only if it reads like ASCII STL.
+    const head = new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 1024)));
+    const ascii = /^\s*solid\b/.test(head) && /\bfacet\b|\bendsolid\b/.test(head);
+    return !ascii && buffer.byteLength > 84 + triangleCount * 50;
+}
+
+/** Facets whose stored normal is zero (common) or missing get the normal of their triangle. */
+function fillFacetNormals(positions: Float32Array, normals: Float32Array): void {
+    for (let t = 0; t + 8 < positions.length; t += 9) {
+        if (Math.hypot(normals[t]!, normals[t + 1]!, normals[t + 2]!) > 1e-12) {
+            continue;
+        }
+        const ux = positions[t + 3]! - positions[t]!, uy = positions[t + 4]! - positions[t + 1]!, uz = positions[t + 5]! - positions[t + 2]!; // prettier-ignore
+        const vx = positions[t + 6]! - positions[t]!, vy = positions[t + 7]! - positions[t + 1]!, vz = positions[t + 8]! - positions[t + 2]!; // prettier-ignore
+        const nx = uy * vz - uz * vy;
+        const ny = uz * vx - ux * vz;
+        const nz = ux * vy - uy * vx;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        for (let k = 0; k < 9; k += 3) {
+            normals[t + k] = nx / len;
+            normals[t + k + 1] = ny / len;
+            normals[t + k + 2] = nz / len;
+        }
+    }
 }
 
 // ─── Binary parser ────────────────────────────────────────────────────────────
@@ -48,6 +73,7 @@ function parseBinarySTL(buffer: ArrayBuffer): Geometry {
         indices[i * 3 + 2] = i * 3 + 2;
     }
 
+    fillFacetNormals(positions, normals);
     return new Geometry({positions, normals, uvs, indices});
 }
 
@@ -88,6 +114,7 @@ function parseAsciiSTL(buffer: ArrayBuffer): Geometry {
         indices[i] = i;
     }
 
+    fillFacetNormals(positions, normals);
     return new Geometry({positions, normals, uvs, indices});
 }
 
@@ -97,7 +124,7 @@ function parseAsciiSTL(buffer: ArrayBuffer): Geometry {
  * Parse an STL file (binary or ASCII) and return a {@link Geometry}.
  *
  * Vertices are unmerged (each triangle has 3 unique vertices), normals come
- * from the file's face normals, and UVs are zeroed (STL carries no UV data).
+ * from the file's face normals (or the triangle's, when stored as zero), and UVs are zeroed (STL carries no UV data).
  */
 export function parseSTL(buffer: ArrayBuffer): Geometry {
     return isBinarySTL(buffer) ? parseBinarySTL(buffer) : parseAsciiSTL(buffer);
@@ -108,6 +135,9 @@ export function parseSTL(buffer: ArrayBuffer): Geometry {
  */
 export async function loadSTLFromURL(url: string): Promise<Geometry> {
     const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`STL: failed to fetch '${url}' (${response.status})`);
+    }
     const buffer = await response.arrayBuffer();
     return parseSTL(buffer);
 }

@@ -437,8 +437,9 @@ export function readPrimitive(
     weights: Float32Array | null;
     morphTargets: {positions: Float32Array; normals?: Float32Array}[];
 } | null {
-    // Only TRIANGLES (mode 4, also the default)
-    if (prim.mode !== undefined && prim.mode !== 4) {
+    // triangles: lists (4, the default), strips (5) and fans (6); points and lines are skipped
+    const mode = prim.mode ?? 4;
+    if (mode !== 4 && mode !== 5 && mode !== 6) {
         return null;
     }
     const posIdx = prim.attributes["POSITION"];
@@ -450,8 +451,7 @@ export function readPrimitive(
     const tanIdx = prim.attributes["TANGENT"];
     const positions = toFloat32(readAccessor(json, buffers, posIdx));
     const vertexCount = positions.length / 3;
-    const normals =
-        normIdx !== undefined ? toFloat32(readAccessor(json, buffers, normIdx)) : new Float32Array(vertexCount * 3);
+    const normals = normIdx !== undefined ? toFloat32(readAccessor(json, buffers, normIdx)) : null;
     const uvs = uvIdx !== undefined ? toFloat32(readAccessor(json, buffers, uvIdx)) : new Float32Array(vertexCount * 2);
     const tangents = tanIdx !== undefined ? toFloat32(readAccessor(json, buffers, tanIdx)) : null;
     let indices: Uint32Array;
@@ -462,6 +462,9 @@ export function readPrimitive(
         for (let i = 0; i < vertexCount; i++) {
             indices[i] = i;
         }
+    }
+    if (mode !== 4) {
+        indices = triangleList(indices, mode);
     }
     // skinning: 4 joints and weights per vertex (uint8 / uint16 joints, float or normalized weights)
     const jointsIdx = prim.attributes["JOINTS_0"];
@@ -487,7 +490,86 @@ export function readPrimitive(
                 : new Float32Array(vertexCount * 3),
         ...(target["NORMAL"] !== undefined ? {normals: toFloat32(readAccessor(json, buffers, target["NORMAL"]))} : {}),
     }));
+    if (normals === null) {
+        // glTF: without normals, a mesh is flat shaded. Every triangle gets its own three vertices.
+        return flatShaded({positions, uvs, tangents, indices, joints, weights, morphTargets});
+    }
     return {positions, normals, uvs, tangents, indices, joints, weights, morphTargets};
+}
+
+/** Strip (5) or fan (6) indices as a triangle list, keeping every triangle counter-clockwise. */
+export function triangleList(indices: Uint32Array, mode: 5 | 6 | number): Uint32Array {
+    const count = Math.max(indices.length - 2, 0);
+    const out = new Uint32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+        if (mode === 5) {
+            // every other strip triangle winds the other way: swap two of its corners back
+            const even = i % 2 === 0;
+            out[i * 3] = indices[i]!;
+            out[i * 3 + 1] = indices[even ? i + 1 : i + 2]!;
+            out[i * 3 + 2] = indices[even ? i + 2 : i + 1]!;
+        } else {
+            out[i * 3] = indices[0]!;
+            out[i * 3 + 1] = indices[i + 1]!;
+            out[i * 3 + 2] = indices[i + 2]!;
+        }
+    }
+    return out;
+}
+
+/** Splits shared vertices so each triangle has its own, and gives them the triangle's normal. */
+function flatShaded(p: {
+    positions: Float32Array;
+    uvs: Float32Array;
+    tangents: Float32Array | null;
+    indices: Uint32Array;
+    joints: Uint16Array | null;
+    weights: Float32Array | null;
+    morphTargets: {positions: Float32Array; normals?: Float32Array}[];
+}) {
+    const n = p.indices.length;
+    const spread = <T extends Float32Array | Uint16Array>(src: T, size: number): T => {
+        const out = new (src.constructor as new (length: number) => T)(n * size);
+        for (let i = 0; i < n; i++) {
+            const v = p.indices[i]!;
+            for (let k = 0; k < size; k++) {
+                out[i * size + k] = src[v * size + k]!;
+            }
+        }
+        return out;
+    };
+    const positions = spread(p.positions, 3);
+    const normals = new Float32Array(n * 3);
+    for (let t = 0; t + 2 < n; t += 3) {
+        const a = t * 3;
+        const ux = positions[a + 3]! - positions[a]!, uy = positions[a + 4]! - positions[a + 1]!, uz = positions[a + 5]! - positions[a + 2]!; // prettier-ignore
+        const vx = positions[a + 6]! - positions[a]!, vy = positions[a + 7]! - positions[a + 1]!, vz = positions[a + 8]! - positions[a + 2]!; // prettier-ignore
+        let nx = uy * vz - uz * vy;
+        let ny = uz * vx - ux * vz;
+        let nz = ux * vy - uy * vx;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        nx /= len;
+        ny /= len;
+        nz /= len;
+        for (let k = 0; k < 3; k++) {
+            normals[a + k * 3] = nx;
+            normals[a + k * 3 + 1] = ny;
+            normals[a + k * 3 + 2] = nz;
+        }
+    }
+    return {
+        positions,
+        normals,
+        uvs: spread(p.uvs, 2),
+        tangents: p.tangents && spread(p.tangents, 4),
+        indices: Uint32Array.from({length: n}, (_, i) => i),
+        joints: p.joints && spread(p.joints, 4),
+        weights: p.weights && spread(p.weights, 4),
+        morphTargets: p.morphTargets.map((t) => ({
+            positions: spread(t.positions, 3),
+            ...(t.normals ? {normals: spread(t.normals, 3)} : {}),
+        })),
+    };
 }
 
 /** @internal Splits a GLB file into its JSON and binary chunk (the file's buffer 0). */

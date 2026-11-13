@@ -376,3 +376,22 @@ describe("readAccessor", () => {
         assert.deepEqual(Array.from(values), [0, 0, 0, 0, -1, 1]);
     });
 });
+
+describe("parseGltf primitives", () => {
+    test("a strip becomes a counter-clockwise list; no NORMAL gives flat normals", async () => {
+        const model = await parseGltf(
+            noDevice,
+            triangleGltf((json) => {
+                // the triangle as a strip of 3 (one triangle), without normals
+                const prim = (json.meshes as {primitives: Record<string, unknown>[]}[])[0]!.primitives[0]!;
+                prim.mode = 5;
+                delete (prim.attributes as Record<string, number>).NORMAL;
+            }),
+        );
+        const mesh = model.root.find("Sprinkle A") as Mesh;
+        assert.equal(mesh.geometry.indices.length, 3);
+        for (let i = 0; i < 3; i++) {
+            assert.ok(near(mesh.geometry.normals.subarray(i * 3, i * 3 + 3), [0, 0, 1]));
+        }
+    });
+});

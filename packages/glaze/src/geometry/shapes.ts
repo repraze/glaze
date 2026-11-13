@@ -83,6 +83,11 @@ function applyFlatShading(raw: RawGeometry): RawGeometry {
 
 // ─── Cube ─────────────────────────────────────────────────────────────────────
 
+/** A whole segment count of at least `min` (a fraction or 0 would break the index grid). */
+function segments(n: number, min: number): number {
+    return Math.max(min, Math.floor(n) || 0);
+}
+
 export interface CubeOptions {
     size?: number;
     widthSegments?: number;
@@ -93,11 +98,14 @@ export interface CubeOptions {
 
 export function createCube({
     size = 1,
-    widthSegments = 1,
-    heightSegments = 1,
-    depthSegments = 1,
+    widthSegments: rawWidthSegments = 1,
+    heightSegments: rawHeightSegments = 1,
+    depthSegments: rawDepthSegments = 1,
     flat = false,
 }: CubeOptions = {}): Geometry {
+    const widthSegments = segments(rawWidthSegments, 1);
+    const heightSegments = segments(rawHeightSegments, 1);
+    const depthSegments = segments(rawDepthSegments, 1);
     const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
     const hw = size / 2;
 
@@ -162,10 +170,12 @@ export interface PlaneOptions {
 export function createPlane({
     width = 1,
     height = 1,
-    widthSegments = 1,
-    heightSegments = 1,
+    widthSegments: rawWidthSegments = 1,
+    heightSegments: rawHeightSegments = 1,
     flat = false,
 }: PlaneOptions = {}): Geometry {
+    const widthSegments = segments(rawWidthSegments, 1);
+    const heightSegments = segments(rawHeightSegments, 1);
     const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
     const hw = width / 2,
         hh = height / 2;
@@ -216,10 +226,12 @@ export interface SphereOptions {
 
 export function createSphere({
     radius = 1,
-    widthSegments = 32,
-    heightSegments = 16,
+    widthSegments: rawWidthSegments = 32,
+    heightSegments: rawHeightSegments = 16,
     flat = false,
 }: SphereOptions = {}): Geometry {
+    const widthSegments = segments(rawWidthSegments, 3);
+    const heightSegments = segments(rawHeightSegments, 2);
     const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
 
     for (let j = 0; j <= heightSegments; j++) {
@@ -269,7 +281,12 @@ export interface IcosphereOptions {
     flat?: boolean;
 }
 
-export function createIcosphere({radius = 1, subdivisions = 2, flat = false}: IcosphereOptions = {}): Geometry {
+export function createIcosphere({
+    radius = 1,
+    subdivisions: rawSubdivisions = 2,
+    flat = false,
+}: IcosphereOptions = {}): Geometry {
+    const subdivisions = segments(rawSubdivisions, 0);
     const t = (1 + Math.sqrt(5)) / 2;
 
     let verts: [number, number, number][] = [
@@ -463,14 +480,16 @@ export function createCylinder({
     radiusTop = 1,
     radiusBottom = 1,
     height = 1,
-    radialSegments = 16,
-    heightSegments = 1,
+    radialSegments: rawRadialSegments = 16,
+    heightSegments: rawHeightSegments = 1,
     openEnded = false,
     flat = false,
 }: CylinderOptions = {}): Geometry {
+    const radialSegments = segments(rawRadialSegments, 3);
+    const heightSegments = segments(rawHeightSegments, 1);
     const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
     const hh = height / 2;
-    const slope = (radiusBottom - radiusTop) / height;
+    const slope = height !== 0 ? (radiusBottom - radiusTop) / height : 0; // a flat cylinder: no side to slope
     const nl = Math.sqrt(1 + slope * slope);
 
     // Track the start index of each horizontal ring.
@@ -607,11 +626,13 @@ export interface TorusOptions {
 export function createTorus({
     radius = 1,
     tube = 0.4,
-    radialSegments = 16,
-    tubularSegments = 32,
+    radialSegments: rawRadialSegments = 16,
+    tubularSegments: rawTubularSegments = 32,
     arc = 2 * Math.PI,
     flat = false,
 }: TorusOptions = {}): Geometry {
+    const radialSegments = segments(rawRadialSegments, 3);
+    const tubularSegments = segments(rawTubularSegments, 3);
     const raw: RawGeometry = {positions: [], normals: [], uvs: [], indices: []};
 
     for (let j = 0; j <= radialSegments; j++) {

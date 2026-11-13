@@ -162,3 +162,29 @@ describe("parseOBJ — missing attributes", () => {
         }
     });
 });
+
+describe("parseOBJ — indices and missing normals", () => {
+    test("negative indices count back from the last element read", () => {
+        const g = parseOBJ(`v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nf -3//-1 -2//-1 -1//-1`);
+        assert.deepEqual(Array.from(g.positions), [0, 0, 0, 1, 0, 0, 0, 1, 0]);
+        assert.deepEqual(Array.from(g.normals.subarray(0, 3)), [0, 0, 1]);
+    });
+
+    test("without normals, shared corners get the area-weighted average of their faces", () => {
+        // two triangles folded along the x axis: one in the XY plane, one in the XZ plane
+        const g = parseOBJ(`v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 -1\nf 1 2 3\nf 1 2 4`);
+        const n = (i: number) => Array.from(g.normals.subarray(i * 3, i * 3 + 3));
+        // the corner on its own keeps its face's normal; the shared ones lean halfway
+        assert.ok(Math.abs(n(2)[2]! - 1) < 1e-6);
+        const s = Math.SQRT1_2;
+        for (const v of [n(0), n(1)]) {
+            assert.ok(Math.abs(v[1]! - s) < 1e-6 && Math.abs(v[2]! - s) < 1e-6, `${v}`);
+        }
+    });
+
+    test("faces without normals in a file that has some", () => {
+        const g = parseOBJ(`v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 1 0 0\nf 1//1 2//1 3//1\nf 1 2 3`);
+        assert.equal(g.positions.length / 3, 6);
+        assert.deepEqual(Array.from(g.normals.subarray(9, 12)), [0, 0, 1]); // computed, not (0, 0, 1) by default luck
+    });
+});

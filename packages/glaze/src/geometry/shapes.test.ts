@@ -135,3 +135,20 @@ describe("computeTangents", () => {
         assert.equal(t[3], -1); // cross(N, T) = -y, so w = -1 keeps the bitangent at +y
     });
 });
+
+describe("segment counts are sanitized", () => {
+    test("zero, fractional and too-small counts still give valid geometry", () => {
+        for (const g of [
+            createSphere({widthSegments: 0, heightSegments: 1}),
+            createPlane({widthSegments: 2.5, heightSegments: 0}),
+            createCylinder({radialSegments: 1.2, heightSegments: 0, height: 0}),
+            createTorus({radialSegments: 0, tubularSegments: 2}),
+        ]) {
+            assert.ok(g.indices.length > 0);
+            assert.ok(Array.from(g.positions).every(Number.isFinite));
+            assert.ok(Array.from(g.normals).every(Number.isFinite));
+            const n = g.positions.length / 3;
+            assert.ok(Array.from(g.indices).every((i) => i < n));
+        }
+    });
+});

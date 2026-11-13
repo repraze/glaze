@@ -129,13 +129,16 @@ describe("parseGLB — geometry", () => {
         };
         const geo = parseGLB(makeGLB(json, bin))[0]!.geometry;
         assert.equal(geo.indexCount, 3);
-        assert.deepEqual(Array.from(geo.indices), [2, 1, 0]);
+        // no NORMAL: flat shaded, so each corner is its own vertex, read in the index buffer's order
+        assert.deepEqual(Array.from(geo.positions), [0, 0, 1, 0, 1, 0, 1, 0, 0]);
     });
 
-    test("fills zero normals when NORMAL accessor absent", () => {
+    test("computes flat normals when the NORMAL accessor is absent (glTF spec)", () => {
         const geo = parseGLB(makeTriangleGLB())[0]!.geometry;
         assert.equal(geo.normals.length, 9); // 3 vertices × 3
-        assert.ok(geo.normals.every((v) => v === 0));
+        for (let i = 0; i < 9; i += 3) {
+            assert.ok(Math.abs(Math.hypot(geo.normals[i]!, geo.normals[i + 1]!, geo.normals[i + 2]!) - 1) < 1e-6);
+        }
     });
 
     test("fills zero UVs when TEXCOORD_0 absent", () => {
