@@ -12,6 +12,7 @@ export class Scene {
     activeCamera: Camera | null = null;
     ambientColor: vec3 = vec3.fromValues(0.05, 0.05, 0.05);
     backgroundColor: vec3 = vec3.fromValues(0, 0, 0);
+    /** Tint and strength of reflections; without an environmentMap they reflect ambientColor times this. */
     environmentColor: vec3 = vec3.fromValues(1.0, 1.0, 1.0);
     environmentMap: Texture | null = null;
     backgroundMap: Texture | null = null;

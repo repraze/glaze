@@ -1339,10 +1339,14 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         f32[334] = bg[2];
         f32[335] = 1.0;
 
+        // Reflections sample the environment map times environmentColor. Without a map the sampled texel is a white
+        // placeholder: reflect the ambient color instead (a uniform environment), not a white sky, which would rim
+        // every object with a light outline at grazing angles.
         const env = this.scene.environmentColor;
-        f32[336] = env[0];
-        f32[337] = env[1];
-        f32[338] = env[2];
+        const sky = this.scene.environmentMap === null ? this.scene.ambientColor : null;
+        f32[336] = env[0] * (sky?.[0] ?? 1);
+        f32[337] = env[1] * (sky?.[1] ?? 1);
+        f32[338] = env[2] * (sky?.[2] ?? 1);
         f32[339] = 1.0;
 
         f32.set(this.currentInvVP, 340);
