@@ -1,3 +1,7 @@
+export type {AnimationTrack, Interpolation, TrackPath} from "./animation/clip";
+export {AnimationClip, findKey, sampleTrack} from "./animation/clip";
+export type {LoopMode} from "./animation/mixer";
+export {AnimationAction, AnimationMixer} from "./animation/mixer";
 export type {ColorRgb, ColorRgba, ColorSpace, StrictColorRgb, StrictColorRgba} from "./color";
 export {
     COLOR_WGSL,

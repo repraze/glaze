@@ -97,6 +97,14 @@ export interface GltfJson {
     materials?: GltfMaterialDef[];
     textures?: GltfTextureDef[];
     images?: GltfImageDef[];
+    animations?: GltfAnimation[];
+}
+
+/** @internal */
+export interface GltfAnimation {
+    name?: string;
+    channels: {sampler: number; target: {node?: number; path: "translation" | "rotation" | "scale" | "weights"}}[];
+    samplers: {input: number; output: number; interpolation?: "LINEAR" | "STEP" | "CUBICSPLINE"}[];
 }
 
 // ─── Component type constants ─────────────────────────────────────────────────

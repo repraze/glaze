@@ -1,5 +1,6 @@
 import {mat4, quat, vec3} from "gl-matrix";
 
+import {AnimationClip, type AnimationTrack} from "../animation/clip";
 import {computeTangents, Geometry} from "../geometry/geometry";
 import {PBRMaterial} from "../material/material";
 import {Entity} from "../scene/entity";
@@ -14,6 +15,7 @@ import {
     type GltfTextureSource,
     nodeMatrix,
     parseGlbContainer,
+    readAccessor,
     readPrimitive,
 } from "./glb";
 
@@ -29,6 +31,8 @@ export interface GltfModel {
     readonly materials: readonly PBRMaterial[];
     /** Every GPU texture the model loaded (one per image). */
     readonly textures: readonly Texture[];
+    /** The file's animations, targeting the entities in `nodes`: play them with an AnimationMixer. */
+    readonly animations: readonly AnimationClip[];
     /** Frees the model's textures and material buffers. */
     destroy(): void;
 }
@@ -219,6 +223,7 @@ async function buildModel(
         meshes,
         materials,
         textures,
+        animations: readAnimations(json, buffers, nodes),
         destroy() {
             for (const material of materials) {
                 material.destroy();
@@ -229,6 +234,32 @@ async function buildModel(
             }
         },
     };
+}
+
+/**
+ * glTF animations as clips. Node translation / rotation / scale channels become tracks on the node's entity;
+ * morph target weights are skipped (not supported yet).
+ */
+function readAnimations(json: GltfJson, buffers: ArrayBuffer[], nodes: Entity[]): AnimationClip[] {
+    return (json.animations ?? []).map((animation, index) => {
+        const tracks: AnimationTrack[] = [];
+        for (const channel of animation.channels) {
+            const target = channel.target.node !== undefined ? nodes[channel.target.node] : undefined;
+            const sampler = animation.samplers[channel.sampler];
+            const path = channel.target.path;
+            if (target === undefined || sampler === undefined || path === "weights") {
+                continue;
+            }
+            tracks.push({
+                target,
+                path,
+                times: Float32Array.from(readAccessor(json, buffers, sampler.input)),
+                values: Float32Array.from(readAccessor(json, buffers, sampler.output)),
+                interpolation: sampler.interpolation ?? "LINEAR",
+            });
+        }
+        return new AnimationClip(animation.name ?? `animation${index}`, tracks);
+    });
 }
 
 const tmpMatrix = mat4.create();
