@@ -245,6 +245,7 @@ export function Glance() {
                     graph.addPass(new BlitPass({toneMapping: LOOK.toneMapping}), {color}, {canvasSlot: "canvas"});
 
                     return ({delta}) => {
+                        input.update(); // the donut spins under a still mouse: hover (the cursor) follows
                         palette.apply(); // the page's background…
                         setColorRgb(scene.ambientColor, LOOK.ambient); // …but the same warm light in either theme
                         for (const name of PARTS) {

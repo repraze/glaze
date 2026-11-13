@@ -202,6 +202,47 @@ describe("PointerInput: scene events", () => {
     });
 });
 
+describe("PointerInput: update (the scene moves under a still pointer)", () => {
+    test("enter and leave follow the scene, with no pointermove", () => {
+        const {cube, canvas, input} = setup();
+        const log: string[] = [];
+        input.on(cube, "pointerenter", () => log.push("enter"));
+        input.on(cube, "pointerleave", () => log.push("leave"));
+        input.on(cube, "pointermove", () => log.push("move"));
+        canvas.fire("pointermove", CENTRE);
+        assert.deepEqual(log, ["enter", "move"]);
+        cube.position[0] = 5; // slides out from under the pointer
+        input.update();
+        input.update(); // nothing changed: nothing fires
+        cube.position[0] = 0;
+        input.update();
+        assert.deepEqual(log, ["enter", "move", "leave", "enter"]);
+    });
+
+    test("no hover after the pointer leaves, none for touch, none mid-drag", () => {
+        const {camera, cube, canvas, input} = setup();
+        new OrbitControls(camera, {damping: 0}).attach(input);
+        const log: string[] = [];
+        input.on(cube, "pointerenter", () => log.push("enter"));
+        input.on(cube, "pointerleave", () => log.push("leave"));
+        canvas.fire("pointermove", EDGE);
+        canvas.fire("pointerleave", EDGE);
+        input.update();
+        canvas.fire("pointermove", {...CENTRE, pointerType: "touch"});
+        log.length = 0;
+        cube.position[0] = 5;
+        input.update();
+        assert.deepEqual(log, []); // touch: no hover tracking
+        cube.position[0] = 0;
+        canvas.fire("pointermove", EDGE);
+        canvas.fire("pointerdown", {...EDGE, buttons: 1}); // the orbit controls claim it
+        log.length = 0;
+        cube.position[0] = -10; // anything
+        input.update();
+        assert.deepEqual(log, []);
+    });
+});
+
 describe("PointerInput: gestures", () => {
     test("capture owns the drag: moves reach the entity off it, controls never see the gesture", () => {
         const {camera, cube, canvas, input} = setup();

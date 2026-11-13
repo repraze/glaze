@@ -65,6 +65,12 @@ export const doc = defineDoc({
                 },
                 {name: "layers / filter", type: "number / (e) => boolean", description: "What can be hit."},
                 {name: "clickThreshold", type: "number", default: "4", description: "CSS px before a press drags."},
+                {
+                    name: "update()",
+                    type: "void",
+                    description:
+                        "Per frame in an animated scene: re-picks a still pointer so enter / leave follow what moves under it. Free when nothing hovers.",
+                },
                 {name: "dispose()", type: "void"},
             ],
         },
@@ -154,7 +160,10 @@ gem.add(hitbox);                      // hits report the hitbox; events bubble t
                     code={`const input = new PointerInput(canvas, {scene});
 input.on(car, "click", (e) => select(car));               // a hit on a wheel bubbles up to the car
 input.on(car, "pointerenter", () => (canvas.style.cursor = "pointer"));
-input.on(glass, "click", (e) => e.stopPropagation());     // nothing behind the glass hears it`}
+input.on(glass, "click", (e) => e.stopPropagation());     // nothing behind the glass hears it
+
+// an animated scene: objects move under a still mouse, so re-pick each frame (enter / leave only)
+renderer.startAnimation(() => (input.update(), graph));`}
                 />
             </section>
             <section id="gestures" className="flex scroll-mt-24 flex-col gap-3">
@@ -378,6 +387,7 @@ export function PickDragOrbit() {
                         gemHitbox.collider = cfg.hitbox ? gemShape : null;
                         controls.damping = cfg.damping ? 0.15 : 0;
                         controls.update(delta);
+                        input.update(); // the camera glides under a still mouse: keep hover in step
                         for (const item of items) {
                             const k = glow(item);
                             const key = `${k}:${colors.current.accentFill}`;

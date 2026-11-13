@@ -152,6 +152,8 @@ export class PointerInput {
     private readonly picking: ScenePicking;
     private readonly listeners: [string, EventListener, AddEventListenerOptions?][] = [];
     private suppressContextMenu = false;
+    /** Last event of each mouse or pen hovering over the element, to re-pick it in {@link update}. */
+    private readonly hovering = new Map<number, PointerEvent>();
 
     constructor(element: HTMLElement, options: PointerInputOptions = {}) {
         this.element = element;
@@ -218,6 +220,23 @@ export class PointerInput {
         return camera.getRay(out, pointer.ndcX, pointer.ndcY, pointer.width / Math.max(pointer.height, 1));
     }
 
+    /**
+     * Re-picks hovering pointers where they rest: when the scene or camera moves under a still mouse,
+     * `pointerenter` / `pointerleave` (and so a hover cursor) follow. Call it once per frame in a scene that
+     * animates; a scene that only redraws on input doesn't need it.
+     *
+     * Cheap when there is nothing to do: no pointer over the element, a drag in progress, or no enter / leave
+     * handlers and nothing hovered cost no raycast. Otherwise one raycast per hovering pointer, and only enter and
+     * leave fire (no `pointermove`: the pointer did not move).
+     */
+    update(): void {
+        for (const [pointerId, e] of this.hovering) {
+            if ((this.gestures.get(pointerId)?.claimer ?? null) === null) {
+                this.picking.refreshHover(this.toPointer(e));
+            }
+        }
+    }
+
     /** Removes the DOM listeners and every consumer and handler. */
     dispose(): void {
         for (const [type, listener, options] of this.listeners) {
@@ -226,6 +245,7 @@ export class PointerInput {
         this.listeners.length = 0;
         this.consumers.length = 0;
         this.gestures.clear();
+        this.hovering.clear();
         this.picking.clear();
     }
 
@@ -261,6 +281,15 @@ export class PointerInput {
         };
     }
 
+    /** Touch has no hover: a finger that lifts is gone. */
+    private trackHover(e: PointerEvent): void {
+        if (e.pointerType === "touch") {
+            this.hovering.delete(e.pointerId);
+        } else {
+            this.hovering.set(e.pointerId, e);
+        }
+    }
+
     private onPointerDown(e: PointerEvent): void {
         const pointer = this.toPointer(e);
         const offered: PointerConsumer[] = [];
@@ -286,6 +315,7 @@ export class PointerInput {
     }
 
     private onPointerMove(e: PointerEvent): void {
+        this.trackHover(e);
         const pointer = this.toPointer(e);
         const claimer = this.gestures.get(e.pointerId)?.claimer ?? null;
         if (claimer !== null) {
@@ -303,6 +333,7 @@ export class PointerInput {
             return;
         }
         this.gestures.delete(e.pointerId);
+        this.trackHover(e);
         if (this.element.hasPointerCapture?.(e.pointerId)) {
             this.element.releasePointerCapture(e.pointerId);
         }
@@ -313,6 +344,7 @@ export class PointerInput {
     }
 
     private onPointerLeave(e: PointerEvent): void {
+        this.hovering.delete(e.pointerId);
         if ((this.gestures.get(e.pointerId)?.claimer ?? null) === null) {
             const pointer = this.toPointer(e);
             for (const {consumer} of [...this.consumers]) {
@@ -408,6 +440,8 @@ class ScenePicking implements PointerConsumer {
     private readonly presses = new Map<number, {captured: Entity | null; x: number; y: number}>();
     /** The entities under the hovering pointer: the nearest hit and its ancestors. */
     private hovered: Entity[] = [];
+    /** pointerenter / pointerleave handlers registered: without any, refreshHover has nothing to update. */
+    private hoverHandlers = 0;
 
     constructor(private readonly input: PointerInput) {}
 
@@ -422,13 +456,18 @@ class ScenePicking implements PointerConsumer {
             set = new Set();
             byType.set(type, set);
         }
+        if (!set.has(handler) && (type === "pointerenter" || type === "pointerleave")) {
+            this.hoverHandlers++;
+        }
         set.add(handler);
         return () => this.off(entity, type, handler);
     }
 
     off(entity: Entity, type: ScenePointerEventType, handler: ScenePointerHandler): void {
         const byType = this.handlers.get(entity);
-        byType?.get(type)?.delete(handler);
+        if (byType?.get(type)?.delete(handler) === true && (type === "pointerenter" || type === "pointerleave")) {
+            this.hoverHandlers--;
+        }
         if (byType?.get(type)?.size === 0) {
             byType.delete(type);
         }
@@ -441,6 +480,7 @@ class ScenePicking implements PointerConsumer {
         this.handlers.clear();
         this.presses.clear();
         this.hovered = [];
+        this.hoverHandlers = 0;
     }
 
     pointerDown(pointer: InputPointer): boolean {
@@ -494,6 +534,24 @@ class ScenePicking implements PointerConsumer {
         if (query === null) {
             return;
         }
+        this.updateHovered(pointer, query, inside);
+        if (inside) {
+            this.dispatch("pointermove", pointer, query);
+        }
+    }
+
+    /** The pointer stayed, the scene may have moved: enter / leave only. */
+    refreshHover(pointer: InputPointer): void {
+        if (this.hoverHandlers === 0 && this.hovered.length === 0) {
+            return;
+        }
+        const query = this.query(pointer);
+        if (query !== null) {
+            this.updateHovered(pointer, query, true);
+        }
+    }
+
+    private updateHovered(pointer: InputPointer, query: Query, inside: boolean): void {
         const top = inside ? (query.hits()[0] ?? null) : null;
         const path: Entity[] = [];
         for (let e: Entity | null = top?.entity ?? null; e !== null; e = e.parent) {
@@ -510,9 +568,6 @@ class ScenePicking implements PointerConsumer {
             if (!previous.includes(entity)) {
                 this.call(entity, "pointerenter", pointer, query, top, top!.entity);
             }
-        }
-        if (inside) {
-            this.dispatch("pointermove", pointer, query);
         }
     }
 
