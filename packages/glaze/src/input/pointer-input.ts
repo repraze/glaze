@@ -28,10 +28,25 @@ export interface InputPointer {
     readonly metaKey: boolean;
 }
 
+/**
+ * A wheel step. Trackpads send their gestures as wheel events too: a two-finger swipe scrolls (deltaX and deltaY),
+ * a pinch arrives with `ctrlKey` set (Safari's gesture events are translated to the same).
+ */
 export interface InputWheel {
-    readonly native: WheelEvent;
-    /** Vertical scroll in pixels (lines and pages converted). */
+    /** The DOM event: a WheelEvent, or Safari's GestureEvent for a pinch. */
+    readonly native: Event;
+    /** Scroll in pixels (lines and pages converted). */
+    readonly deltaX: number;
     readonly deltaY: number;
+    /** True when the event came in lines or pages (a mouse wheel on some systems). */
+    readonly discrete: boolean;
+    /** As `WheelEvent.wheelDeltaY` where the browser has it (mouse notches are multiples of 120), else 0. */
+    readonly legacyDeltaY: number;
+    /** Pinch zoom on a trackpad sets it, as does a held Control key. */
+    readonly ctrlKey: boolean;
+    readonly shiftKey: boolean;
+    readonly altKey: boolean;
+    readonly metaKey: boolean;
     readonly x: number;
     readonly y: number;
     readonly ndcX: number;
@@ -154,6 +169,9 @@ export class PointerInput {
         this.listen("pointercancel", (e) => this.onPointerEnd(e as PointerEvent, true));
         this.listen("pointerleave", (e) => this.onPointerLeave(e as PointerEvent));
         this.listen("wheel", (e) => this.onWheel(e as WheelEvent), {passive: false});
+        // Safari reports trackpad pinches as gesture events (others send ctrl + wheel): translate them.
+        this.listen("gesturestart", (e) => this.onGesture(e as GestureLike, true), {passive: false});
+        this.listen("gesturechange", (e) => this.onGesture(e as GestureLike, false), {passive: false});
         this.listen("contextmenu", (e) => {
             if (this.suppressContextMenu) {
                 e.preventDefault();
@@ -304,15 +322,61 @@ export class PointerInput {
     }
 
     private onWheel(e: WheelEvent): void {
+        const height = Math.max(this.element.getBoundingClientRect().height, 1);
+        const scale = e.deltaMode === 1 ? LINE_HEIGHT : e.deltaMode === 2 ? height : 1;
+        const legacy = (e as WheelEvent & {wheelDeltaY?: number}).wheelDeltaY;
+        this.offerWheel(e, e.clientX, e.clientY, {
+            deltaX: e.deltaX * scale,
+            deltaY: e.deltaY * scale,
+            discrete: e.deltaMode !== 0,
+            legacyDeltaY: typeof legacy === "number" ? legacy : 0,
+            ctrlKey: e.ctrlKey,
+            shiftKey: e.shiftKey,
+            altKey: e.altKey,
+            metaKey: e.metaKey,
+        });
+    }
+
+    private gestureScale = 1;
+
+    private onGesture(e: GestureLike, start: boolean): void {
+        e.preventDefault(); // no page zoom
+        if (start) {
+            this.gestureScale = 1;
+            return;
+        }
+        const ratio = e.scale / this.gestureScale;
+        this.gestureScale = e.scale;
+        if (!(ratio > 0)) {
+            return;
+        }
+        // As ctrl + wheel: spreading the fingers (ratio > 1) is a negative deltaY, 100 per factor of e.
+        this.offerWheel(e, e.clientX, e.clientY, {
+            deltaX: 0,
+            deltaY: -Math.log(ratio) * 100,
+            discrete: false,
+            legacyDeltaY: 0,
+            ctrlKey: true,
+            shiftKey: false,
+            altKey: false,
+            metaKey: false,
+        });
+    }
+
+    private offerWheel(
+        native: Event,
+        clientX: number,
+        clientY: number,
+        fields: Omit<InputWheel, "native" | "x" | "y" | "ndcX" | "ndcY" | "width" | "height">,
+    ): void {
         const rect = this.element.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
         const width = Math.max(rect.width, 1);
         const height = Math.max(rect.height, 1);
-        const scale = e.deltaMode === 1 ? LINE_HEIGHT : e.deltaMode === 2 ? height : 1;
         const wheel: InputWheel = {
-            native: e,
-            deltaY: e.deltaY * scale,
+            native,
+            ...fields,
             x,
             y,
             ndcX: (x / width) * 2 - 1,
@@ -322,11 +386,18 @@ export class PointerInput {
         };
         for (const {consumer} of [...this.consumers]) {
             if (consumer.wheel?.(wheel) === true) {
-                e.preventDefault();
+                native.preventDefault();
                 return;
             }
         }
     }
+}
+
+/** Safari's GestureEvent (not in the DOM typings). */
+interface GestureLike extends UIEvent {
+    readonly scale: number;
+    readonly clientX: number;
+    readonly clientY: number;
 }
 
 // ─── Scene picking: the built-in consumer behind input.on(...) ───────────────

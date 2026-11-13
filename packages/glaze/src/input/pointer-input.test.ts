@@ -46,6 +46,7 @@ function fakeCanvas() {
             ctrlKey: false,
             altKey: false,
             metaKey: false,
+            deltaX: 0,
             deltaY: 0,
             deltaMode: 0,
             preventDefault: () => {
@@ -265,9 +266,30 @@ describe("PointerInput: gestures", () => {
     test("wheel zooms through the controls and prevents page scroll", () => {
         const {camera, canvas, input} = setup();
         const controls = new OrbitControls(camera, {damping: 0}).attach(input);
-        assert.equal(canvas.fire("wheel", {deltaY: -500}), true);
+        assert.equal(canvas.fire("wheel", {deltaY: -500, wheelDeltaY: 600}), true); // five mouse notches
         controls.update();
         assert.ok(vec3.length(camera.position) < 10);
+    });
+
+    test("a trackpad swipe rotates, a pinch (ctrl + wheel) zooms", () => {
+        const {camera, canvas, input} = setup();
+        const controls = new OrbitControls(camera, {damping: 0}).attach(input);
+        canvas.fire("wheel", {deltaX: 10, deltaY: 0, wheelDeltaY: 0});
+        controls.update();
+        assert.ok(Math.abs(controls.azimuth - Math.PI / 5) < 1e-6, "10 px of 100: a tenth of a turn");
+        assert.ok(Math.abs(vec3.length(camera.position) - 10) < 1e-4);
+        canvas.fire("wheel", {deltaY: -50, ctrlKey: true});
+        controls.update();
+        assert.ok(Math.abs(controls.distance - 10 * Math.exp(-0.5)) < 1e-4);
+    });
+
+    test("Safari pinch gestures zoom like ctrl + wheel", () => {
+        const {camera, canvas, input} = setup();
+        const controls = new OrbitControls(camera, {damping: 0}).attach(input);
+        canvas.fire("gesturestart", {scale: 1});
+        assert.equal(canvas.fire("gesturechange", {scale: 2}), true);
+        controls.update();
+        assert.ok(Math.abs(controls.distance - 5) < 1e-4, "spreading to twice the size halves the distance");
     });
 
     test("dispose removes every listener", () => {

@@ -1,4 +1,4 @@
-import {type ReadonlyVec3, vec3} from "gl-matrix";
+import {quat, type ReadonlyVec3, vec3} from "gl-matrix";
 
 import type {InputPointer, InputWheel, PointerConsumer, PointerInput} from "../input/pointer-input";
 import {type Camera, OrthographicCamera, PerspectiveCamera} from "../scene/camera";
@@ -24,6 +24,20 @@ export interface OrbitControlsOptions {
      * 0 (or 1) applies gestures at once. Default 0.15.
      */
     damping?: number;
+    /**
+     * Trackpad gestures from wheel events: pinch zooms, a two-finger swipe rotates (pans with Shift). A mouse wheel
+     * still zooms. Off: every wheel event zooms. Default true.
+     */
+    trackpadGestures?: boolean;
+    /** Spin around the target at this many radians per second while idle (negative: the other way). Default 0. */
+    autoRotate?: number;
+    /** Seconds after the last gesture before auto-rotation resumes. Default 2. */
+    autoRotateDelay?: number;
+    /**
+     * CSS touch-action set on the canvas while attached. "none" (default) gives every touch to the controls;
+     * "pan-y" leaves one-finger vertical swipes to scroll the page (horizontal drags and two fingers still orbit).
+     */
+    touchAction?: string;
 }
 
 const TAU = Math.PI * 2;
@@ -31,6 +45,9 @@ const EPSILON = 1e-6;
 const tmpOffset = vec3.create();
 const tmpRight = vec3.create();
 const tmpUp = vec3.create();
+const tmpYaw = quat.create();
+/** A burst of wheel events closer than this (ms) keeps the mouse-or-trackpad call of its first event. */
+const WHEEL_BURST_MS = 250;
 
 /**
  * Orbits a camera around a target: drag to rotate, wheel or pinch to zoom, right-drag, shift-drag or two-finger
@@ -42,8 +59,10 @@ const tmpUp = vec3.create();
  * renderer.startAnimation(({delta}) => (controls.update(delta), graph));
  * ```
  *
- * Attaching sets `touch-action: none` on the canvas so touch gestures orbit instead of scrolling the page. The
- * camera's parent should be untransformed (a direct child of the scene): target and camera are in world space.
+ * Trackpads: pinch zooms, two-finger swipe rotates, Shift + swipe pans (`trackpadGestures`). Attaching sets the
+ * canvas's touch-action (`touchAction`, default "none") so touch gestures orbit instead of scrolling the page. The
+ * camera's parent should be untransformed (a direct child of the scene): target and camera are in world space, and
+ * the camera's rotation is built from the orbit angles (no roll, steady through the poles).
  */
 export class OrbitControls implements PointerConsumer {
     camera: Camera;
@@ -60,6 +79,10 @@ export class OrbitControls implements PointerConsumer {
     enableZoom: boolean;
     enablePan: boolean;
     damping: number;
+    trackpadGestures: boolean;
+    autoRotate: number;
+    autoRotateDelay: number;
+    touchAction: string;
 
     /** Current orbit, in spherical coordinates around the target (azimuth 0 looks from +Z, π/2 from +X). */
     distance = 1;
@@ -77,6 +100,9 @@ export class OrbitControls implements PointerConsumer {
     private input: PointerInput | null = null;
     private detachConsumer: (() => void) | null = null;
     private previousTouchAction = "";
+    /** Seconds since the user last touched the controls (auto-rotation waits for autoRotateDelay). */
+    private idle = Infinity;
+    private wheelBurst: {mouse: boolean; at: number} | null = null;
 
     constructor(camera: Camera, options: OrbitControlsOptions = {}) {
         this.camera = camera;
@@ -92,6 +118,10 @@ export class OrbitControls implements PointerConsumer {
         this.enableZoom = options.enableZoom ?? true;
         this.enablePan = options.enablePan ?? true;
         this.damping = options.damping ?? 0.15;
+        this.trackpadGestures = options.trackpadGestures ?? true;
+        this.autoRotate = options.autoRotate ?? 0;
+        this.autoRotateDelay = options.autoRotateDelay ?? 2;
+        this.touchAction = options.touchAction ?? "none";
         this.syncFromCamera();
     }
 
@@ -155,6 +185,10 @@ export class OrbitControls implements PointerConsumer {
      * camera moved.
      */
     update(delta = 1 / 60): boolean {
+        this.idle += Math.max(delta, 0);
+        if (this.autoRotate !== 0 && this.pointers.size === 0 && this.idle >= this.autoRotateDelay) {
+            this.azimuth += this.autoRotate * delta;
+        }
         const eased = this.damping > 0 && this.damping < 1;
         // Share of the pending motion to apply this frame, independent of frame rate.
         const k = eased ? 1 - Math.pow(1 - this.damping, Math.max(delta, 0) * 60) : 1;
@@ -181,7 +215,7 @@ export class OrbitControls implements PointerConsumer {
             this.stop();
         }
         this.apply();
-        return moving;
+        return moving || (this.autoRotate !== 0 && this.idle >= this.autoRotateDelay);
     }
 
     /** Starts taking gestures from `input` (at priority 0, below scene picking). */
@@ -190,7 +224,7 @@ export class OrbitControls implements PointerConsumer {
         this.input = input;
         this.detachConsumer = input.addConsumer(this, priority);
         this.previousTouchAction = input.element.style.touchAction;
-        input.element.style.touchAction = "none";
+        input.element.style.touchAction = this.touchAction;
         return this;
     }
 
@@ -226,6 +260,7 @@ export class OrbitControls implements PointerConsumer {
             return false;
         }
         this.pointers.set(p.pointerId, {x: p.x, y: p.y, mode});
+        this.idle = 0;
         if (this.pointers.size === 2) {
             this.pinch = this.pinchState();
         }
@@ -237,6 +272,7 @@ export class OrbitControls implements PointerConsumer {
         if (state === undefined || !this.enabled) {
             return;
         }
+        this.idle = 0;
         const dx = p.x - state.x;
         const dy = p.y - state.y;
         state.x = p.x;
@@ -277,12 +313,54 @@ export class OrbitControls implements PointerConsumer {
     }
 
     wheel(w: InputWheel): boolean {
-        if (!this.enabled || !this.enableZoom) {
+        if (!this.enabled) {
             return false;
         }
-        // About 10% per notch (100 px) at zoomSpeed 1; trackpads send smaller, smoother deltas.
-        this.zoom(Math.exp(w.deltaY * 0.001 * this.zoomSpeed));
+        if (w.ctrlKey) {
+            // A trackpad pinch (browsers send it as ctrl + wheel): small deltas, so a stronger factor.
+            if (!this.enableZoom) {
+                return false;
+            }
+            this.idle = 0;
+            this.zoom(Math.exp(w.deltaY * 0.01 * this.zoomSpeed));
+            return true;
+        }
+        if (!this.trackpadGestures || this.isMouseWheel(w)) {
+            if (!this.enableZoom) {
+                return false;
+            }
+            this.idle = 0;
+            // About 10% per notch (100 px) at zoomSpeed 1.
+            this.zoom(Math.exp(w.deltaY * 0.001 * this.zoomSpeed));
+            return true;
+        }
+        // A two-finger swipe: move as a drag would, the content following the fingers.
+        if (w.shiftKey ? !this.enablePan : !this.enableRotate) {
+            return false;
+        }
+        this.idle = 0;
+        if (w.shiftKey) {
+            this.panPixels(-w.deltaX, -w.deltaY, w.height);
+        } else {
+            const k = (TAU * this.rotateSpeed) / w.height;
+            this.rotate(w.deltaX * k, w.deltaY * k);
+        }
         return true;
+    }
+
+    /**
+     * Mouse wheel or trackpad scroll? Line or page deltas, or a vertical-only notch of 120 (wheelDeltaY), mean a
+     * mouse. A burst of events keeps its first call, so a swipe doesn't flip mid-way.
+     */
+    private isMouseWheel(w: InputWheel): boolean {
+        const now = typeof performance === "undefined" ? Date.now() : performance.now();
+        if (this.wheelBurst !== null && now - this.wheelBurst.at < WHEEL_BURST_MS) {
+            this.wheelBurst.at = now;
+            return this.wheelBurst.mouse;
+        }
+        const mouse = w.discrete || (w.deltaX === 0 && w.legacyDeltaY !== 0 && Math.abs(w.legacyDeltaY) % 120 === 0);
+        this.wheelBurst = {mouse, at: now};
+        return mouse;
     }
 
     // ─── Internals ────────────────────────────────────────────────────────────
@@ -332,14 +410,16 @@ export class OrbitControls implements PointerConsumer {
     /** Places the camera from the spherical state. Positions are world space: keep the camera's parent untransformed. */
     private apply(): void {
         const s = Math.sin(this.polar);
-        const world = vec3.set(
-            tmpOffset,
+        vec3.set(
+            this.camera.position,
             this.target[0] + this.distance * s * Math.sin(this.azimuth),
             this.target[1] + this.distance * Math.cos(this.polar),
             this.target[2] + this.distance * s * Math.cos(this.azimuth),
         );
-        vec3.copy(this.camera.position, world);
-        this.camera.lookAt(this.target);
+        // Yaw about world Y, then pitch about the camera's X: no roll, and no flip at the poles (lookAt with a fixed
+        // up vector has to swap axes there).
+        quat.setAxisAngle(tmpYaw, [0, 1, 0], this.azimuth);
+        quat.rotateX(this.camera.quaternion, tmpYaw, this.polar - Math.PI / 2);
     }
 }
 

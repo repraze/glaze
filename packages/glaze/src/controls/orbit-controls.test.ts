@@ -95,3 +95,40 @@ describe("OrbitControls", () => {
         assert.ok(near(controls.distance, 5));
     });
 });
+
+describe("OrbitControls near the poles", () => {
+    test("sweeping over the top stays continuous: no roll, always facing the target", () => {
+        const camera = camAt(0, 0, 5);
+        const controls = new OrbitControls(camera, {damping: 0, minPolarAngle: 1e-4});
+        controls.setOrbit(5, 0.7, 0.6);
+        let previousRight: vec3 | null = null;
+        for (let i = 0; i < 200; i++) {
+            controls.rotate(0, -0.005).update();
+            const m = camera.computeWorldMatrix();
+            const right = vec3.fromValues(m[0]!, m[1]!, m[2]!);
+            assert.ok(Math.abs(right[1]) < 1e-5, "the camera's right axis stays level (no roll)");
+            if (previousRight !== null) {
+                assert.ok(vec3.dot(right, previousRight) > 0.999, `no jump at polar ${controls.polar}`);
+            }
+            previousRight = right;
+            const toTarget = vec3.normalize(vec3.create(), vec3.negate(vec3.create(), camera.position));
+            assert.ok(vec3.dot(camera.getWorldDirection(), toTarget) > 0.99999);
+        }
+        assert.ok(near(controls.polar, 1e-4));
+    });
+});
+
+describe("OrbitControls auto-rotate", () => {
+    test("spins while idle, pauses after a gesture", () => {
+        const controls = new OrbitControls(camAt(0, 0, 5), {damping: 0, autoRotate: 1, autoRotateDelay: 0.5});
+        controls.update(0.25);
+        assert.ok(near(controls.azimuth, 0.25));
+        controls.rotate(0.1, 0); // from code: not a user gesture, keeps spinning
+        controls.wheel({ctrlKey: true, deltaY: 0} as never); // a gesture: pause
+        const before = controls.azimuth;
+        controls.update(0.25);
+        assert.ok(near(controls.azimuth, before + 0.1));
+        controls.update(0.3);
+        assert.ok(controls.azimuth > before + 0.1 + 0.2);
+    });
+});
