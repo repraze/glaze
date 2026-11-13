@@ -394,4 +394,38 @@ describe("parseGltf primitives", () => {
             assert.ok(near(mesh.geometry.normals.subarray(i * 3, i * 3 + 3), [0, 0, 1]));
         }
     });
+
+    test("reads COLOR_0 (normalized RGB, alpha 1) and TEXCOORD_1", async () => {
+        const model = await parseGltf(
+            noDevice,
+            triangleGltf((json) => {
+                const bytes = new Uint8Array(12 + 24);
+                bytes.set([255, 0, 0, 0, 0, 255, 0, 0, 0, 0, 255, 0], 0); // 3 × RGB u8, padded to 4
+                new Float32Array(bytes.buffer, 12, 6).set([0, 0, 1, 0, 0, 1]);
+                (json.buffers as unknown[]).push({
+                    byteLength: bytes.length,
+                    uri: `data:application/octet-stream;base64,${Buffer.from(bytes).toString("base64")}`,
+                });
+                const views = json.bufferViews as unknown[];
+                const accessors = json.accessors as unknown[];
+                const v = views.length;
+                views.push(
+                    {buffer: 1, byteOffset: 0, byteLength: 12, byteStride: 4},
+                    {buffer: 1, byteOffset: 12, byteLength: 24},
+                );
+                const a = accessors.length;
+                accessors.push(
+                    {bufferView: v, componentType: 5121, normalized: true, count: 3, type: "VEC3"},
+                    {bufferView: v + 1, componentType: 5126, count: 3, type: "VEC2"},
+                );
+                const prim = (json.meshes as {primitives: {attributes: Record<string, number>}[]}[])[0]!.primitives[0]!;
+                prim.attributes.COLOR_0 = a;
+                prim.attributes.TEXCOORD_1 = a + 1;
+            }),
+        );
+        const g = (model.root.find("Sprinkle A") as Mesh).geometry;
+        assert.ok(near(g.colors!, [1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1]));
+        assert.ok(near(g.uvs1!, [0, 0, 1, 0, 0, 1]));
+        assert.ok(g.hasExtras);
+    });
 });

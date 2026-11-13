@@ -162,6 +162,8 @@ async function buildModel(
                           indices: data.indices,
                           ...(data.joints && data.weights ? {joints: data.joints, weights: data.weights} : {}),
                           ...(data.morphTargets.length > 0 ? {morphTargets: data.morphTargets} : {}),
+                          ...(data.colors ? {colors: data.colors} : {}),
+                          ...(data.uvs1 ? {uvs1: data.uvs1} : {}),
                           tangents:
                               data.tangents ??
                               computeTangents(

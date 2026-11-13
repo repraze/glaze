@@ -3,7 +3,7 @@ import {mat3, mat4, type quat, vec3} from "gl-matrix";
 import {type ColorSpace, linearToSrgb} from "../color";
 import {computeTangents, Geometry} from "../geometry/geometry";
 import {PBRMaterial, type PBRMaterialOptions} from "../material/material";
-import {Texture} from "../texture";
+import {Texture, type TextureSampling, type UvTransform} from "../texture";
 
 // ─── GLTF types (minimal subset) ─────────────────────────────────────────────
 
@@ -33,6 +33,22 @@ interface GltfBufferView {
 interface GltfTextureRef {
     index: number;
     texCoord?: number;
+    extensions?: {
+        KHR_texture_transform?: {
+            offset?: [number, number];
+            rotation?: number;
+            scale?: [number, number];
+            texCoord?: number;
+        };
+    };
+}
+
+/** @internal A glTF sampler (WebGL enums). */
+interface GltfSamplerDef {
+    magFilter?: number;
+    minFilter?: number;
+    wrapS?: number;
+    wrapT?: number;
 }
 
 interface GltfMaterialDef {
@@ -112,12 +128,17 @@ export interface GltfJson {
     images?: GltfImageDef[];
     animations?: GltfAnimation[];
     skins?: {name?: string; joints: number[]; inverseBindMatrices?: number; skeleton?: number}[];
+    samplers?: GltfSamplerDef[];
     extensionsUsed?: string[];
     extensionsRequired?: string[];
 }
 
 /** Extensions a file may require that Glaze reads correctly. */
-const SUPPORTED_REQUIRED_EXTENSIONS = new Set(["KHR_mesh_quantization", "KHR_materials_emissive_strength"]);
+const SUPPORTED_REQUIRED_EXTENSIONS = new Set([
+    "KHR_mesh_quantization",
+    "KHR_materials_emissive_strength",
+    "KHR_texture_transform",
+]);
 
 /**
  * @internal Throws when the file requires an extension Glaze can't read (Draco or meshopt compression, KTX2 or
@@ -172,6 +193,67 @@ export type GltfTextureSource =
 /** The texture slots of a glTF material. */
 export type GltfTextureSlot = "baseColor" | "normal" | "emissive" | "occlusion" | "metallicRoughness";
 
+/** How a material slot samples its texture: the glTF sampler's modes and the slot's UV set and transform. */
+export interface GltfTextureSettings {
+    sampling: Partial<TextureSampling>;
+    transform: Partial<UvTransform>;
+}
+
+const WRAP_MODES: Record<number, TextureSampling["wrapU"]> = {33071: "clamp", 33648: "mirror", 10497: "repeat"};
+
+/** A texture slot's settings: its texture's sampler, and the slot's texCoord and KHR_texture_transform. */
+function textureSettings(json: GltfJson, ref: GltfTextureRef | undefined): GltfTextureSettings | undefined {
+    if (ref === undefined) {
+        return undefined;
+    }
+    const sampling: Partial<TextureSampling> = {};
+    const samplerIndex = json.textures?.[ref.index]?.sampler;
+    const sampler = samplerIndex !== undefined ? json.samplers?.[samplerIndex] : undefined;
+    if (sampler !== undefined) {
+        sampling.wrapU = WRAP_MODES[sampler.wrapS ?? 10497] ?? "repeat";
+        sampling.wrapV = WRAP_MODES[sampler.wrapT ?? 10497] ?? "repeat";
+        if (sampler.magFilter === 9728) {
+            sampling.magFilter = "nearest";
+        }
+        // NEAREST, NEAREST_MIPMAP_NEAREST, NEAREST_MIPMAP_LINEAR
+        if (sampler.minFilter === 9728 || sampler.minFilter === 9984 || sampler.minFilter === 9986) {
+            sampling.minFilter = "nearest";
+        }
+    }
+    const t = ref.extensions?.KHR_texture_transform;
+    const transform: Partial<UvTransform> = {uvSet: (t?.texCoord ?? ref.texCoord ?? 0) === 1 ? 1 : 0};
+    if (t !== undefined) {
+        transform.offset = [t.offset?.[0] ?? 0, t.offset?.[1] ?? 0];
+        transform.scale = [t.scale?.[0] ?? 1, t.scale?.[1] ?? 1];
+        transform.rotation = t.rotation ?? 0;
+    }
+    return {sampling, transform};
+}
+
+/** Settings that leave a texture as loaded (repeat, linear, first UV set, no transform). */
+function isDefaultSettings(s: GltfTextureSettings | undefined): boolean {
+    if (s === undefined) {
+        return true;
+    }
+    const {sampling: a, transform: t} = s;
+    return (
+        (a.wrapU ?? "repeat") === "repeat" &&
+        (a.wrapV ?? "repeat") === "repeat" &&
+        (a.magFilter ?? "linear") === "linear" &&
+        (a.minFilter ?? "linear") === "linear" &&
+        (t.uvSet ?? 0) === 0 &&
+        (t.offset?.[0] ?? 0) === 0 &&
+        (t.offset?.[1] ?? 0) === 0 &&
+        (t.scale?.[0] ?? 1) === 1 &&
+        (t.scale?.[1] ?? 1) === 1 &&
+        (t.rotation ?? 0) === 0
+    );
+}
+
+function sameSettings(a: GltfTextureSettings | undefined, b: GltfTextureSettings | undefined): boolean {
+    return JSON.stringify(a ?? null) === JSON.stringify(b ?? null) || (isDefaultSettings(a) && isDefaultSettings(b));
+}
+
 /**
  * GPU-free material descriptor extracted from a GLTF primitive.
  * Scalar defaults follow the GLTF 2.0 spec. Factors are as stored in the file (linear). {@link parseGLB}
@@ -203,8 +285,10 @@ export interface GltfMaterialDescriptor {
     occlusionTexture: GltfTextureSource | null;
     /** G=roughness, B=metallic; R is unspecified by glTF (often occlusion, when packed). */
     metallicRoughnessTexture: GltfTextureSource | null;
-    /** TEXCOORD_n set each texture reads (default 0). Glaze geometry carries TEXCOORD_0 only. */
+    /** TEXCOORD_n set each texture reads (default 0; KHR_texture_transform's texCoord wins). Glaze reads 0 and 1. */
     texCoords?: Record<GltfTextureSlot, number>;
+    /** Per slot: its sampler's wrap and filter modes, and its KHR_texture_transform. */
+    textureSettings?: Partial<Record<GltfTextureSlot, GltfTextureSettings>>;
     /** glTF alphaMode (default "OPAQUE") and alphaCutoff (default 0.5, used by "MASK"). */
     alphaMode?: "OPAQUE" | "MASK" | "BLEND";
     alphaCutoff?: number;
@@ -411,13 +495,25 @@ export function extractMaterial(
         alphaCutoff: mat?.alphaCutoff ?? 0.5,
         doubleSided: mat?.doubleSided ?? false,
         texCoords: {
-            baseColor: pbr.baseColorTexture?.texCoord ?? 0,
-            normal: mat?.normalTexture?.texCoord ?? 0,
-            emissive: mat?.emissiveTexture?.texCoord ?? 0,
-            occlusion: mat?.occlusionTexture?.texCoord ?? 0,
-            metallicRoughness: pbr.metallicRoughnessTexture?.texCoord ?? 0,
+            baseColor: texCoordOf(pbr.baseColorTexture),
+            normal: texCoordOf(mat?.normalTexture),
+            emissive: texCoordOf(mat?.emissiveTexture),
+            occlusion: texCoordOf(mat?.occlusionTexture),
+            metallicRoughness: texCoordOf(pbr.metallicRoughnessTexture),
+        },
+        textureSettings: {
+            baseColor: textureSettings(json, pbr.baseColorTexture),
+            normal: textureSettings(json, mat?.normalTexture),
+            emissive: textureSettings(json, mat?.emissiveTexture),
+            occlusion: textureSettings(json, mat?.occlusionTexture),
+            metallicRoughness: textureSettings(json, pbr.metallicRoughnessTexture),
         },
     };
+}
+
+/** The UV set a texture reference reads: KHR_texture_transform may override it. */
+function texCoordOf(ref: GltfTextureRef | undefined): number {
+    return ref?.extensions?.KHR_texture_transform?.texCoord ?? ref?.texCoord ?? 0;
 }
 
 // ─── Node transforms ─────────────────────────────────────────────────────────
@@ -436,6 +532,10 @@ export function readPrimitive(
     joints: Uint16Array | null;
     weights: Float32Array | null;
     morphTargets: {positions: Float32Array; normals?: Float32Array}[];
+    /** COLOR_0 as linear RGBA (alpha 1 for RGB colors), or null. */
+    colors: Float32Array | null;
+    /** TEXCOORD_1, or null. */
+    uvs1: Float32Array | null;
 } | null {
     // triangles: lists (4, the default), strips (5) and fans (6); points and lines are skipped
     const mode = prim.mode ?? 4;
@@ -454,6 +554,22 @@ export function readPrimitive(
     const normals = normIdx !== undefined ? toFloat32(readAccessor(json, buffers, normIdx)) : null;
     const uvs = uvIdx !== undefined ? toFloat32(readAccessor(json, buffers, uvIdx)) : new Float32Array(vertexCount * 2);
     const tangents = tanIdx !== undefined ? toFloat32(readAccessor(json, buffers, tanIdx)) : null;
+    const uv1Idx = prim.attributes["TEXCOORD_1"];
+    const uvs1 = uv1Idx !== undefined ? toFloat32(readAccessor(json, buffers, uv1Idx)) : null;
+    // vertex colors: VEC3 or VEC4, float or normalized integers, already linear (no sRGB decode)
+    const colorIdx = prim.attributes["COLOR_0"];
+    let colors: Float32Array | null = null;
+    if (colorIdx !== undefined) {
+        const raw = readAccessor(json, buffers, colorIdx);
+        const size = json.accessors![colorIdx]!.type === "VEC3" ? 3 : 4;
+        colors = new Float32Array(vertexCount * 4);
+        for (let i = 0; i < vertexCount; i++) {
+            colors[i * 4] = raw[i * size] ?? 1;
+            colors[i * 4 + 1] = raw[i * size + 1] ?? 1;
+            colors[i * 4 + 2] = raw[i * size + 2] ?? 1;
+            colors[i * 4 + 3] = size === 4 ? (raw[i * size + 3] ?? 1) : 1;
+        }
+    }
     let indices: Uint32Array;
     if (prim.indices !== undefined) {
         indices = toUint32(readAccessor(json, buffers, prim.indices));
@@ -492,9 +608,9 @@ export function readPrimitive(
     }));
     if (normals === null) {
         // glTF: without normals, a mesh is flat shaded. Every triangle gets its own three vertices.
-        return flatShaded({positions, uvs, tangents, indices, joints, weights, morphTargets});
+        return flatShaded({positions, uvs, tangents, indices, joints, weights, morphTargets, colors, uvs1});
     }
-    return {positions, normals, uvs, tangents, indices, joints, weights, morphTargets};
+    return {positions, normals, uvs, tangents, indices, joints, weights, morphTargets, colors, uvs1};
 }
 
 /** Strip (5) or fan (6) indices as a triangle list, keeping every triangle counter-clockwise. */
@@ -526,6 +642,8 @@ function flatShaded(p: {
     joints: Uint16Array | null;
     weights: Float32Array | null;
     morphTargets: {positions: Float32Array; normals?: Float32Array}[];
+    colors: Float32Array | null;
+    uvs1: Float32Array | null;
 }) {
     const n = p.indices.length;
     const spread = <T extends Float32Array | Uint16Array>(src: T, size: number): T => {
@@ -565,6 +683,8 @@ function flatShaded(p: {
         indices: Uint32Array.from({length: n}, (_, i) => i),
         joints: p.joints && spread(p.joints, 4),
         weights: p.weights && spread(p.weights, 4),
+        colors: p.colors && spread(p.colors, 4),
+        uvs1: p.uvs1 && spread(p.uvs1, 2),
         morphTargets: p.morphTargets.map((t) => ({
             positions: spread(t.positions, 3),
             ...(t.normals ? {normals: spread(t.normals, 3)} : {}),
@@ -793,8 +913,15 @@ export interface GltfMaterialPlan {
     metallicRoughnessMap: GltfTextureSource | null;
     /** R=occlusion, when not packed. */
     occlusionMap: GltfTextureSource | null;
-    /** Slots dropped because they read a UV set other than TEXCOORD_0. */
+    /** Slots dropped because they read a UV set past TEXCOORD_1. */
     skipped: GltfTextureSlot[];
+    /** Sampling and transform per map that isn't plain (repeat, linear, TEXCOORD_0, untransformed). */
+    settings: Partial<
+        Record<
+            "albedoMap" | "normalMap" | "emissiveMap" | "ormMap" | "metallicRoughnessMap" | "occlusionMap",
+            GltfTextureSettings
+        >
+    >;
 }
 
 function sameImage(a: GltfTextureSource, b: GltfTextureSource): boolean {
@@ -817,8 +944,11 @@ function sameImage(a: GltfTextureSource, b: GltfTextureSource): boolean {
  *   metallic-roughness are the same image, it becomes one packed {@link PBRMaterial.ormMap}.
  * - normal map XY is scaled by normalTexture.scale.
  *
- * Glaze geometry has a single UV set, so a texture reading another TEXCOORD set is left out (and listed in
- * `skipped`) rather than sampled with the wrong coordinates.
+ * - each texture keeps its sampler's wrap and filter modes, its UV set (TEXCOORD_0 or 1) and its
+ *   KHR_texture_transform (`settings`, applied with {@link Texture.withSettings}).
+ *
+ * Glaze geometry has two UV sets, so a texture reading TEXCOORD_2 or later is left out (and listed in `skipped`)
+ * rather than sampled with the wrong coordinates.
  */
 export function planGltfMaterial(descriptor: GltfMaterialDescriptor): GltfMaterialPlan {
     const skipped: GltfTextureSlot[] = [];
@@ -826,7 +956,7 @@ export function planGltfMaterial(descriptor: GltfMaterialDescriptor): GltfMateri
         if (!source) {
             return null;
         }
-        if ((descriptor.texCoords?.[slot] ?? 0) !== 0) {
+        if ((descriptor.texCoords?.[slot] ?? 0) > 1) {
             skipped.push(slot);
             return null;
         }
@@ -835,7 +965,33 @@ export function planGltfMaterial(descriptor: GltfMaterialDescriptor): GltfMateri
 
     const occlusion = usable("occlusion", descriptor.occlusionTexture);
     const metallicRoughness = usable("metallicRoughness", descriptor.metallicRoughnessTexture);
-    const packed = occlusion !== null && metallicRoughness !== null && sameImage(occlusion, metallicRoughness);
+    const ts = descriptor.textureSettings ?? {};
+    const packed =
+        occlusion !== null &&
+        metallicRoughness !== null &&
+        sameImage(occlusion, metallicRoughness) &&
+        sameSettings(ts.occlusion, ts.metallicRoughness);
+    const settings: GltfMaterialPlan["settings"] = {};
+    const keep = (map: keyof GltfMaterialPlan["settings"], s: GltfTextureSettings | undefined, used: unknown) => {
+        if (used !== null && !isDefaultSettings(s)) {
+            settings[map] = s!;
+        }
+    };
+
+    const maps = {
+        albedoMap: usable("baseColor", descriptor.baseColorTexture),
+        normalMap: usable("normal", descriptor.normalTexture),
+        emissiveMap: usable("emissive", descriptor.emissiveTexture),
+        ormMap: packed ? occlusion : null,
+        metallicRoughnessMap: packed ? null : metallicRoughness,
+        occlusionMap: packed ? null : occlusion,
+    };
+    keep("albedoMap", ts.baseColor, maps.albedoMap);
+    keep("normalMap", ts.normal, maps.normalMap);
+    keep("emissiveMap", ts.emissive, maps.emissiveMap);
+    keep("ormMap", ts.occlusion, maps.ormMap);
+    keep("metallicRoughnessMap", ts.metallicRoughness, maps.metallicRoughnessMap);
+    keep("occlusionMap", ts.occlusion, maps.occlusionMap);
 
     const [r, g, b, a] = descriptor.baseColorFactor;
     const strength = descriptor.emissiveStrength ?? 1;
@@ -854,13 +1010,9 @@ export function planGltfMaterial(descriptor: GltfMaterialDescriptor): GltfMateri
             alphaCutoff: descriptor.alphaCutoff ?? 0.5,
             doubleSided: descriptor.doubleSided ?? false,
         },
-        albedoMap: usable("baseColor", descriptor.baseColorTexture),
-        normalMap: usable("normal", descriptor.normalTexture),
-        emissiveMap: usable("emissive", descriptor.emissiveTexture),
-        ormMap: packed ? occlusion : null,
-        metallicRoughnessMap: packed ? null : metallicRoughness,
-        occlusionMap: packed ? null : occlusion,
+        ...maps,
         skipped,
+        settings,
     };
 }
 
@@ -904,14 +1056,23 @@ export async function createPBRMaterialFromGltf(
         return texture;
     }
 
+    // a slot with its own sampler or transform reads the shared pixels through its own Texture
+    const withSettings = async (
+        slot: keyof GltfMaterialPlan["settings"],
+        texture: Promise<Texture | null>,
+    ): Promise<Texture | null> => {
+        const t = await texture;
+        const s = plan.settings[slot];
+        return t !== null && s !== undefined ? t.withSettings(s) : t;
+    };
     [mat.albedoMap, mat.normalMap, mat.emissiveMap, mat.ormMap, mat.metallicRoughnessMap, mat.occlusionMap] =
         await Promise.all([
-            loadTex(plan.albedoMap, "srgb"),
-            loadTex(plan.normalMap),
-            loadTex(plan.emissiveMap, "srgb"),
-            loadTex(plan.ormMap),
-            loadTex(plan.metallicRoughnessMap),
-            loadTex(plan.occlusionMap),
+            withSettings("albedoMap", loadTex(plan.albedoMap, "srgb")),
+            withSettings("normalMap", loadTex(plan.normalMap)),
+            withSettings("emissiveMap", loadTex(plan.emissiveMap, "srgb")),
+            withSettings("ormMap", loadTex(plan.ormMap)),
+            withSettings("metallicRoughnessMap", loadTex(plan.metallicRoughnessMap)),
+            withSettings("occlusionMap", loadTex(plan.occlusionMap)),
         ]);
 
     return mat;

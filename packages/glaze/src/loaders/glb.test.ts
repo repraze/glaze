@@ -411,18 +411,54 @@ describe("planGltfMaterial", () => {
         assert.equal(plan.options.occlusionStrength, 0.3);
     });
 
-    test("a texture on another UV set is skipped, so occlusion falls back to 1", () => {
+    test("a texture on the second UV set keeps it (so it isn't packed with one on the first)", () => {
         const plan = planGltfMaterial(
             materialGLB({
                 pbrMetallicRoughness: {metallicRoughnessTexture: {index: 0}},
                 occlusionTexture: {index: 0, texCoord: 1, strength: 0.5},
             }),
         );
-        assert.equal(plan.occlusionMap, null);
         assert.equal(plan.ormMap, null);
+        assert.equal(uri(plan.occlusionMap), "a.png");
+        assert.equal(plan.settings.occlusionMap?.transform.uvSet, 1);
         assert.equal(uri(plan.metallicRoughnessMap), "a.png");
+        assert.equal(plan.settings.metallicRoughnessMap, undefined);
+        assert.equal(plan.options.occlusionStrength, 0.5);
+        assert.deepEqual(plan.skipped, []);
+    });
+
+    test("a texture on a third UV set is skipped, so occlusion falls back to 1", () => {
+        const plan = planGltfMaterial(materialGLB({occlusionTexture: {index: 0, texCoord: 2, strength: 0.5}}));
+        assert.equal(plan.occlusionMap, null);
         assert.equal(plan.options.occlusionStrength, 1);
         assert.deepEqual(plan.skipped, ["occlusion"]);
+    });
+
+    test("samplers and KHR_texture_transform become per-slot settings", () => {
+        const descriptor = materialGLB({
+            pbrMetallicRoughness: {
+                baseColorTexture: {
+                    index: 0,
+                    extensions: {KHR_texture_transform: {offset: [0.5, 0], scale: [2, 2], rotation: 0.3}},
+                },
+            },
+        });
+        const plan = planGltfMaterial({
+            ...descriptor,
+            textureSettings: {
+                ...descriptor.textureSettings,
+                normal: {sampling: {wrapU: "clamp", magFilter: "nearest"}, transform: {uvSet: 0}},
+            },
+            normalTexture: descriptor.baseColorTexture,
+        });
+        assert.deepEqual(plan.settings.albedoMap?.transform, {
+            uvSet: 0,
+            offset: [0.5, 0],
+            scale: [2, 2],
+            rotation: 0.3,
+        });
+        assert.equal(plan.settings.normalMap?.sampling.wrapU, "clamp");
+        assert.equal(plan.settings.emissiveMap, undefined);
     });
 
     test("factors: metallic and roughness as-is, colors from linear to sRGB, emissive strength as intensity", () => {

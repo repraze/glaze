@@ -13,6 +13,10 @@ export interface GeometryOptions {
     weights?: Float32Array;
     /** Blend shapes: per target, position deltas (3 a vertex) and optionally normal deltas. */
     morphTargets?: MorphTarget[];
+    /** Vertex colors: 4 floats a vertex (linear RGB and alpha), multiplying the material's color and opacity. */
+    colors?: Float32Array;
+    /** A second UV set: 2 floats a vertex (lightmaps, AO baked on its own unwrap). A texture picks it with `uvSet`. */
+    uvs1?: Float32Array;
 }
 
 /** A blend shape: how far each vertex (and its normal) moves at weight 1. */
@@ -39,11 +43,28 @@ export class Geometry {
     readonly weights?: Float32Array;
     /** Blend shapes, weighted per mesh by `mesh.morphWeights`. */
     readonly morphTargets?: readonly MorphTarget[];
+    /** Vertex colors, 4 floats a vertex (linear RGBA). Optional. */
+    readonly colors?: Float32Array;
+    /** A second UV set, 2 floats a vertex. Optional. */
+    readonly uvs1?: Float32Array;
 
     readonly vertexCount: number;
     readonly indexCount: number;
 
-    constructor({positions, normals, uvs, indices, tangents, joints, weights, morphTargets}: GeometryOptions) {
+    constructor({
+        positions,
+        normals,
+        uvs,
+        indices,
+        tangents,
+        joints,
+        weights,
+        morphTargets,
+        colors,
+        uvs1,
+    }: GeometryOptions) {
+        this.colors = colors;
+        this.uvs1 = uvs1;
         this.morphTargets = morphTargets !== undefined && morphTargets.length > 0 ? morphTargets : undefined;
         if ((joints === undefined) !== (weights === undefined)) {
             throw new Error("Geometry: joints and weights go together");
@@ -147,6 +168,28 @@ export class Geometry {
         this._boundingSphere = null;
         this._morphReach = null;
         this._version++;
+    }
+
+    /** Has vertex colors or a second UV set: drawn with an extra vertex buffer (see `buildExtrasBuffer`). */
+    get hasExtras(): boolean {
+        return this.colors !== undefined || this.uvs1 !== undefined;
+    }
+
+    /**
+     * The extra vertex stream (stride 24 bytes): [u1, v1, r, g, b, a]. A missing second UV set repeats the first;
+     * missing colors are white.
+     */
+    buildExtrasBuffer(): Float32Array<ArrayBuffer> {
+        const out = new Float32Array(this.vertexCount * 6);
+        const uv1 = this.uvs1 ?? this.uvs;
+        for (let i = 0; i < this.vertexCount; i++) {
+            out[i * 6] = uv1[i * 2] ?? 0;
+            out[i * 6 + 1] = uv1[i * 2 + 1] ?? 0;
+            for (let k = 0; k < 4; k++) {
+                out[i * 6 + 2 + k] = this.colors?.[i * 4 + k] ?? 1;
+            }
+        }
+        return out;
     }
 
     /** Bumped by `markChanged`: renderers re-upload when it moves. */

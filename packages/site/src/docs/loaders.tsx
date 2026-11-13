@@ -138,7 +138,10 @@ function MaterialsNotes() {
                 the occlusion texture, scaled by its strength, and is 1 without one; when both are the same image
                 (packed occlusion-roughness-metallic) it becomes the material&apos;s{" "}
                 <code className="font-mono text-foreground">ormMap</code>. glTF factors are linear and are converted to
-                the sRGB values Glaze works in. Textures on a second UV set are skipped: Glaze geometry has one.
+                the sRGB values Glaze works in. Each texture keeps its sampler (wrap, nearest or linear filtering), its
+                UV set (TEXCOORD_0 or 1) and its KHR_texture_transform; vertex colors (COLOR_0) tint the material. Files
+                that require an extension Glaze can&apos;t read (Draco, meshopt, KTX2) are refused with an error naming
+                it.
             </p>
             <Code
                 code={`const model = await loadGltf(renderer.device, "/models/donut/donut.glb");

@@ -91,6 +91,16 @@ export const doc = defineDoc({
                     description: "4 per vertex (xyz + handedness), for normal maps.",
                 },
                 {
+                    name: "colors",
+                    type: "Float32Array?",
+                    description: "4 per vertex, linear RGBA: multiplies the material's color and opacity.",
+                },
+                {
+                    name: "uvs1",
+                    type: "Float32Array?",
+                    description: "A second UV set, 2 per vertex: textures read it with transform.uvSet = 1.",
+                },
+                {
                     name: "markChanged()",
                     type: "void",
                     description:

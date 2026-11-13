@@ -58,8 +58,31 @@ export type AlphaMode = "opaque" | "mask" | "blend";
  *   occlusionStrength: f32        offset 48  ( 4 bytes)
  *   alphaCutoff:       f32        offset 52  ( 4 bytes)
  *   _pad:              vec2<f32>  offset 56  ( 8 bytes)
+ *   uvTransforms:      6 × {row0, row1: vec4<f32>}  offset 64  (192 bytes), in MATERIAL_MAP_ORDER:
+ *                      row0 = (a, b, tx, uvSet), row1 = (c, d, ty, 0): uv' = (a·u + b·v + tx, c·u + d·v + ty)
  */
-export const MATERIAL_BUFFER_SIZE = 64;
+export const MATERIAL_BUFFER_SIZE = 256;
+
+/** The order of a material's maps in its uniforms (and samplers in its bind group). */
+export const MATERIAL_MAP_ORDER = ["albedo", "normal", "emissive", "metallicRoughness", "height", "occlusion"] as const;
+
+/** A material's map number `i` in {@link MATERIAL_MAP_ORDER}, resolving the ORM fallbacks. */
+export function materialMap(mat: PBRMaterial, i: number): Texture | null {
+    switch (i) {
+        case 0:
+            return mat.albedoMap;
+        case 1:
+            return mat.normalMap;
+        case 2:
+            return mat.emissiveMap;
+        case 3:
+            return mat.resolvedMetallicRoughnessMap;
+        case 4:
+            return mat.heightMap;
+        default:
+            return mat.resolvedOcclusionMap;
+    }
+}
 
 /**
  * Pack the material's scalars into its uniform buffer layout (see above). GPU-free, exported for tests.
@@ -81,6 +104,23 @@ export function packMaterialUniforms(mat: PBRMaterial, out = new Float32Array(MA
     out[11] = 0;
     out[12] = mat.occlusionStrength;
     out[13] = mat.alphaCutoff;
+    // per map, KHR_texture_transform's matrix: translation · rotation · scale
+    for (let i = 0; i < MATERIAL_MAP_ORDER.length; i++) {
+        const t = materialMap(mat, i)?.transform;
+        const o = 16 + i * 8;
+        const cos = t ? Math.cos(t.rotation) : 1;
+        const sin = t ? Math.sin(t.rotation) : 0;
+        const sx = t?.scale[0] ?? 1;
+        const sy = t?.scale[1] ?? 1;
+        out[o] = cos * sx;
+        out[o + 1] = sin * sy;
+        out[o + 2] = t?.offset[0] ?? 0;
+        out[o + 3] = t?.uvSet ?? 0;
+        out[o + 4] = -sin * sx;
+        out[o + 5] = cos * sy;
+        out[o + 6] = t?.offset[1] ?? 0;
+        out[o + 7] = 0;
+    }
     return out;
 }
 

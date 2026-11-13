@@ -103,6 +103,6 @@ export {raycast} from "./scene/raycast";
 export {Scene} from "./scene/scene";
 export {Skin, SkinnedMesh} from "./scene/skin";
 export {computeWorldBounds} from "./scene/world-bounds";
-export type {TextureOptions} from "./texture";
+export type {FilterMode, TextureOptions, TextureSampling, UvTransform, WrapMode} from "./texture";
 export {generateMipmaps, mipLevelCount, Texture} from "./texture";
 export {TextureUniform, Uniform} from "./uniform";

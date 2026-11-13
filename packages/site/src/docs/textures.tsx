@@ -63,6 +63,25 @@ export const doc = defineDoc({
                     description: "Decode with createImageBitmap.",
                 },
                 {name: "view", type: "GPUTextureView", description: "Bound by materials and the scene pass."},
+                {
+                    name: "sampling",
+                    type: "{wrapU, wrapV, magFilter, minFilter, anisotropy}",
+                    default: '"repeat", "linear", 8',
+                    description:
+                        'Wrap: "repeat" | "clamp" | "mirror"; filters: "linear" | "nearest" (pixel art). Live.',
+                },
+                {
+                    name: "transform",
+                    type: "{offset, scale, rotation, uvSet}",
+                    default: "identity, uvSet 0",
+                    description:
+                        "Where materials sample it: UV set 0 or 1 (geometry.uvs1), scaled, rotated, offset (KHR_texture_transform). Live.",
+                },
+                {
+                    name: "withSettings({sampling?, transform?})",
+                    type: "Texture",
+                    description: "Another Texture on the same pixels with its own sampling and transform.",
+                },
                 {name: "destroy()", type: "void", description: "Free the GPU texture."},
             ],
         },

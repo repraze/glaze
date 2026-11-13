@@ -2,7 +2,7 @@ import {mat4, vec3} from "gl-matrix";
 
 import {COLOR_WGSL, type ColorSpace, srgbToLinear} from "../color";
 import type {Geometry} from "../geometry/geometry";
-import {MATERIAL_BUFFER_SIZE, packMaterialUniforms, PBRMaterial} from "../material/material";
+import {MATERIAL_BUFFER_SIZE, materialMap, packMaterialUniforms, PBRMaterial} from "../material/material";
 import {sphere} from "../math/bounds";
 import {isMirrored} from "../math/transform";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
@@ -13,7 +13,7 @@ import type {Mesh} from "../scene/mesh";
 import type {Scene} from "../scene/scene";
 import {type Cascade, fitCascades, lightView, MAX_CASCADES} from "../scene/shadow-cascades";
 import {SkinnedMesh} from "../scene/skin";
-import type {Texture} from "../texture";
+import type {Texture, TextureSampling, WrapMode} from "../texture";
 
 // ─── WGSL shaders ─────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ fn applyMorphs(vertex: u32, position: vec3<f32>, normal: vec3<f32>) -> Morphed {
 `;
 
 /**
- * Skinning: the mesh's joint matrices (mesh space) at group 1 binding 1, next to its model uniforms, and the
+ * Skinning: the mesh's joint matrices (world space) at group 1 binding 1, next to its model uniforms, and the
  * blend of the four a vertex follows.
  */
 const SKIN_WGSL = /* wgsl */ `
@@ -105,7 +105,7 @@ fn vs_shadow(@location(0) position: vec3<f32>${v.inputs}) -> @builtin(position) 
  * Shadow casters with alpha: the albedo alpha decides which texels block light. "mask" cuts like the G-buffer;
  * "blend" keeps a share of shadow texels equal to alpha (2×2 ordered; the PCF reads it back as a partial shadow).
  */
-function buildAlphaShadowShader(alpha: "mask" | "blend", skinned = false, morphed = false): string {
+function buildAlphaShadowShader(alpha: "mask" | "blend", skinned = false, morphed = false, extras = false): string {
     const v = shadowVertex(skinned, morphed);
     return /* wgsl */ `
 struct ShadowLightUniforms {
@@ -119,27 +119,34 @@ ${MATERIAL_UNIFORMS_WGSL}
 @group(1) @binding(0) var<uniform> model: ModelUniforms;
 @group(2) @binding(0) var<uniform> mat: MaterialUniforms;
 @group(2) @binding(1) var albedoMap: texture_2d<f32>;
-@group(2) @binding(2) var matSampler: sampler;
+@group(2) @binding(2) var albedoSampler: sampler;
+${MAP_UV_WGSL}
 
 struct ShadowVarying {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) uv1: vec2<f32>,
+    @location(2) vertexAlpha: f32,
 };
 
 ${skinned ? SKIN_WGSL : ""}
 ${morphed ? MORPH_WGSL : ""}
 
 @vertex
-fn vs_shadow(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>${v.inputs}) -> ShadowVarying {
+fn vs_shadow(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>${v.inputs}${
+        extras ? ", @location(6) uv1: vec2<f32>, @location(7) color: vec4<f32>" : ""
+    }) -> ShadowVarying {
     var out: ShadowVarying;
     out.pos = light.lightSpaceMatrix * model.model * ${v.local};
     out.uv = uv;
+    out.uv1 = ${extras ? "uv1" : "uv"};
+    out.vertexAlpha = ${extras ? "color.a" : "1.0"};
     return out;
 }
 
 @fragment
 fn fs_shadow(in: ShadowVarying) {
-    let alpha = textureSample(albedoMap, matSampler, in.uv).a * mat.albedo.a;
+    let alpha = textureSample(albedoMap, albedoSampler, mapUv(0u, in.uv, in.uv1)).a * mat.albedo.a * in.vertexAlpha;
 ${
     alpha === "mask"
         ? `    if (alpha < mat.alphaCutoff) { discard; }`
@@ -166,6 +173,8 @@ export interface GBufferFeatures {
     morphed?: boolean;
     /** Its world transform mirrors (negative determinant): triangles wind clockwise, tangent handedness flips. */
     mirrored?: boolean;
+    /** Its geometry has vertex colors or a second UV set (the extra vertex stream). */
+    extras?: boolean;
 }
 
 /** A mesh drawn with skinning: a SkinnedMesh with a skin, whose geometry has joints and weights. */
@@ -178,7 +187,13 @@ function isMorphed(mesh: Mesh): boolean {
     return mesh.geometry.morphTargets !== undefined;
 }
 
-function getGBufferFeatures(mat: PBRMaterial, skinned = false, morphed = false, mirrored = false): GBufferFeatures {
+function getGBufferFeatures(
+    mat: PBRMaterial,
+    skinned = false,
+    morphed = false,
+    mirrored = false,
+    extras = false,
+): GBufferFeatures {
     return {
         parallaxMapping: mat.heightMap != null,
         normalMapping: mat.normalMap != null,
@@ -187,6 +202,7 @@ function getGBufferFeatures(mat: PBRMaterial, skinned = false, morphed = false, 
         skinned,
         morphed,
         mirrored,
+        extras,
     };
 }
 
@@ -203,11 +219,17 @@ function featureKey(f: GBufferFeatures): string {
         (f.doubleSided ? "2" : "") +
         (f.skinned ? "S" : "") +
         (f.morphed ? "T" : "") +
-        (f.mirrored ? "X" : "")
+        (f.mirrored ? "X" : "") +
+        (f.extras ? "E" : "")
     );
 }
 
 const MATERIAL_UNIFORMS_WGSL = /* wgsl */ `
+struct UvTransform {
+    row0: vec4<f32>, // a, b, tx, uvSet
+    row1: vec4<f32>, // c, d, ty
+};
+
 struct MaterialUniforms {
     albedo:            vec4<f32>,
     roughness:         f32,
@@ -217,8 +239,27 @@ struct MaterialUniforms {
     emissive:          vec4<f32>,
     occlusionStrength: f32,
     alphaCutoff:       f32,
+    uvTransforms:      array<UvTransform, 6>, // albedo, normal, emissive, metallicRoughness, height, occlusion
 };
 `;
+
+/** Where map 'i' is sampled: its UV set, transformed (KHR_texture_transform). Needs 'mat' bound. */
+const MAP_UV_WGSL = /* wgsl */ `
+fn mapUv(i: u32, uv0: vec2<f32>, uv1: vec2<f32>) -> vec2<f32> {
+    let t  = mat.uvTransforms[i];
+    let uv = select(uv0, uv1, t.row0.w > 0.5);
+    return vec2<f32>(dot(t.row0.xy, uv) + t.row0.z, dot(t.row1.xy, uv) + t.row1.z);
+}
+`;
+
+/** The extra vertex stream: a second UV set at location 6 and a vertex color at location 7 (see Geometry). */
+const EXTRAS_LAYOUT: GPUVertexBufferLayout = {
+    arrayStride: 24,
+    attributes: [
+        {shaderLocation: 6, offset: 0, format: "float32x2"},
+        {shaderLocation: 7, offset: 8, format: "float32x4"},
+    ],
+};
 
 /**
  * Everything a mesh pass shares: camera, model and material bindings (groups 0-2), the vertex stage, and
@@ -241,12 +282,18 @@ ${MATERIAL_UNIFORMS_WGSL}
 @group(1) @binding(0) var<uniform> model:      ModelUniforms;
 @group(2) @binding(0) var<uniform> mat:        MaterialUniforms;
 @group(2) @binding(1) var albedoMap:           texture_2d<f32>;
-@group(2) @binding(2) var matSampler:          sampler;
+@group(2) @binding(2) var albedoSampler:       sampler;
 @group(2) @binding(3) var normalMap:           texture_2d<f32>;
 @group(2) @binding(4) var emissiveMap:         texture_2d<f32>;
 @group(2) @binding(5) var metallicRoughnessMap: texture_2d<f32>; // G=roughness, B=metallic
 @group(2) @binding(6) var heightMap:           texture_2d<f32>;
 @group(2) @binding(7) var occlusionMap:        texture_2d<f32>; // R=occlusion
+@group(2) @binding(8) var normalSampler:       sampler;
+@group(2) @binding(9) var emissiveSampler:     sampler;
+@group(2) @binding(10) var metallicRoughnessSampler: sampler;
+@group(2) @binding(11) var heightSampler:      sampler;
+@group(2) @binding(12) var occlusionSampler:   sampler;
+${MAP_UV_WGSL}
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -257,6 +304,12 @@ struct VertexInput {
             ? `
     @location(4) joints:   vec4<u32>,
     @location(5) weights:  vec4<f32>,`
+            : ""
+    }${
+        f.extras
+            ? `
+    @location(6) uv1:      vec2<f32>,
+    @location(7) color:    vec4<f32>,`
             : ""
     }${
         f.morphed
@@ -274,6 +327,8 @@ struct VertexOutput {
     @location(1)       worldNormal:  vec3<f32>,
     @location(2)       uv:           vec2<f32>,
     @location(3)       worldTangent: vec4<f32>,
+    @location(4)       uv1:          vec2<f32>,
+    @location(5)       color:        vec4<f32>,
 };
 
 @vertex
@@ -306,6 +361,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {${
     output.worldPos    = worldPos.xyz;
     output.worldNormal = normalize((model.normalMatrix * vec4<f32>(normal, 0.0)).xyz);
     output.uv          = input.uv;
+    output.uv1         = ${f.extras ? "input.uv1" : "input.uv"};
+    output.color       = ${f.extras ? "input.color" : "vec4<f32>(1.0)"};
     // a tangent lies in the surface: it follows the model matrix (not the normal matrix) under non-uniform scale
     let worldTangentXYZ = normalize((model.model * vec4<f32>(tangent, 0.0)).xyz);
     // a mirror flips the handedness of the frame (cross(N, T) turns the other way)
@@ -323,16 +380,16 @@ fn parallaxOcclusionMapping(uv: vec2<f32>, viewDirT: vec3<f32>, scale: f32) -> v
     let deltaUV    = (vec2<f32>(viewDirT.x, -viewDirT.y) / viewDirT.z) * scale / numLayers;
     var depth = 0.0;
     var cuv   = uv;
-    var cd    = 1.0 - textureSampleLevel(heightMap, matSampler, cuv, 0.0).r;
+    var cd    = 1.0 - textureSampleLevel(heightMap, heightSampler, mapUv(4u, cuv, cuv), 0.0).r;
     for (var i: i32 = 0; i < 32; i++) {
         if (depth >= cd) { break; }
         cuv   -= deltaUV;
-        cd     = 1.0 - textureSampleLevel(heightMap, matSampler, cuv, 0.0).r;
+        cd     = 1.0 - textureSampleLevel(heightMap, heightSampler, mapUv(4u, cuv, cuv), 0.0).r;
         depth += layerDepth;
     }
     let prevUV     = cuv + deltaUV;
     let afterDiff  = cd - depth;
-    let beforeDiff = (1.0 - textureSampleLevel(heightMap, matSampler, prevUV, 0.0).r) - (depth - layerDepth);
+    let beforeDiff = (1.0 - textureSampleLevel(heightMap, heightSampler, mapUv(4u, prevUV, prevUV), 0.0).r) - (depth - layerDepth);
     let w = afterDiff / (afterDiff - beforeDiff);
     return mix(cuv, prevUV, w);
 }
@@ -387,7 +444,7 @@ ${
     f.normalMapping
         ? `
     // tangent-space normal, +Y toward the top of the image (glTF / OpenGL convention), XY scaled
-    let normalSample  = (textureSample(normalMap, matSampler, uv).rgb * 2.0 - 1.0)
+    let normalSample  = (textureSample(normalMap, normalSampler, mapUv(1u, uv, input.uv1)).rgb * 2.0 - 1.0)
                       * vec3<f32>(mat.normalScale, mat.normalScale, 1.0);
     let shadingNormal = normalize(tbn * normalSample);
 `
@@ -395,21 +452,21 @@ ${
     let shadingNormal = N;
 `
 }
-    let texAlbedo4 = textureSample(albedoMap, matSampler, uv);
-    let alpha      = texAlbedo4.a * mat.albedo.a;
+    let texAlbedo4 = textureSample(albedoMap, albedoSampler, mapUv(0u, uv, input.uv1));
+    let alpha      = texAlbedo4.a * mat.albedo.a * input.color.a;
 ${f.alpha === "mask" ? `    if (alpha < mat.alphaCutoff) { discard; }` : ""}
 
-    let mr        = textureSample(metallicRoughnessMap, matSampler, uv);
-    let occlusion = textureSample(occlusionMap, matSampler, uv).r;
+    let mr        = textureSample(metallicRoughnessMap, metallicRoughnessSampler, mapUv(3u, uv, input.uv1));
+    let occlusion = textureSample(occlusionMap, occlusionSampler, mapUv(5u, uv, input.uv1)).r;
 
     var s: Surface;
-    s.albedo    = texAlbedo4.rgb * mat.albedo.rgb;
+    s.albedo    = texAlbedo4.rgb * mat.albedo.rgb * input.color.rgb;
     s.alpha     = alpha;
     s.normal    = shadingNormal;
     s.roughness = clamp(mr.g * mat.roughness, 0.0, 1.0);
     s.metallic  = clamp(mr.b * mat.metallic,  0.0, 1.0);
     s.ao        = clamp(1.0 + mat.occlusionStrength * (occlusion - 1.0), 0.0, 1.0);
-    s.emissive  = textureSample(emissiveMap, matSampler, uv).rgb * mat.emissive.rgb;
+    s.emissive  = textureSample(emissiveMap, emissiveSampler, mapUv(2u, uv, input.uv1)).rgb * mat.emissive.rgb;
     return s;
 }
 `;
@@ -1006,6 +1063,8 @@ interface GeometryGPUResources {
     vertexBuffer: GPUBuffer;
     /** Joints and weights (24 bytes a vertex), for skinned geometry. */
     skinBuffer: GPUBuffer | null;
+    /** Second UV set and vertex colors (24 bytes a vertex), when the geometry has either. */
+    extrasBuffer: GPUBuffer | null;
     /** Morph target deltas (storage, 32 bytes a vertex per target). */
     morphBuffer: GPUBuffer | null;
     indexBuffer: GPUBuffer;
@@ -1016,10 +1075,32 @@ interface GeometryGPUResources {
 interface MaterialGPUResources {
     buffer: GPUBuffer;
     uniforms: Float32Array;
-    /** The maps the bind group was built with. */
+    /** The maps the bind group was built with, and their samplers' keys. */
     maps: (Texture | null)[];
+    samplerKeys: number[];
     bindGroup: GPUBindGroup | null;
     lastFrame: number;
+}
+
+const WRAP_CODES: Record<WrapMode, number> = {repeat: 0, clamp: 1, mirror: 2};
+
+function anisotropyOf(s: TextureSampling | undefined): number {
+    return Math.min(Math.max(Math.round(s?.anisotropy ?? 8), 1), 16);
+}
+
+/** A number naming a texture's sampling settings (no texture: the default ones). */
+function samplerKey(texture: Texture | null): number {
+    const s = texture?.sampling;
+    if (s === undefined) {
+        return WRAP_CODES.repeat | (WRAP_CODES.repeat << 2) | (anisotropyOf(undefined) << 6);
+    }
+    return (
+        (WRAP_CODES[s.wrapU] ?? 0) |
+        ((WRAP_CODES[s.wrapV] ?? 0) << 2) |
+        ((s.magFilter === "nearest" ? 1 : 0) << 4) |
+        ((s.minFilter === "nearest" ? 1 : 0) << 5) |
+        (anisotropyOf(s) << 6)
+    );
 }
 
 /** Cache entries unused this many frames (about two seconds at 60 Hz) are released. */
@@ -1028,6 +1109,7 @@ const EVICT_AFTER_FRAMES = 120;
 function destroyGeometryResources(res: GeometryGPUResources): void {
     res.vertexBuffer.destroy();
     res.skinBuffer?.destroy();
+    res.extrasBuffer?.destroy();
     res.morphBuffer?.destroy();
     res.indexBuffer.destroy();
 }
@@ -1043,6 +1125,7 @@ interface MeshGPUResources {
     lastFrame: number;
     vertexBuffer: GPUBuffer;
     skinBuffer: GPUBuffer | null;
+    extrasBuffer: GPUBuffer | null;
     indexBuffer: GPUBuffer;
     indexCount: number;
     modelBuffer: GPUBuffer;
@@ -1065,6 +1148,23 @@ function vertexLayout(locations: readonly number[]): GPUVertexBufferLayout {
         {shaderLocation: 3, offset: 32, format: "float32x4"},
     ];
     return {arrayStride: 48, attributes: all.filter((a) => locations.includes(a.shaderLocation))};
+}
+
+/** Sets a mesh's vertex buffers in the order meshVertexLayouts declares them. */
+function bindMeshBuffers(pass: GPURenderPassEncoder, res: MeshGPUResources): void {
+    pass.setVertexBuffer(0, res.vertexBuffer);
+    let slot = 1;
+    if (res.skinBuffer !== null) {
+        pass.setVertexBuffer(slot++, res.skinBuffer);
+    }
+    if (res.extrasBuffer !== null) {
+        pass.setVertexBuffer(slot, res.extrasBuffer);
+    }
+}
+
+/** A mesh pipeline's vertex buffers: the interleaved one, then the skin's, then the extra stream, as present. */
+function meshVertexLayouts(f: GBufferFeatures): GPUVertexBufferLayout[] {
+    return [vertexLayout([0, 1, 2, 3]), ...(f.skinned ? [SKIN_LAYOUT] : []), ...(f.extras ? [EXTRAS_LAYOUT] : [])];
 }
 
 /** The skin buffer: 4 × uint16 joints at location 4, 4 × float32 weights at location 5. */
@@ -1154,6 +1254,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private defaultNormalTex!: GPUTexture;
     private defaultNormalView!: GPUTextureView;
     private texSampler!: GPUSampler;
+    private envSampler!: GPUSampler;
+    /** Material samplers by their settings' key (see samplerKey). */
+    private readonly samplers = new Map<number, GPUSampler>();
 
     // Shadow pass: opaque casters write depth only; alpha casters (mask / blend) get a variant reading albedo alpha
     private shadowPipeline!: GPURenderPipeline;
@@ -1188,6 +1291,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         res: MeshGPUResources;
         pipeline: GPURenderPipeline;
         material: GPUBindGroup | null;
+        /** Its pipeline reads the extra vertex stream (alpha-tested with vertex colors or a second UV set). */
+        extras: boolean;
         rank: number;
         center: vec3;
         radius: number;
@@ -1328,7 +1433,13 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 blend.push({mesh, depth: vec3.dot(vec3.subtract(this.tmpCenter, this.tmpCenter, eye), forward)});
             } else {
                 const mirrored = this.meshCache.get(mesh)?.mirrored ?? false;
-                const features = getGBufferFeatures(mesh.material, isSkinned(mesh), isMorphed(mesh), mirrored);
+                const features = getGBufferFeatures(
+                    mesh.material,
+                    isSkinned(mesh),
+                    isMorphed(mesh),
+                    mirrored,
+                    mesh.geometry.hasExtras,
+                );
                 opaque.push({mesh, material: mesh.material, features, key: featureKey(features)});
             }
         }
@@ -1404,6 +1515,13 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 {binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
                 {binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
                 {binding: 7, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
+                // a sampler per map after the albedo's (binding 2): normal, emissive, metallic-roughness, height,
+                // occlusion
+                ...[8, 9, 10, 11, 12].map((binding) => ({
+                    binding,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    sampler: {type: "filtering" as const},
+                })),
             ],
         });
 
@@ -1434,13 +1552,14 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         );
         this.defaultNormalView = this.defaultNormalTex.createView();
 
-        this.texSampler = device.createSampler({
+        this.texSampler = this.samplerFor(null);
+        // equirectangular maps wrap around in longitude only: repeating in latitude would blend the poles
+        this.envSampler = device.createSampler({
+            label: "DeferredScene:environment",
             magFilter: "linear",
             minFilter: "linear",
-            mipmapFilter: "linear",
-            maxAnisotropy: 8,
             addressModeU: "repeat",
-            addressModeV: "repeat",
+            addressModeV: "clamp-to-edge",
         });
 
         this.gbufferPipelineLayout = device.createPipelineLayout({
@@ -1639,14 +1758,22 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         skinned = false,
         morphed = false,
         mirrored = false,
+        hasExtras = false,
     ): GPURenderPipeline {
         const alpha = material?.alphaMode ?? "opaque";
         const doubleSided = material?.doubleSided ?? false;
+        // only alpha-tested casters read vertex colors / the second UV set
+        const extras = hasExtras && alpha !== "opaque";
         if (alpha === "opaque" && !doubleSided && !skinned && !morphed && !mirrored) {
             return this.shadowPipeline;
         }
         const key =
-            alpha + (doubleSided ? "2" : "") + (skinned ? "S" : "") + (morphed ? "T" : "") + (mirrored ? "X" : "");
+            alpha +
+            (doubleSided ? "2" : "") +
+            (skinned ? "S" : "") +
+            (morphed ? "T" : "") +
+            (mirrored ? "X" : "") +
+            (extras ? "E" : "");
         let pipeline = this.shadowPipelines.get(key);
         if (pipeline === undefined) {
             const modelLayout = this.modelLayout(skinned, morphed);
@@ -1654,7 +1781,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             const opaque = alpha === "opaque";
             const module = this.device.createShaderModule({
                 label: `Shadow[${key}]`,
-                code: opaque ? buildShadowShader(skinned, morphed) : buildAlphaShadowShader(alpha, skinned, morphed),
+                code: opaque
+                    ? buildShadowShader(skinned, morphed)
+                    : buildAlphaShadowShader(alpha, skinned, morphed, extras),
             });
             pipeline = this.device.createRenderPipeline({
                 label: `DeferredScene:shadow[${key}]`,
@@ -1666,7 +1795,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 vertex: {
                     module,
                     entryPoint: "vs_shadow",
-                    buffers: [vertexLayout(opaque ? [0] : [0, 2]), ...skin],
+                    buffers: [vertexLayout(opaque ? [0] : [0, 2]), ...skin, ...(extras ? [EXTRAS_LAYOUT] : [])],
                 },
                 ...(opaque ? {} : {fragment: {module, entryPoint: "fs_shadow", targets: []}}),
                 depthStencil: SHADOW_DEPTH_STATE,
@@ -1695,9 +1824,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 vertex: {
                     module,
                     entryPoint: "vs_main",
-                    buffers: features.skinned
-                        ? [vertexLayout([0, 1, 2, 3]), SKIN_LAYOUT]
-                        : [vertexLayout([0, 1, 2, 3])],
+                    buffers: meshVertexLayouts(features),
                 },
                 fragment: {
                     module,
@@ -1735,9 +1862,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 vertex: {
                     module,
                     entryPoint: "vs_main",
-                    buffers: features.skinned
-                        ? [vertexLayout([0, 1, 2, 3]), SKIN_LAYOUT]
-                        : [vertexLayout([0, 1, 2, 3])],
+                    buffers: meshVertexLayouts(features),
                 },
                 fragment: {
                     module,
@@ -1890,7 +2015,14 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 continue;
             }
             const material = mesh.material instanceof PBRMaterial ? mesh.material : null;
-            const pipeline = this.shadowPipelineFor(material, res.jointBuffer !== null, res.morphed, res.mirrored);
+            const extras = res.extrasBuffer !== null && material !== null && material.alphaMode !== "opaque";
+            const pipeline = this.shadowPipelineFor(
+                material,
+                res.jointBuffer !== null,
+                res.morphed,
+                res.mirrored,
+                res.extrasBuffer !== null,
+            );
             let rank = ranks.get(pipeline);
             if (rank === undefined) {
                 rank = ranks.size;
@@ -1900,6 +2032,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 res,
                 pipeline,
                 material: null,
+                extras: false,
                 rank,
                 center: vec3.create(),
                 radius: 0,
@@ -1907,6 +2040,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             caster.res = res;
             caster.pipeline = pipeline;
             caster.rank = rank;
+            caster.extras = extras;
             caster.material =
                 material !== null && material.alphaMode !== "opaque" ? this.materialBindGroup(material) : null;
             caster.radius = this.meshBounds(mesh, caster.center);
@@ -2001,6 +2135,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 pass.setVertexBuffer(0, res.vertexBuffer);
                 if (res.skinBuffer !== null) {
                     pass.setVertexBuffer(1, res.skinBuffer);
+                }
+                if (caster.extras) {
+                    pass.setVertexBuffer(res.skinBuffer !== null ? 2 : 1, res.extrasBuffer);
                 }
                 pass.setIndexBuffer(res.indexBuffer, "uint32");
                 pass.drawIndexed(res.indexCount);
@@ -2135,10 +2272,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
             pass.setBindGroup(1, res.modelBindGroup);
             pass.setBindGroup(2, matBg);
-            pass.setVertexBuffer(0, res.vertexBuffer);
-            if (res.skinBuffer !== null) {
-                pass.setVertexBuffer(1, res.skinBuffer);
-            }
+            bindMeshBuffers(pass, res);
             pass.setIndexBuffer(res.indexBuffer, "uint32");
             pass.drawIndexed(res.indexCount);
         }
@@ -2162,7 +2296,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 {binding: 3, resource: {buffer: this.lightingBuffer}},
                 {binding: 4, resource: outputs["emissive"]!},
                 {binding: 5, resource: envView},
-                {binding: 6, resource: this.texSampler},
+                {binding: 6, resource: this.envSampler},
                 {binding: 7, resource: bgView},
             ],
         });
@@ -2191,7 +2325,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 entries: [
                     {binding: 0, resource: {buffer: this.lightingBuffer}},
                     {binding: 1, resource: envView},
-                    {binding: 2, resource: this.texSampler},
+                    {binding: 2, resource: this.envSampler},
                     {binding: 3, resource: this.dirShadowTex.createView({dimension: "2d-array"})},
                     {binding: 4, resource: this.spotShadowTex.createView({dimension: "2d-array"})},
                     {binding: 5, resource: this.shadowSampler},
@@ -2216,13 +2350,16 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             if (!res) {
                 continue;
             }
-            const features = getGBufferFeatures(material, res.jointBuffer !== null, res.morphed, res.mirrored);
+            const features = getGBufferFeatures(
+                material,
+                res.jointBuffer !== null,
+                res.morphed,
+                res.mirrored,
+                res.extrasBuffer !== null,
+            );
             pass.setBindGroup(1, res.modelBindGroup);
             pass.setBindGroup(2, this.materialBindGroup(material));
-            pass.setVertexBuffer(0, res.vertexBuffer);
-            if (res.skinBuffer !== null) {
-                pass.setVertexBuffer(1, res.skinBuffer);
-            }
+            bindMeshBuffers(pass, res);
             pass.setIndexBuffer(res.indexBuffer, "uint32");
             for (const cullMode of material.doubleSided ? (["front", "back"] as const) : (["back"] as const)) {
                 const pipeline = this.getOrCreateForwardPipeline(features, cullMode);
@@ -2542,6 +2679,16 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 });
                 device.queue.writeBuffer(skinBuffer, 0, skinData);
             }
+            let extrasBuffer: GPUBuffer | null = null;
+            if (geo.hasExtras) {
+                const extras = geo.buildExtrasBuffer();
+                extrasBuffer = device.createBuffer({
+                    label: "Geometry:extras",
+                    size: extras.byteLength,
+                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+                });
+                device.queue.writeBuffer(extrasBuffer, 0, extras);
+            }
             const morphData = geo.buildMorphBuffer();
             let morphBuffer: GPUBuffer | null = null;
             if (morphData !== null) {
@@ -2563,6 +2710,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 lastFrame: this.frame,
                 vertexBuffer,
                 skinBuffer,
+                extrasBuffer,
                 morphBuffer,
                 indexBuffer,
                 indexCount: geo.indexCount,
@@ -2603,6 +2751,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             lastFrame: this.frame,
             vertexBuffer: geo.vertexBuffer,
             skinBuffer: skinned ? geo.skinBuffer : null,
+            extrasBuffer: geo.extrasBuffer,
             indexBuffer: geo.indexBuffer,
             indexCount: geo.indexCount,
             modelBuffer,
@@ -2628,7 +2777,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
                 }),
                 uniforms: new Float32Array(MATERIAL_BUFFER_SIZE / 4).fill(Number.NaN),
-                maps: [],
+                maps: [null, null, null, null, null, null],
+                samplerKeys: [-1, -1, -1, -1, -1, -1],
                 bindGroup: null,
                 lastFrame: -1,
             };
@@ -2646,43 +2796,66 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 break;
             }
         }
-        const metallicRoughness = material.resolvedMetallicRoughnessMap;
-        const occlusion = material.resolvedOcclusionMap;
-        const maps = res.maps;
-        if (
-            res.bindGroup === null ||
-            maps[0] !== material.albedoMap ||
-            maps[1] !== material.normalMap ||
-            maps[2] !== material.emissiveMap ||
-            maps[3] !== metallicRoughness ||
-            maps[4] !== material.heightMap ||
-            maps[5] !== occlusion
-        ) {
-            res.maps = [
-                material.albedoMap,
-                material.normalMap,
-                material.emissiveMap,
-                metallicRoughness,
-                material.heightMap,
-                occlusion,
-            ];
+        // rebuilt when a map, or how one is sampled, changed
+        let changed = res.bindGroup === null;
+        for (let m = 0; m < 6; m++) {
+            const map = materialMap(material, m);
+            const key = samplerKey(map);
+            if (res.maps[m] !== map || res.samplerKeys[m] !== key) {
+                res.maps[m] = map;
+                res.samplerKeys[m] = key;
+                changed = true;
+            }
+        }
+        if (changed) {
+            const [albedo, normal, emissive, metallicRoughness, height, occlusion] = res.maps;
             const white = this.defaultWhiteView;
             res.bindGroup = this.device.createBindGroup({
                 label: "PBRMaterial",
                 layout: this.materialBindGroupLayout,
                 entries: [
                     {binding: 0, resource: {buffer: res.buffer}},
-                    {binding: 1, resource: material.albedoMap?.srgbView ?? white},
-                    {binding: 2, resource: this.texSampler},
-                    {binding: 3, resource: material.normalMap?.view ?? this.defaultNormalView},
-                    {binding: 4, resource: material.emissiveMap?.srgbView ?? white},
+                    {binding: 1, resource: albedo?.srgbView ?? white},
+                    {binding: 2, resource: this.samplerFor(albedo ?? null)},
+                    {binding: 3, resource: normal?.view ?? this.defaultNormalView},
+                    {binding: 4, resource: emissive?.srgbView ?? white},
                     {binding: 5, resource: metallicRoughness?.view ?? white},
-                    {binding: 6, resource: material.heightMap?.view ?? white},
+                    {binding: 6, resource: height?.view ?? white},
                     {binding: 7, resource: occlusion?.view ?? white},
+                    {binding: 8, resource: this.samplerFor(normal ?? null)},
+                    {binding: 9, resource: this.samplerFor(emissive ?? null)},
+                    {binding: 10, resource: this.samplerFor(metallicRoughness ?? null)},
+                    {binding: 11, resource: this.samplerFor(height ?? null)},
+                    {binding: 12, resource: this.samplerFor(occlusion ?? null)},
                 ],
             });
         }
-        return res.bindGroup;
+        return res.bindGroup!;
+    }
+
+    /** A GPU sampler for a texture's sampling settings (shared by every texture with the same ones). */
+    private samplerFor(texture: Texture | null): GPUSampler {
+        const key = samplerKey(texture);
+        let sampler = this.samplers.get(key);
+        if (sampler === undefined) {
+            const s = texture?.sampling;
+            const wrap = (w: WrapMode | undefined): GPUAddressMode =>
+                w === "clamp" ? "clamp-to-edge" : w === "mirror" ? "mirror-repeat" : "repeat";
+            const mag = s?.magFilter ?? "linear";
+            const min = s?.minFilter ?? "linear";
+            sampler = this.device.createSampler({
+                label: `Material sampler ${key}`,
+                addressModeU: wrap(s?.wrapU),
+                addressModeV: wrap(s?.wrapV),
+                magFilter: mag,
+                minFilter: min,
+                mipmapFilter: min,
+                // anisotropy needs every filter linear
+                maxAnisotropy: mag === "linear" && min === "linear" ? anisotropyOf(s) : 1,
+            });
+            this.samplers.set(key, sampler);
+        }
+        return sampler;
     }
 
     /** Releases meshes, geometries and materials no frame has drawn for a while (removed from the scene). */

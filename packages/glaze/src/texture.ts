@@ -15,6 +15,35 @@ export interface TextureOptions {
     colorSpace?: ColorSpace;
 }
 
+/** What happens past a texture's edge: tile, stretch the edge texels, or tile mirrored. */
+export type WrapMode = "repeat" | "clamp" | "mirror";
+/** How texels blend: smoothly, or the nearest one (pixel art). */
+export type FilterMode = "linear" | "nearest";
+
+/** How a texture is sampled. Change the fields any time; the next frame uses them. */
+export interface TextureSampling {
+    wrapU: WrapMode;
+    wrapV: WrapMode;
+    /** Up close (magnified). Default "linear". */
+    magFilter: FilterMode;
+    /** Far away (minified), and between mip levels. Default "linear". */
+    minFilter: FilterMode;
+    /** Anisotropic filtering, 1 to 16 (sharper at a slant). Default 8; only with linear filters. */
+    anisotropy: number;
+}
+
+/**
+ * Where a material samples a texture (glTF's KHR_texture_transform and texCoord): which UV set, then scaled,
+ * rotated (radians, counter-clockwise) and offset, in that order. Change the fields any time.
+ */
+export interface UvTransform {
+    offset: [number, number];
+    scale: [number, number];
+    rotation: number;
+    /** 0: the geometry's `uvs`, 1: its `uvs1` (the first set when it has none). */
+    uvSet: 0 | 1;
+}
+
 /** Number of mip levels down to 1 x 1. */
 export function mipLevelCount(width: number, height: number): number {
     return Math.floor(Math.log2(Math.max(width, height, 1))) + 1;
@@ -31,6 +60,16 @@ export class Texture {
     readonly width: number;
     readonly height: number;
     readonly colorSpace: ColorSpace;
+    /** Wrap and filter modes (default: repeat, linear, anisotropy 8). */
+    sampling: TextureSampling = {
+        wrapU: "repeat",
+        wrapV: "repeat",
+        magFilter: "linear",
+        minFilter: "linear",
+        anisotropy: 8,
+    };
+    /** Which UV set and how it is transformed (default: the first set, untransformed). */
+    transform: UvTransform = {offset: [0, 0], scale: [1, 1], rotation: 0, uvSet: 0};
     private readonly tex: GPUTexture;
 
     private constructor(tex: GPUTexture, colorSpace: ColorSpace) {
@@ -79,6 +118,23 @@ export class Texture {
         bitmap.close();
         generateMipmaps(device, tex, options.colorSpace);
         return new Texture(tex, options.colorSpace ?? "srgb");
+    }
+
+    /**
+     * Another Texture on the same pixels, with its own sampling and transform (as glTF materials use one image
+     * several ways). Destroying either destroys the pixels both read.
+     */
+    withSettings({
+        sampling,
+        transform,
+    }: {
+        sampling?: Partial<TextureSampling>;
+        transform?: Partial<UvTransform>;
+    }): Texture {
+        const copy = new Texture(this.tex, this.colorSpace);
+        copy.sampling = {...this.sampling, ...sampling};
+        copy.transform = {...this.transform, ...transform};
+        return copy;
     }
 
     destroy(): void {
