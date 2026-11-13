@@ -135,6 +135,8 @@ fn applyToneMap(c: vec3<f32>) -> vec3<f32> {
  * - `"agx"`: filmic, the Blender default. Wide latitude, bright colors desaturate to white like film; softer.
  * - `"aces"`: filmic with more contrast and saturation, highlights shift hue a little.
  * - `"reinhard"`: the simple `c / (c + 1)`, flat and greyish; mostly for comparison.
+ *
+ * The curve applies to the whole image, background included: only `"none"` shows `scene.backgroundColor` exactly.
  */
 export type ToneMapping = "none" | "neutral" | "agx" | "aces" | "reinhard";
 

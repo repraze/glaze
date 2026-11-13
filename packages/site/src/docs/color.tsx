@@ -169,6 +169,13 @@ graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas
                         comparison.
                     </li>
                 </ul>
+                <p className="text-sm text-muted-foreground">
+                    The whole image goes through the curve, background included: only{" "}
+                    <code className="font-mono text-foreground">&quot;none&quot;</code> shows{" "}
+                    <code className="font-mono text-foreground">backgroundColor</code> exactly. Under the others a
+                    background set to the page&apos;s color shifts a little (greyer under AgX), the same treatment as
+                    everything in front of it.
+                </p>
                 <Code
                     code={`const blit = new BlitPass({toneMapping: "agx", exposure: 0.5});
 graph.addPass(blit, {color}, {canvasSlot: "canvas"});
