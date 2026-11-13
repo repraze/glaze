@@ -115,9 +115,20 @@ export class PointLight extends Light {
 export interface SpotLightOptions extends LightOptions {
     /** Initial direction the cone points (sets the rotation through `lookAlong`). */
     direction?: [number, number, number];
+    /** Half-angle (radians) of the fully lit core. Kept between 0 and `outerAngle`. */
     innerAngle?: number;
+    /** Half-angle (radians) where the light reaches 0. Kept below 89°. */
     outerAngle?: number;
     range?: number;
+}
+
+const MAX_SPOT_ANGLE = (89 * Math.PI) / 180;
+
+/** @internal A spot light's cone as rendered: outer within (0, 89°], inner within [0, outer). */
+export function spotCone(light: SpotLight): {inner: number; outer: number} {
+    const outer = Math.min(Math.max(light.outerAngle, 1e-3), MAX_SPOT_ANGLE);
+    const inner = Math.min(Math.max(light.innerAngle, 0), outer * 0.999);
+    return {inner, outer};
 }
 
 /** A cone of light from the entity's position along its -Z: aim it with `lookAt` / `lookAlong`. */

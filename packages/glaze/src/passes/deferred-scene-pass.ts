@@ -6,7 +6,7 @@ import {PBRMaterial} from "../material/material";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 import type {Camera} from "../scene/camera";
-import type {DirectionalLight, PointLight, SpotLight} from "../scene/light";
+import {type DirectionalLight, type PointLight, spotCone, type SpotLight} from "../scene/light";
 import type {Mesh} from "../scene/mesh";
 import type {Scene} from "../scene/scene";
 import {type Cascade, fitCascades, lightView, MAX_CASCADES} from "../scene/shadow-cascades";
@@ -292,7 +292,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {${
     output.worldPos    = worldPos.xyz;
     output.worldNormal = normalize((model.normalMatrix * vec4<f32>(normal, 0.0)).xyz);
     output.uv          = input.uv;
-    let worldTangentXYZ = normalize((model.normalMatrix * vec4<f32>(tangent, 0.0)).xyz);
+    // a tangent lies in the surface: it follows the model matrix (not the normal matrix) under non-uniform scale
+    let worldTangentXYZ = normalize((model.model * vec4<f32>(tangent, 0.0)).xyz);
     output.worldTangent = vec4<f32>(worldTangentXYZ, input.tangent.w);
     return output;
 }
@@ -339,15 +340,18 @@ ${
     f.doubleSided
         ? `
     // a back face is lit from its own side
-    let N = select(-1.0, 1.0, frontFacing) * normalize(input.worldNormal);`
+    let face = select(-1.0, 1.0, frontFacing);
+    let N = face * normalize(input.worldNormal);`
         : `
+    let face = 1.0;
     let N = normalize(input.worldNormal);`
 }
 ${
     needsTbn
         ? `
-    let T   = normalize(input.worldTangent.xyz);
-    let B   = cross(N, T) * input.worldTangent.w;
+    // re-orthogonalized against N; on a back face the whole frame flips, so a bump reads as a dent
+    let T   = normalize(input.worldTangent.xyz * face - N * dot(N, input.worldTangent.xyz * face));
+    let B   = cross(N, T) * input.worldTangent.w * face;
     let tbn = mat3x3<f32>(T, B, N);
 `
         : ""
@@ -389,7 +393,7 @@ ${f.alpha === "mask" ? `    if (alpha < mat.alphaCutoff) { discard; }` : ""}
     s.normal    = shadingNormal;
     s.roughness = clamp(mr.g * mat.roughness, 0.0, 1.0);
     s.metallic  = clamp(mr.b * mat.metallic,  0.0, 1.0);
-    s.ao        = 1.0 + mat.occlusionStrength * (occlusion - 1.0);
+    s.ao        = clamp(1.0 + mat.occlusionStrength * (occlusion - 1.0), 0.0, 1.0);
     s.emissive  = textureSample(emissiveMap, matSampler, uv).rgb * mat.emissive.rgb;
     return s;
 }
@@ -399,6 +403,7 @@ ${f.alpha === "mask" ? `    if (alpha < mat.alphaCutoff) { discard; }` : ""}
 function buildGBufferShader(f: GBufferFeatures): string {
     return /* wgsl */ `
 ${buildSurfaceWgsl(f)}
+${COVERAGE_AO_WGSL}
 
 struct GBufferOutput {
     @location(0) albedo:   vec4<f32>,
@@ -411,7 +416,7 @@ struct GBufferOutput {
 fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> GBufferOutput {
     let s = surface(input, frontFacing);
     var out: GBufferOutput;
-    out.albedo   = vec4<f32>(s.albedo, s.ao);
+    out.albedo   = vec4<f32>(s.albedo, encodeCoverageAo(s.ao));
     out.normal   = vec4<f32>(s.normal, s.roughness);
     out.worldPos = vec4<f32>(input.worldPos, s.metallic);
     out.emissive = vec4<f32>(s.emissive, model.flags.x);
@@ -520,6 +525,16 @@ const ENVIRONMENT_SLOT = BACKGROUND_SLOT + 4;
 const INV_VP_SLOT = ENVIRONMENT_SLOT + 4;
 const CAMERA_FORWARD_SLOT = INV_VP_SLOT + 16;
 const LIGHTING_BUFFER_SIZE = (CAMERA_FORWARD_SLOT + 4) * 4;
+
+/**
+ * The G-buffer albedo alpha holds AO and doubles as coverage (0 = nothing drawn: background). AO is stored above
+ * a floor so a fully occluded texel (black baked AO) still counts as a surface.
+ */
+const COVERAGE_AO_WGSL = /* wgsl */ `
+const AO_FLOOR: f32 = 4.0 / 255.0;
+fn encodeCoverageAo(ao: f32) -> f32 { return AO_FLOOR + (1.0 - AO_FLOOR) * clamp(ao, 0.0, 1.0); }
+fn decodeCoverageAo(a: f32) -> f32 { return clamp((a - AO_FLOOR) / (1.0 - AO_FLOOR), 0.0, 1.0); }
+`;
 
 const LIGHT_STRUCTS_WGSL = /* wgsl */ `
 struct DirectionalLight {
@@ -840,10 +855,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let L       = toLight / dist;
         let attn     = clamp(1.0 - dist / sl.position.w, 0.0, 1.0);
         let theta    = dot(L, normalize(-sl.direction.xyz));
-        let spotAttn = clamp(
-            (theta - sl.angles.y) / (sl.angles.x - sl.angles.y),
-            0.0, 1.0
-        );
+        let spotAttn = smoothstep(sl.angles.y, sl.angles.x, theta);
         var shadow = 1.0;
         if (sl.direction.w > 0.5 && receiveShadow > 0.0 && attn * spotAttn > 0.0 && dot(N, L) > 0.0) {
             // the cone spans 2 · tan(outer) · depth over the map
@@ -878,6 +890,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
 function buildLightingShader(encode: boolean, sizes: ShadowSizes): string {
     return /* wgsl */ `
 ${COLOR_WGSL}
+${COVERAGE_AO_WGSL}
 ${LIGHT_STRUCTS_WGSL}
 
 // lit in linear light; encoded here only when this pass writes straight to the screen
@@ -927,7 +940,7 @@ fn sampleBgMap(dir: vec3<f32>) -> vec3<f32> {
 fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
     let coord   = vec2<i32>(i32(input.pos.x), i32(input.pos.y));
     let albedo4 = textureLoad(albedoTex, coord, 0);
-    if (albedo4.a < 0.01) {
+    if (albedo4.a < AO_FLOOR * 0.5) {
         let dims = vec2<f32>(textureDimensions(albedoTex));
         let ndc  = vec2<f32>(
             input.pos.x / dims.x * 2.0 - 1.0,
@@ -942,7 +955,7 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
     let emissiveSample = textureLoad(emissiveTex, coord, 0);
     let colour = shade(
         albedo4.rgb,
-        albedo4.a,
+        decodeCoverageAo(albedo4.a),
         normalize(normalSample.xyz),
         normalSample.w,
         clamp(posSample.w, 0.0, 1.0),
@@ -2297,8 +2310,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 9] = srgbToLinear(l.color[1]);
             f32[base + 10] = srgbToLinear(l.color[2]);
             f32[base + 11] = l.intensity;
-            f32[base + 12] = Math.cos(l.innerAngle);
-            f32[base + 13] = Math.cos(l.outerAngle);
+            const cone = spotCone(l);
+            f32[base + 12] = Math.cos(cone.inner);
+            f32[base + 13] = Math.cos(cone.outer);
             this.packPerspectiveShadow(f32, base + 16, l);
             if (lm) {
                 f32.set(lm, base + 24);
@@ -2357,7 +2371,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         mat4.lookAt(view, eye, center, up);
 
         const proj = mat4.create();
-        mat4.perspectiveZO(proj, light.outerAngle * 2, 1.0, SHADOW_NEAR, light.range);
+        mat4.perspectiveZO(proj, spotCone(light).outer * 2, 1.0, SHADOW_NEAR, light.range);
 
         const lsMatrix = mat4.create();
         mat4.multiply(lsMatrix, proj, view);

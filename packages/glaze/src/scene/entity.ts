@@ -1,5 +1,6 @@
 import {mat4, quat, type ReadonlyVec3, vec3} from "gl-matrix";
 
+import {decompose} from "../math/transform";
 import type {Collider} from "./collider";
 
 /** Every layer bit set: the default query and visibility mask. */
@@ -181,11 +182,13 @@ export class Entity {
     }
 
     getWorldQuaternion(out: quat = quat.create()): quat {
-        return quat.normalize(out, mat4.getRotation(out, this.computeWorldMatrix(tmpMat)));
+        decompose(this.computeWorldMatrix(tmpMat), null, out, null);
+        return out;
     }
 
     getWorldScale(out: vec3 = vec3.create()): vec3 {
-        return mat4.getScaling(out, this.computeWorldMatrix(tmpMat));
+        decompose(this.computeWorldMatrix(tmpMat), null, null, out);
+        return out;
     }
 
     /** The unit world-space direction the entity faces (its -Z axis). */

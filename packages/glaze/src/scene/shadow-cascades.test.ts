@@ -3,7 +3,7 @@ import {describe, test} from "node:test";
 
 import {mat4, vec3, vec4} from "gl-matrix";
 
-import {PerspectiveCamera} from "./camera";
+import {OrthographicCamera, PerspectiveCamera} from "./camera";
 import {type Cascade, cascadeSplits, fitCascades} from "./shadow-cascades";
 
 function cameraFit(position: [number, number, number], target: [number, number, number]) {
@@ -107,5 +107,52 @@ describe("fitCascades", () => {
         const p = vec3.scale(vec3.create(), lightDirection, -49);
         const clip = vec4.transformMat4(vec4.create(), [p[0], p[1], p[2], 1], out[0]!.matrix);
         assert.ok(clip[2]! >= 0, `depth ${clip[2]}`);
+    });
+});
+
+describe("fitCascades edge cases", () => {
+    const finite = (cascades: Cascade[], count: number) => {
+        assert.ok(count > 0);
+        for (const c of cascades.slice(0, count)) {
+            assert.ok(Number.isFinite(c.radius) && c.radius > 0, `radius ${c.radius}`);
+            assert.ok(Array.from(c.matrix).every(Number.isFinite));
+        }
+    };
+    const fitWith = (inv: mat4, near: number, far: number) => {
+        const out: Cascade[] = [];
+        const count = fitCascades(out, {
+            invViewProjection: inv,
+            near,
+            far,
+            lightDirection,
+            cascades: 3,
+            maxDistance: 30,
+            splitBalance: 0.8,
+            mapSize: 1024,
+            casterStart: -50,
+        });
+        return {out, count};
+    };
+
+    test("an infinite far plane", () => {
+        const camera = new PerspectiveCamera({fov: Math.PI / 4, near: 0.1, far: Infinity});
+        vec3.set(camera.position, 3, 4, 8);
+        camera.lookAt([0, 0, 0]);
+        camera.updateWorldMatrix(null);
+        const inv = mat4.invert(mat4.create(), camera.getViewProjectionMatrix(16 / 9))!;
+        const {out, count} = fitWith(inv, 0.1, Infinity);
+        finite(out, count);
+        assert.equal(out[count - 1]!.far, 30);
+    });
+
+    test("an orthographic camera starting behind 0", () => {
+        assert.ok(cascadeSplits(-10, 30, 4, 1).every(Number.isFinite));
+        const camera = new OrthographicCamera({left: -5, right: 5, top: 5, bottom: -5, near: -10, far: 50});
+        vec3.set(camera.position, 3, 4, 8);
+        camera.lookAt([0, 0, 0]);
+        camera.updateWorldMatrix(null);
+        const inv = mat4.invert(mat4.create(), camera.getViewProjectionMatrix(1))!;
+        const {out, count} = fitWith(inv, -10, 50);
+        finite(out, count);
     });
 });

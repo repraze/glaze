@@ -9,7 +9,8 @@ import {box3, type ReadonlyBox3, type ReadonlySphere, sphere} from "../math/boun
  *
  * - `box` / `sphere`: cheap analytic shapes.
  * - `geometry`: triangles. Without `geometry` it uses the entity's own (a Mesh's, read at query time, so it follows
- *   a geometry swap). `cullBackFace` (default true, like the renderer) skips triangles seen from behind.
+ *   a geometry swap). `cullBackFace` skips triangles seen from behind; by default it follows the renderer (true,
+ *   false on a Mesh whose material is `doubleSided`).
  *
  * Meshes start with `{kind: "geometry"}`; set `collider = null` to opt out of picking at no cost.
  */
@@ -32,7 +33,10 @@ export function sphereCollider(radius: number, center: ReadonlyVec3 = [0, 0, 0])
     return {kind: "sphere", sphere: sphere.fromValues(center, radius)};
 }
 
-/** Triangles of `geometry`, or of the entity's own geometry when omitted. */
-export function geometryCollider(geometry?: Geometry, {cullBackFace = true}: {cullBackFace?: boolean} = {}): Collider {
+/**
+ * Triangles of `geometry`, or of the entity's own geometry when omitted. `cullBackFace` defaults to following the
+ * renderer (the Mesh material's `doubleSided`).
+ */
+export function geometryCollider(geometry?: Geometry, {cullBackFace}: {cullBackFace?: boolean} = {}): Collider {
     return {kind: "geometry", geometry, cullBackFace};
 }

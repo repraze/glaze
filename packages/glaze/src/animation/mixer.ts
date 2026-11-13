@@ -59,18 +59,31 @@ export class AnimationAction {
         return this.loop === "once" && (this.speed >= 0 ? this.time >= this.clip.duration : this.time <= 0);
     }
 
-    /** Plays, its weight rising from 0 to 1 over `duration` seconds. */
+    /**
+     * Plays, its weight rising to 1 over `duration` seconds: from 0, or from where it is when it was still counting
+     * (fading out, say), so an interrupted crossfade turns back without a jump.
+     */
     fadeIn(duration: number): this {
+        const from = this.enabled ? this.weight : 0;
         this.play();
-        this.fade = {from: 0, to: 1, elapsed: 0, duration, stopAtEnd: false};
-        this.weight = duration > 0 ? 0 : 1;
+        // the part of the way left to go takes that part of the time
+        const time = duration * (1 - from);
+        this.fade = {from, to: 1, elapsed: 0, duration: time, stopAtEnd: false};
+        this.weight = time > 0 ? from : 1;
+        if (time <= 0) {
+            this.fade = null;
+        }
         return this;
     }
 
-    /** Its weight falls to 0 over `duration` seconds, then it stops. */
+    /**
+     * Its weight falls to 0, then it stops. `duration` is the time from full weight: from a lower weight it takes
+     * that share of it, matching a fadeIn turned back halfway.
+     */
     fadeOut(duration: number): this {
-        this.fade = {from: this.weight, to: 0, elapsed: 0, duration, stopAtEnd: true};
-        if (duration <= 0) {
+        const time = duration * this.weight;
+        this.fade = {from: this.weight, to: 0, elapsed: 0, duration: time, stopAtEnd: true};
+        if (time <= 0) {
             this.stop();
         }
         return this;
@@ -102,8 +115,9 @@ export class AnimationAction {
             const d = this.clip.duration;
             if (this.loop === "once") {
                 this.time = Math.min(Math.max(this.time, 0), d);
-            } else if (this.loop === "repeat" && d > 0) {
-                this.time = mod(this.time, d); // keeps precision on long runs
+            } else if (d > 0) {
+                // keeps precision on long runs (pingpong's period is there and back)
+                this.time = mod(this.time, this.loop === "repeat" ? d : 2 * d);
             }
         }
         const fade = this.fade;
@@ -186,6 +200,9 @@ export class AnimationMixer {
 
     /** Advances every enabled action by `delta` seconds and writes the blended pose. */
     update(delta: number): void {
+        if (!Number.isFinite(delta)) {
+            return; // a NaN would stick in every time and fade, and from there in every pose
+        }
         const active = this.active;
         active.length = 0;
         for (const [action, bindings] of this.trackBindings) {

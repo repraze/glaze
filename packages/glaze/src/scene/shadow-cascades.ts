@@ -50,9 +50,12 @@ export interface CascadeFit {
  */
 export function cascadeSplits(near: number, far: number, count: number, balance: number): number[] {
     const splits: number[] = [];
+    // logarithmic needs 0 < near < far: an orthographic camera may start at or behind 0 (and gains nothing from it)
+    const logOk = near > 0 && far > near;
+    far = Math.max(far, near + 1e-6);
     for (let i = 1; i <= count; i++) {
         const f = i / count;
-        const log = near * Math.pow(far / near, f);
+        const log = logOk ? near * Math.pow(far / near, f) : near + (far - near) * f;
         const uniform = near + (far - near) * f;
         splits.push(balance * log + (1 - balance) * uniform);
     }
@@ -72,7 +75,11 @@ const ndcCorners: [number, number][] = [
     [1, 1],
 ];
 const nearCorners = Array.from({length: 4}, () => vec3.create());
-const farCorners = Array.from({length: 4}, () => vec3.create());
+/** Per corner ray: the world step per unit of view depth. */
+const cornerSteps = Array.from({length: 4}, () => vec3.create());
+const forward = vec3.create();
+const edgeA = vec3.create();
+const edgeB = vec3.create();
 const slice = Array.from({length: 8}, () => vec3.create());
 const tmp4 = vec4.create();
 const view = mat4.create();
@@ -95,10 +102,27 @@ export function fitCascades(out: Cascade[], fit: CascadeFit): number {
     const splits = cascadeSplits(fit.near, far, count, fit.splitBalance);
     for (let i = 0; i < 4; i++) {
         unproject(nearCorners[i]!, fit.invViewProjection, ndcCorners[i]![0], ndcCorners[i]![1], 0);
-        unproject(farCorners[i]!, fit.invViewProjection, ndcCorners[i]![0], ndcCorners[i]![1], 1);
+        // toward the far plane, kept homogeneous: with an infinite far plane its w is 0
+        vec4.transformMat4(tmp4, vec4.set(tmp4, ndcCorners[i]![0], ndcCorners[i]![1], 1, 1), fit.invViewProjection);
+        const n = nearCorners[i]!;
+        vec3.set(cornerSteps[i]!, tmp4[0] - n[0] * tmp4[3], tmp4[1] - n[1] * tmp4[3], tmp4[2] - n[2] * tmp4[3]);
+    }
+    // the view axis: the near plane's normal, facing the way the corner rays go
+    vec3.cross(
+        forward,
+        vec3.subtract(edgeA, nearCorners[1]!, nearCorners[0]!),
+        vec3.subtract(edgeB, nearCorners[2]!, nearCorners[0]!),
+    );
+    vec3.normalize(forward, forward);
+    if (vec3.dot(forward, cornerSteps[0]!) < 0) {
+        vec3.negate(forward, forward);
+    }
+    for (const step of cornerSteps) {
+        // view depth grows linearly along each corner ray: scale the step to one unit of it
+        const perDepth = vec3.dot(step, forward);
+        vec3.scale(step, step, perDepth > 0 ? 1 / perDepth : 0);
     }
     lightView(view, fit.lightDirection);
-    const span = fit.far - fit.near;
 
     for (let c = 0; c < count; c++) {
         const cascade = (out[c] ??= createCascade());
@@ -106,8 +130,8 @@ export function fitCascades(out: Cascade[], fit: CascadeFit): number {
         const to = splits[c]!;
         // the slice's 8 corners: view depth is linear along each corner ray, near plane to far plane
         for (let i = 0; i < 4; i++) {
-            vec3.lerp(slice[i]!, nearCorners[i]!, farCorners[i]!, (from - fit.near) / span);
-            vec3.lerp(slice[i + 4]!, nearCorners[i]!, farCorners[i]!, (to - fit.near) / span);
+            vec3.scaleAndAdd(slice[i]!, nearCorners[i]!, cornerSteps[i]!, from - fit.near);
+            vec3.scaleAndAdd(slice[i + 4]!, nearCorners[i]!, cornerSteps[i]!, to - fit.near);
         }
         vec3.set(centroid, 0, 0, 0);
         for (const p of slice) {

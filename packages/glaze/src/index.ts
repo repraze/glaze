@@ -68,6 +68,7 @@ export type {Box3, ReadonlyBox3, ReadonlySphere, Sphere} from "./math/bounds";
 export {box3, sphere} from "./math/bounds";
 export type {Ray, ReadonlyRay} from "./math/ray";
 export {ray} from "./math/ray";
+export {decompose, isMirrored} from "./math/transform";
 export type {PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "./pass";
 export {Pass} from "./pass";
 export type {BlitPassOptions, ToneMapping} from "./passes/blit-pass";

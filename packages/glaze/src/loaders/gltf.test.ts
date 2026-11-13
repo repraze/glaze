@@ -6,6 +6,7 @@ import {quat, vec3} from "gl-matrix";
 import {AnimationMixer} from "../animation/mixer";
 import {Mesh} from "../scene/mesh";
 import {SkinnedMesh} from "../scene/skin";
+import {readAccessor} from "./glb";
 import {parseGltf} from "./gltf";
 
 const near = (a: ArrayLike<number>, b: ArrayLike<number>, eps = 1e-5) =>
@@ -312,5 +313,66 @@ describe("parseGltf", () => {
         mixer.update(0.75);
         assert.ok(Math.abs(b.morphWeights[0]! - 0.75) < 1e-6);
         assert.equal(a.morphWeights[0], 0.25); // other nodes untouched
+    });
+
+    test("refuses files that require an extension it can't read", async () => {
+        await assert.rejects(
+            parseGltf(
+                noDevice,
+                triangleGltf((json) => {
+                    json.extensionsUsed = json.extensionsRequired = ["KHR_draco_mesh_compression"];
+                }),
+            ),
+            /KHR_draco_mesh_compression/,
+        );
+        // supported ones load
+        await parseGltf(
+            noDevice,
+            triangleGltf((json) => {
+                json.extensionsRequired = ["KHR_mesh_quantization"];
+            }),
+        );
+    });
+
+    test("a mirroring node matrix keeps its mirror (negative scale) and rotation", async () => {
+        const c = Math.cos(0.5);
+        const sn = Math.sin(0.5);
+        // a 0.5 rad turn about Y, then X scaled by -1 (column-major)
+        const matrix = [-c, 0, sn, 0, 0, 1, 0, 0, sn, 0, c, 0, 1, 2, 3, 1];
+        const model = await parseGltf(
+            noDevice,
+            triangleGltf((json) => {
+                (json.nodes as Record<string, unknown>[])[3]!.matrix = matrix;
+            }),
+        );
+        const parts = model.root.find("Parts")!;
+        parts.updateLocalMatrix();
+        assert.ok(parts.scale[0] < 0);
+        assert.ok(near(parts.localMatrix, matrix));
+    });
+});
+
+describe("readAccessor", () => {
+    test("normalizes a sparse accessor of integers that has no buffer view", () => {
+        const bytes = new Uint8Array(8);
+        new Uint32Array(bytes.buffer, 0, 1)[0] = 1;
+        new Int8Array(bytes.buffer, 4, 3).set([0, -127, 127]);
+        const json = {
+            bufferViews: [
+                {buffer: 0, byteOffset: 0, byteLength: 4},
+                {buffer: 0, byteOffset: 4, byteLength: 3},
+            ],
+            accessors: [
+                {
+                    componentType: 5120,
+                    normalized: true,
+                    count: 2,
+                    type: "VEC3",
+                    sparse: {count: 1, indices: {bufferView: 0, componentType: 5125}, values: {bufferView: 1}},
+                },
+            ],
+        };
+        const values = readAccessor(json as never, [bytes.buffer], 0);
+        assert.deepEqual(Array.from(values), [0, 0, 0, 0, -1, 1]);
     });
 });

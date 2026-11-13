@@ -112,6 +112,24 @@ export interface GltfJson {
     images?: GltfImageDef[];
     animations?: GltfAnimation[];
     skins?: {name?: string; joints: number[]; inverseBindMatrices?: number; skeleton?: number}[];
+    extensionsUsed?: string[];
+    extensionsRequired?: string[];
+}
+
+/** Extensions a file may require that Glaze reads correctly. */
+const SUPPORTED_REQUIRED_EXTENSIONS = new Set(["KHR_mesh_quantization", "KHR_materials_emissive_strength"]);
+
+/**
+ * @internal Throws when the file requires an extension Glaze can't read (Draco or meshopt compression, KTX2 or
+ * WebP textures...): without it the geometry or textures would load as zeros or nothing, silently.
+ */
+export function checkRequiredExtensions(json: GltfJson): void {
+    const missing = (json.extensionsRequired ?? []).filter((name) => !SUPPORTED_REQUIRED_EXTENSIONS.has(name));
+    if (missing.length > 0) {
+        throw new Error(
+            `glTF: required extension${missing.length > 1 ? "s" : ""} not supported: ${missing.join(", ")}`,
+        );
+    }
 }
 
 /** @internal */
@@ -207,7 +225,9 @@ export interface GLBPrimitive {
 export function readAccessor(json: GltfJson, buffers: ArrayBuffer[], accessorIndex: number): ArrayLike<number> {
     const raw = readAccessorRaw(json, buffers, accessorIndex);
     const accessor = json.accessors![accessorIndex]!;
-    if (!accessor.normalized || raw instanceof Float32Array) {
+    // decided by the declared type: a sparse accessor without a buffer view is densified into a Float32Array
+    // that still holds raw integers
+    if (!accessor.normalized || accessor.componentType === 5126) {
         return raw;
     }
     // KHR_mesh_quantization-style normalized integers to floats
@@ -488,6 +508,7 @@ export function parseGlbContainer(buffer: ArrayBuffer): {json: GltfJson; buffers
         throw new Error("GLB: first chunk is not JSON");
     }
     const json: GltfJson = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, jsonChunkLength)));
+    checkRequiredExtensions(json);
     let bin: ArrayBuffer = new ArrayBuffer(0);
     const binOffset = 20 + jsonChunkLength;
     if (binOffset + 8 <= buffer.byteLength) {

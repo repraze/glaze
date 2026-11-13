@@ -1,7 +1,7 @@
 import type {mat4} from "gl-matrix";
 import {type ReadonlyMat4, type ReadonlyVec3, vec3, vec4} from "gl-matrix";
 
-import type {ReadonlyBox3, ReadonlySphere} from "./bounds";
+import {box3, type ReadonlyBox3, type ReadonlySphere} from "./bounds";
 
 /**
  * A ray, `origin + t * direction` for t ≥ 0, in gl-matrix's style: plain data, free functions, `out` first.
@@ -19,7 +19,6 @@ export type ReadonlyRay = {readonly origin: ReadonlyVec3; readonly direction: Re
 
 const tmp4 = vec4.create();
 const tmpA = vec3.create();
-const tmpB = vec3.create();
 const tmpE1 = vec3.create();
 const tmpE2 = vec3.create();
 const tmpP = vec3.create();
@@ -68,14 +67,20 @@ export const ray = {
      */
     fromNdc(out: Ray, invViewProjection: ReadonlyMat4, ndcX: number, ndcY: number): Ray {
         unproject(tmpA, invViewProjection, ndcX, ndcY, 0);
-        unproject(tmpB, invViewProjection, ndcX, ndcY, 1);
         vec3.copy(out.origin, tmpA);
-        vec3.normalize(out.direction, vec3.subtract(out.direction, tmpB, tmpA));
+        // The far point stays homogeneous: with a huge (or infinite) far plane its w is 0 or rounds to it, and
+        // dividing would give infinities. b.xyz - near·b.w is (far - near)·b.w, or the direction at infinity.
+        vec4.transformMat4(tmp4, vec4.set(tmp4, ndcX, ndcY, 1, 1), invViewProjection as mat4);
+        vec3.set(out.direction, tmp4[0] - tmpA[0] * tmp4[3], tmp4[1] - tmpA[1] * tmp4[3], tmp4[2] - tmpA[2] * tmp4[3]);
+        vec3.normalize(out.direction, out.direction);
         return out;
     },
 
     /** Distance along the ray to the box (0 when the origin is inside it), or null on a miss. Slab method. */
     intersectBox(r: ReadonlyRay, b: ReadonlyBox3): number | null {
+        if (box3.isEmpty(b)) {
+            return null; // min > max: the slabs below would never reject a ray with no zero component
+        }
         let tmin = 0;
         let tmax = Infinity;
         for (let i = 0; i < 3; i++) {

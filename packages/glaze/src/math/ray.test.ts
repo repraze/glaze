@@ -125,3 +125,28 @@ describe("ray.intersectPlane", () => {
         assert.equal(ray.intersectPlane(ray.fromValues([0, 1, 0], [0, 1, 0]), ground, up), null);
     });
 });
+
+describe("ray edge cases", () => {
+    test("an empty box is never hit", () => {
+        const r = {origin: vec3.fromValues(0, 0, 0), direction: vec3.normalize(vec3.create(), [1, 1, 1])};
+        assert.equal(ray.intersectBox(r, box3.create()), null);
+    });
+
+    test("a picking ray through an infinite (or huge) far plane stays finite", () => {
+        for (const far of [Infinity, 1e7]) {
+            const proj = mat4.perspectiveZO(mat4.create(), Math.PI / 3, 1.5, 0.05, far);
+            const inv = mat4.invert(mat4.create(), proj)!;
+            const r = ray.fromNdc(ray.create(), inv, 0.3, -0.2);
+            assert.ok(Array.from(r.direction).every(Number.isFinite), `${far}: ${r.direction}`);
+            assert.ok(Math.abs(vec3.length(r.direction) - 1) < 1e-5);
+            // the same direction as a well-conditioned projection gives
+            const ref = ray.fromNdc(
+                ray.create(),
+                mat4.invert(mat4.create(), mat4.perspectiveZO(mat4.create(), Math.PI / 3, 1.5, 0.05, 100))!,
+                0.3,
+                -0.2,
+            );
+            assert.ok(vec3.dot(r.direction, ref.direction) > 0.99999);
+        }
+    });
+});

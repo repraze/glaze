@@ -1,6 +1,7 @@
 import {mat3, mat4, type ReadonlyMat4, vec2, vec3} from "gl-matrix";
 
 import type {Geometry} from "../geometry/geometry";
+import {PBRMaterial} from "../material/material";
 import {type Ray, ray, type ReadonlyRay} from "../math/ray";
 import type {Collider} from "./collider";
 import type {Entity} from "./entity";
@@ -118,7 +119,11 @@ function intersectCollider(
             if (geometry === undefined) {
                 return null;
             }
-            const found = intersectGeometry(geometry, collider.cullBackFace ?? true);
+            // like the renderer: a double-sided surface can be hit from behind
+            const cull =
+                collider.cullBackFace ??
+                !(entity instanceof Mesh && entity.material instanceof PBRMaterial && entity.material.doubleSided);
+            const found = intersectGeometry(geometry, cull);
             if (found !== null) {
                 ({t, faceIndex, uv} = found);
             }

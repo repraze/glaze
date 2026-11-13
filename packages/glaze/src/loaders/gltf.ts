@@ -1,13 +1,15 @@
-import {mat4, quat, vec3} from "gl-matrix";
+import {quat, vec3} from "gl-matrix";
 
 import {AnimationClip, type AnimationTrack} from "../animation/clip";
 import {computeTangents, Geometry} from "../geometry/geometry";
 import {PBRMaterial} from "../material/material";
+import {decompose} from "../math/transform";
 import {Entity} from "../scene/entity";
 import {Mesh} from "../scene/mesh";
 import {Skin, SkinnedMesh} from "../scene/skin";
 import type {Texture} from "../texture";
 import {
+    checkRequiredExtensions,
     createPBRMaterialFromGltf,
     decodeDataUri,
     extractMaterial,
@@ -94,8 +96,10 @@ async function readDocument(
     resolveUri: (uri: string) => string,
 ): Promise<{json: GltfJson; buffers: ArrayBuffer[]}> {
     const isGlb = bytes.byteLength >= 4 && new DataView(bytes).getUint32(0, true) === GLB_MAGIC;
-    const json: GltfJson = isGlb ? parseGlbContainer(bytes).json : JSON.parse(new TextDecoder().decode(bytes));
-    const glbBin = isGlb ? parseGlbContainer(bytes).buffers[0]! : null;
+    const container = isGlb ? parseGlbContainer(bytes) : null;
+    const json: GltfJson = container?.json ?? JSON.parse(new TextDecoder().decode(bytes));
+    checkRequiredExtensions(json);
+    const glbBin = container?.buffers[0] ?? null;
     const buffers = await Promise.all(
         (json.buffers ?? []).map(async (buffer, i): Promise<ArrayBuffer> => {
             if (buffer.uri === undefined) {
@@ -134,9 +138,11 @@ async function buildModel(
         ),
     );
     const textures = await Promise.all(textureCache.values());
+    // a primitive without a material gets the glTF default: fully metallic and rough
     let fallbackMaterial: PBRMaterial | null = null;
     const materialFor = (index: number | undefined): PBRMaterial =>
-        (index !== undefined ? materials[index] : undefined) ?? (fallbackMaterial ??= new PBRMaterial());
+        (index !== undefined ? materials[index] : undefined) ??
+        (fallbackMaterial ??= new PBRMaterial({metallic: 1, roughness: 1}));
 
     // Geometry once per (mesh, primitive).
     const geometries = new Map<string, Geometry | null>();
@@ -308,15 +314,9 @@ function readAnimations(json: GltfJson, buffers: ArrayBuffer[], nodes: Entity[])
     });
 }
 
-const tmpMatrix = mat4.create();
-
 function setLocalTransform(entity: Entity, node: GltfNode): void {
     if (node.matrix !== undefined) {
-        const m = mat4.copy(tmpMatrix, nodeMatrix(node));
-        mat4.getTranslation(entity.position, m);
-        mat4.getScaling(entity.scale, m);
-        mat4.getRotation(entity.quaternion, m);
-        quat.normalize(entity.quaternion, entity.quaternion);
+        decompose(nodeMatrix(node), entity.position, entity.quaternion, entity.scale);
         return;
     }
     if (node.translation !== undefined) {

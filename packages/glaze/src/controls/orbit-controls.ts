@@ -334,12 +334,14 @@ export class OrbitControls implements PointerConsumer {
             return false;
         }
         if (w.ctrlKey) {
-            // A trackpad pinch (browsers send it as ctrl + wheel): small deltas, so a stronger factor.
+            // A trackpad pinch (browsers send it as ctrl + wheel): small deltas, so a stronger factor. A mouse
+            // wheel with Control held keeps the mouse rate (the pinch one would be ×2.7 per notch).
             if (!this.enableZoom) {
                 return false;
             }
             this.idle = 0;
-            this.zoom(Math.exp(w.deltaY * 0.01 * this.zoomSpeed));
+            const rate = this.isMouseWheel(w) ? 0.001 : 0.01;
+            this.zoom(Math.exp(w.deltaY * rate * this.zoomSpeed));
             return true;
         }
         if (!this.captureScroll && !this.engaged) {

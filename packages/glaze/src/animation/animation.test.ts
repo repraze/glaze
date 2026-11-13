@@ -148,3 +148,38 @@ describe("AnimationMixer", () => {
         assert.ok(same > 0.99999, `${same}`);
     });
 });
+
+describe("AnimationMixer robustness", () => {
+    test("a crossfade turned back halfway resumes from the current weights", () => {
+        const e = new Entity();
+        const left = new AnimationClip("left", [track(e, "translation", [0, 1], [-1, 0, 0, -1, 0, 0])]);
+        const right = new AnimationClip("right", [track(e, "translation", [0, 1], [1, 0, 0, 1, 0, 0])]);
+        const mixer = new AnimationMixer();
+        const a = mixer.clipAction(left).play();
+        const b = mixer.clipAction(right);
+        a.crossFadeTo(b, 1);
+        mixer.update(0.25); // a 0.75, b 0.25
+        b.crossFadeTo(a, 1);
+        mixer.update(0);
+        close(e.position, [-0.5, 0, 0]); // no jump: still 0.75 / 0.25
+        mixer.update(0.125);
+        close(e.position, [-0.75, 0, 0]); // a 0.875
+        mixer.update(0.125);
+        close(e.position, [-1, 0, 0]);
+        assert.equal(b.enabled, false);
+    });
+
+    test("a NaN delta is ignored; pingpong time stays wrapped", () => {
+        const e = new Entity();
+        const clip = new AnimationClip("move", [track(e, "translation", [0, 2], [0, 0, 0, 2, 0, 0])]);
+        const mixer = new AnimationMixer();
+        const action = mixer.clipAction(clip).play();
+        action.loop = "pingpong";
+        mixer.update(1);
+        mixer.update(Number.NaN);
+        close(e.position, [1, 0, 0]);
+        mixer.update(4000.5); // 4001.5 → 1.5 into a 4 s period
+        assert.ok(action.time < 4);
+        close(e.position, [1.5, 0, 0]);
+    });
+});
