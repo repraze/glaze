@@ -212,10 +212,16 @@ export class Entity {
         mat4.fromRotationTranslationScale(this.localMatrix, this.quaternion, this.position, this.scale);
     }
 
+    /** @internal Bumped by each scene-wide world matrix update (see `worldFrame`). */
+    static worldPass = 0;
+    /** @internal The `Entity.worldPass` its worldMatrix was last updated in: older means it may be stale. */
+    worldFrame = -1;
+
     updateWorldMatrix(parentWorld: mat4 | null): void {
         if (!this.enabled) {
             return;
         }
+        this.worldFrame = Entity.worldPass;
         this.updateLocalMatrix();
         if (parentWorld !== null) {
             mat4.multiply(this.worldMatrix, parentWorld, this.localMatrix);

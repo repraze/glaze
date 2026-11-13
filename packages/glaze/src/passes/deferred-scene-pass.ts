@@ -453,9 +453,18 @@ ${
     let shadingNormal = N;
 `
 }
-    let texAlbedo4 = textureSample(albedoMap, albedoSampler, mapUv(0u, uv, input.uv1));
-    let alpha      = texAlbedo4.a * mat.albedo.a * input.color.a;
-${f.alpha === "mask" ? `    if (alpha < mat.alphaCutoff) { discard; }` : ""}
+    let albedoUv   = mapUv(0u, uv, input.uv1);
+    let texAlbedo4 = textureSample(albedoMap, albedoSampler, albedoUv);
+${
+    f.alpha === "mask"
+        ? `    // mip levels average alpha toward the middle, so cutouts thin out and vanish with distance: lift alpha by
+    // the mip level sampled (Golus) to keep their coverage
+    let texels = albedoUv * vec2<f32>(textureDimensions(albedoMap));
+    let lod    = max(0.5 * log2(max(dot(dpdx(texels), dpdx(texels)), dot(dpdy(texels), dpdy(texels)))), 0.0);
+    let alpha  = texAlbedo4.a * (1.0 + lod * 0.25) * mat.albedo.a * input.color.a;
+    if (alpha < mat.alphaCutoff) { discard; }`
+        : `    let alpha      = texAlbedo4.a * mat.albedo.a * input.color.a;`
+}
 
     let mr        = textureSample(metallicRoughnessMap, metallicRoughnessSampler, mapUv(3u, uv, input.uv1));
     let occlusion = textureSample(occlusionMap, occlusionSampler, mapUv(5u, uv, input.uv1)).r;
@@ -1315,6 +1324,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         material: GPUBindGroup | null;
         /** Its pipeline reads the extra vertex stream (alpha-tested with vertex colors or a second UV set). */
         extras: boolean;
+        /** The mesh's layers, against each light's shadow.layers. */
+        layers: number;
         rank: number;
         center: vec3;
         radius: number;
@@ -1405,8 +1416,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const activeCamera = this.scene.activeCamera;
         activeCamera?.computeWorldMatrix(activeCamera.worldMatrix);
 
+        // drawn: what the camera's layers show; casting: any mesh with castShadow, seen or not (a shadow-only mesh
+        // sits on a layer the camera hides)
         const visible = this.scene.activeCamera?.visibleLayers ?? 0xffffffff;
-        const meshes = this.scene.collectMeshes().filter((m) => (m.layers & visible) !== 0);
+        const all = this.scene.collectMeshes().filter((m) => (m.layers & visible) !== 0 || m.castShadow);
+        const meshes = all.filter((m) => (m.layers & visible) !== 0);
         const dirLights = this.keepLights(this.scene.collectDirectionalLights(), MAX_DIRECTIONAL, "directional");
         const pointLights = this.keepLights(this.scene.collectPointLights(), MAX_POINT, "point");
         const spotLights = this.keepLights(this.scene.collectSpotLights(), MAX_SPOT, "spot");
@@ -1414,9 +1428,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const spotMatrices = spotLights.map((l) => (l.castShadow ? this.computeSpotLightMatrix(l) : null));
         const pointMatrices = pointLights.map((l) => (l.castShadow ? this.computePointLightFaceMatrices(l) : null));
 
-        this.ensureMeshResources(meshes);
+        this.ensureMeshResources(all);
         // model uniforms and joint matrices first: casters and draws below read the final resources
-        for (const mesh of meshes) {
+        for (const mesh of all) {
             const res = this.meshCache.get(mesh);
             if (res) {
                 if (res.jointBuffer !== null) {
@@ -1426,7 +1440,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             }
         }
         this.uploadCameraUniforms(this.scene.activeCamera, ctx.width, ctx.height);
-        this.collectCasters(meshes);
+        this.collectCasters(all);
         this.fitDirectionalShadows(dirLights);
         this.uploadLightingUniforms(dirLights, pointLights, spotLights, spotMatrices);
         this.uploadPointShadowMatrices(pointLights, pointMatrices);
@@ -1791,15 +1805,15 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         hasExtras = false,
     ): GPURenderPipeline {
         const alpha = material?.alphaMode ?? "opaque";
-        const doubleSided = material?.doubleSided ?? false;
+        const side = material?.shadowSide ?? (material?.doubleSided ? "both" : "front");
         // only alpha-tested casters read vertex colors / the second UV set
         const extras = hasExtras && alpha !== "opaque";
-        if (alpha === "opaque" && !doubleSided && !skinned && !morphed && !mirrored) {
+        if (alpha === "opaque" && side === "front" && !skinned && !morphed && !mirrored) {
             return this.shadowPipeline;
         }
         const key =
             alpha +
-            (doubleSided ? "2" : "") +
+            (side === "both" ? "2" : side === "back" ? "B" : "") +
             (skinned ? "S" : "") +
             (morphed ? "T" : "") +
             (mirrored ? "X" : "") +
@@ -1831,7 +1845,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 depthStencil: SHADOW_DEPTH_STATE,
                 primitive: {
                     topology: "triangle-list",
-                    cullMode: doubleSided ? "none" : "back",
+                    // the shadow pass keeps faces turned toward the light ("front") by culling the others
+                    cullMode: side === "both" ? "none" : side === "back" ? "front" : "back",
                     frontFace: frontFace(mirrored),
                 },
             });
@@ -2063,6 +2078,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 pipeline,
                 material: null,
                 extras: false,
+                layers: 0,
                 rank,
                 center: vec3.create(),
                 radius: 0,
@@ -2071,6 +2087,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             caster.pipeline = pipeline;
             caster.rank = rank;
             caster.extras = extras;
+            caster.layers = mesh.layers;
             caster.material =
                 material !== null && material.alphaMode !== "opaque" ? this.materialBindGroup(material) : null;
             caster.radius = this.meshBounds(mesh, caster.center);
@@ -2145,11 +2162,12 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const drawShadowMeshes = (
             pass: GPURenderPassEncoder,
             lightBindGroup: GPUBindGroup,
+            layers: number,
             keep?: (caster: (typeof casters)[number]) => boolean,
         ) => {
             let bound: GPURenderPipeline | null = null;
             for (const caster of casters) {
-                if (keep !== undefined && !keep(caster)) {
+                if ((caster.layers & layers) === 0 || (keep !== undefined && !keep(caster))) {
                     continue;
                 }
                 const {res, pipeline, material} = caster;
@@ -2200,7 +2218,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     },
                 });
                 // only casters whose bounds overlap the cascade's square, seen from the light
-                drawShadowMeshes(pass, this.dirShadowLightBGs[layer]!, (caster) => {
+                drawShadowMeshes(pass, this.dirShadowLightBGs[layer]!, dirLights[i]!.shadow.layers, (caster) => {
                     vec3.transformMat4(lightSpace, caster.center, this.lightViewMatrix);
                     const reach = cascade.radius + caster.radius;
                     return (
@@ -2237,7 +2255,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 });
                 // only casters this face (a frustum out to the light's range) can see
                 const face = faceMatrices[f]!;
-                drawShadowMeshes(pass, this.pointShadowFaceBGs[slot]!, (caster) =>
+                drawShadowMeshes(pass, this.pointShadowFaceBGs[slot]!, pointLights[i]!.shadow.layers, (caster) =>
                     sphere.inFrustum(caster.center, caster.radius, face),
                 );
                 pass.end();
@@ -2260,7 +2278,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     depthStoreOp: "store",
                 },
             });
-            drawShadowMeshes(pass, this.spotShadowLightBGs[i]!, (caster) =>
+            drawShadowMeshes(pass, this.spotShadowLightBGs[i]!, spotLights[i]!.shadow.layers, (caster) =>
                 sphere.inFrustum(caster.center, caster.radius, lsMatrix),
             );
             pass.end();

@@ -47,7 +47,20 @@ interface PassState {
 
 export interface RendererOptions {
     alphaMode?: GPUCanvasAlphaMode;
+    /** Extra device features to require (init fails if the adapter lacks one). */
+    requiredFeatures?: GPUFeatureName[];
+    /** Device limits to require, over the ones Glaze raises on its own. */
+    requiredLimits?: Record<string, number>;
 }
+
+/**
+ * Limits raised to what the adapter allows: large models (morph targets, big vertex buffers) need more than the
+ * defaults, and the default 32 bytes per pixel leaves no room for more G-buffer targets.
+ */
+const RAISED_LIMITS = ["maxBufferSize", "maxStorageBufferBindingSize", "maxColorAttachmentBytesPerSample"] as const;
+
+/** Features turned on when the adapter has them: 32-bit float textures can then be filtered. */
+const OPTIONAL_FEATURES: GPUFeatureName[] = ["float32-filterable"];
 
 export class Renderer {
     readonly device: GPUDevice;
@@ -109,7 +122,17 @@ export class Renderer {
             throw new Error("No suitable GPU adapter found.");
         }
 
-        const device = await adapter.requestDevice();
+        const requiredLimits: Record<string, number> = {};
+        for (const name of RAISED_LIMITS) {
+            requiredLimits[name] = adapter.limits[name];
+        }
+        const device = await adapter.requestDevice({
+            requiredFeatures: [
+                ...OPTIONAL_FEATURES.filter((feature) => adapter.features.has(feature)),
+                ...(options.requiredFeatures ?? []),
+            ],
+            requiredLimits: {...requiredLimits, ...options.requiredLimits},
+        });
         device.addEventListener("uncapturederror", (event) => {
             console.error("[glaze] uncaptured WebGPU error:", (event as GPUUncapturedErrorEvent).error);
         });

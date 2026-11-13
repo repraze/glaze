@@ -154,7 +154,7 @@ function createTexture(device: GPUDevice, width: number, height: number, {mipmap
     });
 }
 
-// ─── Mip generation: each level is a linear downsample of the one above ───────
+// ─── Mip generation: each level a box-filtered downsample of the one above ─────
 
 const MIP_SHADER = /* wgsl */ `
 struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
@@ -168,15 +168,39 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 }
 
 @group(0) @binding(0) var src: texture_2d<f32>;
-@group(0) @binding(1) var smp: sampler;
 
+// The source texels under this one, weighted by overlap (3 per axis when the source size is odd: no row or column
+// is dropped), averaged with premultiplied alpha: a see-through texel's color doesn't bleed into its neighbours.
 @fragment fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSampleLevel(src, smp, in.uv, 0.0);
+    let srcSize = vec2<f32>(textureDimensions(src));
+    let dstSize = max(floor(srcSize * 0.5), vec2<f32>(1.0));
+    let scale   = srcSize / dstSize;
+    let lo      = floor(in.pos.xy) * scale; // this texel's footprint in the source: [lo, lo + scale)
+    var sum   = vec4<f32>(0.0);
+    var plain = vec3<f32>(0.0);
+    var total = 0.0;
+    for (var j = 0; j < 3; j++) {
+        for (var i = 0; i < 3; i++) {
+            let texel = floor(lo) + vec2<f32>(f32(i), f32(j));
+            let overlap = clamp(min(texel + 1.0, lo + scale) - max(texel, lo), vec2<f32>(0.0), vec2<f32>(1.0));
+            let w = overlap.x * overlap.y;
+            if (w > 0.0) {
+                let c = textureLoad(src, vec2<i32>(min(texel, srcSize - 1.0)), 0);
+                sum   += vec4<f32>(c.rgb * c.a, c.a) * w;
+                plain += c.rgb * w;
+                total += w;
+            }
+        }
+    }
+    let alpha = sum.a / total;
+    // fully transparent: keep the plain average (nothing to weight by)
+    let rgb = select(plain / total, sum.rgb / max(sum.a, 1e-6), sum.a > 1e-6);
+    return vec4<f32>(rgb, alpha);
 }
 `;
 
 type MipFormat = "rgba8unorm" | typeof SRGB_FORMAT;
-const mipPipelines = new WeakMap<GPUDevice, Map<MipFormat, {pipeline: GPURenderPipeline; sampler: GPUSampler}>>();
+const mipPipelines = new WeakMap<GPUDevice, Map<MipFormat, {pipeline: GPURenderPipeline}>>();
 
 /**
  * Fills levels 1… of an rgba8unorm texture from level 0 (no-op for a single level). For `"srgb"` (default) the
@@ -203,19 +227,15 @@ export function generateMipmaps(device: GPUDevice, texture: GPUTexture, colorSpa
                 fragment: {module, entryPoint: "fs", targets: [{format}]},
                 primitive: {topology: "triangle-list"},
             }),
-            sampler: device.createSampler({minFilter: "linear", magFilter: "linear"}),
         };
         perFormat.set(format, cached);
     }
-    const {pipeline, sampler} = cached;
+    const {pipeline} = cached;
     const encoder = device.createCommandEncoder({label: "Texture:mipmaps"});
     for (let level = 1; level < texture.mipLevelCount; level++) {
         const bindGroup = device.createBindGroup({
             layout: pipeline.getBindGroupLayout(0),
-            entries: [
-                {binding: 0, resource: texture.createView({format, baseMipLevel: level - 1, mipLevelCount: 1})},
-                {binding: 1, resource: sampler},
-            ],
+            entries: [{binding: 0, resource: texture.createView({format, baseMipLevel: level - 1, mipLevelCount: 1})}],
         });
         const pass = encoder.beginRenderPass({
             colorAttachments: [

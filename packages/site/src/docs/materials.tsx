@@ -112,6 +112,13 @@ export const doc = defineDoc({
                     default: "1",
                     description: "0 ignores the occlusion map, 1 applies it fully.",
                 },
+                {
+                    name: "shadowSide",
+                    type: '"front" | "back" | "both"',
+                    default: '"front" ("both" when doubleSided)',
+                    description:
+                        "Which faces cast: toward the light (grounded contacts), away from it, or both (an open wall).",
+                },
             ],
         },
         {

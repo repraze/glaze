@@ -903,7 +903,7 @@ export async function loadGLBFromURL(url: string): Promise<GLBPrimitive[]> {
  * goes in which map. GPU-free; {@link createPBRMaterialFromGltf} loads the textures and applies it.
  */
 export interface GltfMaterialPlan {
-    options: Required<PBRMaterialOptions>;
+    options: Required<Omit<PBRMaterialOptions, "shadowSide">>;
     albedoMap: GltfTextureSource | null;
     normalMap: GltfTextureSource | null;
     emissiveMap: GltfTextureSource | null;

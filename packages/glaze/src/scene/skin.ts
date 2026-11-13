@@ -2,7 +2,7 @@ import {mat4} from "gl-matrix";
 
 import type {Geometry} from "../geometry/geometry";
 import type {Material} from "../material/material";
-import type {Entity} from "./entity";
+import {Entity} from "./entity";
 import {Mesh} from "./mesh";
 
 /**
@@ -67,7 +67,13 @@ export class SkinnedMesh extends Mesh {
         }
         for (let i = 0; i < skin.joints.length; i++) {
             const ibm = skin.inverseBindMatrices.subarray(i * 16, i * 16 + 16);
-            mat4.multiply(joint, skin.joints[i]!.worldMatrix, ibm);
+            const j = skin.joints[i]!;
+            // a joint the scene update didn't reach (under a disabled entity, or outside the scene): from its parents
+            if (j.worldFrame !== Entity.worldPass) {
+                j.computeWorldMatrix(j.worldMatrix);
+                j.worldFrame = Entity.worldPass;
+            }
+            mat4.multiply(joint, j.worldMatrix, ibm);
             this.jointMatrices.set(joint, i * 16);
         }
         return this.jointMatrices;

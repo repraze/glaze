@@ -1,7 +1,7 @@
 import {vec3} from "gl-matrix";
 
 import type {ColorRgb} from "../color";
-import {Entity} from "./entity";
+import {ALL_LAYERS, Entity} from "./entity";
 
 /**
  * How a light's shadow looks. Every field has a default that suits most scenes; change them on `light.shadow`
@@ -27,6 +27,8 @@ export interface ShadowSettings {
      * cast nothing; a smaller value costs depth precision far away. Default 0.1.
      */
     near: number;
+    /** Which meshes cast into this light's shadow: those whose `layers` share a bit with it. Default all. */
+    layers: number;
 }
 
 /** See {@link DirectionalShadowSettings.cascadeBlend}. */
@@ -73,7 +75,16 @@ export abstract class Light extends Entity {
         this.color = vec3.clone(color as vec3);
         this.intensity = intensity;
         this.castShadow = castShadow;
-        this.shadow = {softness: 0.05, samples: 16, normalBias: 1.5, bias: 0.5, intensity: 1, near: 0.1, ...shadow};
+        this.shadow = {
+            softness: 0.05,
+            samples: 16,
+            normalBias: 1.5,
+            bias: 0.5,
+            intensity: 1,
+            near: 0.1,
+            layers: ALL_LAYERS,
+            ...shadow,
+        };
     }
 }
 
@@ -98,6 +109,7 @@ export class DirectionalLight extends Light {
             bias: 0.5,
             intensity: 1,
             near: 0.1,
+            layers: ALL_LAYERS,
             cascades: 4,
             maxDistance: 40,
             splitBalance: 0.6,

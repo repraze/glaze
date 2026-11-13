@@ -35,6 +35,7 @@ export class Scene {
 
     /** Recompute all world matrices from the root. */
     updateWorldMatrices(): void {
+        Entity.worldPass++;
         for (const child of this.root.children) {
             child.updateWorldMatrix(null);
         }

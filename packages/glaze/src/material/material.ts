@@ -30,7 +30,16 @@ export interface PBRMaterialOptions {
     alphaCutoff?: number;
     /** Render back faces too, lit from their own side (and cast shadows from both). Default false. */
     doubleSided?: boolean;
+    /** Which faces cast shadows; default: "both" when doubleSided, else "front". See {@link ShadowSide}. */
+    shadowSide?: ShadowSide;
 }
+
+/**
+ * Which faces of a mesh cast shadows. "front" (faces turned toward the light) keeps objects resting on a surface
+ * grounded; "back" suits closed, thin-walled objects that self-shadow at grazing light; "both" casts from an open
+ * surface whichever way it faces (a lone wall, a leaf).
+ */
+export type ShadowSide = "front" | "back" | "both";
 
 /**
  * How a material's alpha (albedo map alpha × opacity) is used, after glTF's alphaMode:
@@ -179,6 +188,8 @@ export class PBRMaterial extends Material {
     alphaMode: AlphaMode;
     alphaCutoff: number;
     doubleSided: boolean;
+    /** See {@link ShadowSide}; null: "both" when doubleSided, else "front". */
+    shadowSide: ShadowSide | null;
 
     constructor({
         color = [1, 1, 1],
@@ -192,6 +203,7 @@ export class PBRMaterial extends Material {
         alphaMode = "opaque",
         alphaCutoff = 0.5,
         doubleSided = false,
+        shadowSide,
     }: PBRMaterialOptions = {}) {
         super();
         this.color = color;
@@ -205,6 +217,7 @@ export class PBRMaterial extends Material {
         this.alphaMode = alphaMode;
         this.alphaCutoff = alphaCutoff;
         this.doubleSided = doubleSided;
+        this.shadowSide = shadowSide ?? null;
     }
 
     /** The texture sampled for roughness (G) and metallic (B): {@link metallicRoughnessMap}, else {@link ormMap}. */
