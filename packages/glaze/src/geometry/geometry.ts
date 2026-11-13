@@ -232,7 +232,8 @@ export class Geometry {
 }
 
 /**
- * Compute per-vertex tangents using the standard UV-space method (MikkTSpace-style).
+ * Compute per-vertex tangents with the per-triangle UV-space method (Lengyel), summed per vertex. Not MikkTSpace: where
+ * mirrored UVs share a vertex it keeps the dominant side (a baked normal map may still show a faint seam there).
  * Returns a Float32Array of 4 floats per vertex: tangent xyz + handedness w (+1 or -1).
  *
  * Follows glTF: the tangent points along +u and the bitangent, `cross(normal, tangent) * w`, points toward the
@@ -246,8 +247,12 @@ export function computeTangents(
     indices: Uint32Array,
     vertexCount: number,
 ): Float32Array {
+    // Sums per vertex, kept apart by the UV winding's handedness: where mirrored UVs meet, a shared vertex gets
+    // triangles of both, whose tangents would cancel. It takes the side that dominates instead.
     const tan1 = new Float32Array(vertexCount * 3);
     const tan2 = new Float32Array(vertexCount * 3);
+    const mirroredTan1 = new Float32Array(vertexCount * 3);
+    const mirroredTan2 = new Float32Array(vertexCount * 3);
 
     for (let t = 0; t < indices.length / 3; t++) {
         const i0 = indices[t * 3 + 0]!;
@@ -291,13 +296,25 @@ export function computeTangents(
         const by = (du1 * e2y - du2 * e1y) * r;
         const bz = (du1 * e2z - du2 * e1z) * r;
 
+        const t1 = det < 0 ? mirroredTan1 : tan1;
+        const t2 = det < 0 ? mirroredTan2 : tan2;
         for (const i of [i0, i1, i2]) {
-            tan1[i * 3]! += tx;
-            tan1[i * 3 + 1]! += ty;
-            tan1[i * 3 + 2]! += tz;
-            tan2[i * 3]! += bx;
-            tan2[i * 3 + 1]! += by;
-            tan2[i * 3 + 2]! += bz;
+            t1[i * 3]! += tx;
+            t1[i * 3 + 1]! += ty;
+            t1[i * 3 + 2]! += tz;
+            t2[i * 3]! += bx;
+            t2[i * 3 + 1]! += by;
+            t2[i * 3 + 2]! += bz;
+        }
+    }
+    for (let i = 0; i < vertexCount; i++) {
+        const a = Math.hypot(tan1[i * 3]!, tan1[i * 3 + 1]!, tan1[i * 3 + 2]!);
+        const b = Math.hypot(mirroredTan1[i * 3]!, mirroredTan1[i * 3 + 1]!, mirroredTan1[i * 3 + 2]!);
+        if (b > a) {
+            for (let k = 0; k < 3; k++) {
+                tan1[i * 3 + k] = mirroredTan1[i * 3 + k]!;
+                tan2[i * 3 + k] = mirroredTan2[i * 3 + k]!;
+            }
         }
     }
 

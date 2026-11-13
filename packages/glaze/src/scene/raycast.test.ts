@@ -3,6 +3,7 @@ import {describe, test} from "node:test";
 
 import {vec3} from "gl-matrix";
 
+import {Geometry} from "../geometry/geometry";
 import {createCube, createPlane, createSphere} from "../geometry/shapes";
 import {PBRMaterial} from "../material/material";
 import {ray} from "../math/ray";
@@ -152,5 +153,33 @@ describe("Camera.getRay", () => {
         const r = camera.getRay(ray.create(), 0, 0, 16 / 9);
         assert.equal(raycast(scene, r)[0]?.entity, target);
         assert.ok(near(r.direction, vec3.normalize(vec3.create(), [-4, -3, -5])));
+    });
+});
+
+describe("raycast morphed and double-sided meshes", () => {
+    test("a morphed mesh is hit where its blend shape puts it", () => {
+        const plane = createPlane({width: 2, height: 2}); // XZ plane facing +Y
+        const lifted = new Float32Array(plane.vertexCount * 3);
+        for (let i = 0; i < plane.vertexCount; i++) {
+            lifted[i * 3 + 1] = 1;
+        }
+        const geometry = new Geometry({...plane, morphTargets: [{positions: lifted}]});
+        const scene = new Scene();
+        const mesh = new Mesh(geometry, new PBRMaterial());
+        scene.add(mesh);
+        const down = ray.fromValues([0, 5, 0], [0, -1, 0]);
+        assert.ok(Math.abs(raycast(scene, down)[0]!.distance - 5) < 1e-6);
+        mesh.morphWeights[0] = 0.5;
+        assert.ok(Math.abs(raycast(scene, down)[0]!.distance - 4.5) < 1e-6);
+    });
+
+    test("a double-sided mesh is hit from behind; a single-sided one isn't", () => {
+        const scene = new Scene();
+        const mesh = new Mesh(createPlane({width: 2, height: 2}), new PBRMaterial({doubleSided: true}));
+        scene.add(mesh);
+        const up = ray.fromValues([0, -5, 0], [0, 1, 0]);
+        assert.equal(raycast(scene, up).length, 1);
+        (mesh.material as PBRMaterial).doubleSided = false;
+        assert.equal(raycast(scene, up).length, 0);
     });
 });

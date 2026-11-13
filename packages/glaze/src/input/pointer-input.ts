@@ -315,6 +315,9 @@ export class PointerInput {
     }
 
     private onPointerDown(e: PointerEvent): void {
+        if (e.pointerType === "touch") {
+            this.touches.add(e.pointerId);
+        }
         const pointer = this.toPointer(e);
         const offered: PointerConsumer[] = [];
         let claimer: PointerConsumer | null = null;
@@ -353,6 +356,7 @@ export class PointerInput {
     }
 
     private onPointerEnd(e: PointerEvent, cancelled: boolean): void {
+        this.touches.delete(e.pointerId);
         const gesture = this.gestures.get(e.pointerId);
         if (gesture === undefined) {
             return;
@@ -395,6 +399,8 @@ export class PointerInput {
     }
 
     private gestureScale = 1;
+    /** Fingers down: their pinch reaches consumers as pointers, so Safari's gesture events for it are dropped. */
+    private readonly touches = new Set<number>();
 
     private onGesture(e: GestureLike, start: boolean): void {
         e.preventDefault(); // no page zoom
@@ -404,7 +410,8 @@ export class PointerInput {
         }
         const ratio = e.scale / this.gestureScale;
         this.gestureScale = e.scale;
-        if (!(ratio > 0)) {
+        // iOS sends gesture events for a two-finger pinch too: the pointers already zoom, don't zoom twice
+        if (!(ratio > 0) || this.touches.size > 0) {
             return;
         }
         // As ctrl + wheel: spreading the fingers (ratio > 1) is a negative deltaY, 100 per factor of e.

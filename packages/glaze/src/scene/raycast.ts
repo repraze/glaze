@@ -42,6 +42,7 @@ const tmpB = vec3.create();
 const tmpC = vec3.create();
 const tmpBary = vec3.create();
 const tmpLocalNormal = vec3.create();
+const tmpBox = {min: vec3.create(), max: vec3.create()};
 
 /**
  * Every collider the world-space ray crosses under `target` (a scene, or one entity and its subtree), nearest
@@ -123,7 +124,12 @@ function intersectCollider(
             const cull =
                 collider.cullBackFace ??
                 !(entity instanceof Mesh && entity.material instanceof PBRMaterial && entity.material.doubleSided);
-            const found = intersectGeometry(geometry, cull);
+            // a mesh's own geometry is hit in its current blend shape (morph weights), as drawn
+            const weights =
+                collider.geometry === undefined && entity instanceof Mesh && geometry.morphTargets !== undefined
+                    ? entity.morphWeights
+                    : null;
+            const found = intersectGeometry(geometry, cull, weights);
             if (found !== null) {
                 ({t, faceIndex, uv} = found);
             }
@@ -142,10 +148,56 @@ function intersectCollider(
     return {entity, distance: t, point, normal, faceIndex, uv};
 }
 
+/** The morph targets with a weight: their deltas and weights (a short list, read for every vertex). */
+const activeDeltas: Float32Array[] = [];
+const activeWeights: number[] = [];
+
+/** Vertex `i` of the geometry, with the active morph targets added. */
+function vertexAt(out: vec3, positions: Float32Array, i: number): vec3 {
+    const o = i * 3;
+    let x = positions[o]!;
+    let y = positions[o + 1]!;
+    let z = positions[o + 2]!;
+    for (let t = 0; t < activeDeltas.length; t++) {
+        const d = activeDeltas[t]!;
+        const w = activeWeights[t]!;
+        x += d[o]! * w;
+        y += d[o + 1]! * w;
+        z += d[o + 2]! * w;
+    }
+    return vec3.set(out, x, y, z);
+}
+
 /** Nearest triangle hit of the local ray; leaves the face normal in tmpLocalNormal. */
-function intersectGeometry(geometry: Geometry, cullBackFace: boolean): {t: number; faceIndex: number; uv: vec2} | null {
-    // Broad phase: the cached local bounding box.
-    if (ray.intersectBox(localRay, geometry.boundingBox) === null) {
+function intersectGeometry(
+    geometry: Geometry,
+    cullBackFace: boolean,
+    weights: Float32Array | null,
+): {t: number; faceIndex: number; uv: vec2} | null {
+    activeDeltas.length = 0;
+    activeWeights.length = 0;
+    let reach = 0;
+    if (weights !== null) {
+        const reaches = geometry.morphReaches;
+        const targets = geometry.morphTargets!;
+        for (let t = 0; t < targets.length; t++) {
+            const w = weights[t] ?? 0;
+            if (w !== 0) {
+                activeDeltas.push(targets[t]!.positions);
+                activeWeights.push(w);
+                reach += Math.abs(w) * reaches[t]!;
+            }
+        }
+    }
+    // Broad phase: the cached local bounding box, grown by how far the blend shapes can move a vertex.
+    const box = geometry.boundingBox;
+    if (reach > 0) {
+        vec3.set(tmpBox.min, box.min[0] - reach, box.min[1] - reach, box.min[2] - reach);
+        vec3.set(tmpBox.max, box.max[0] + reach, box.max[1] + reach, box.max[2] + reach);
+        if (ray.intersectBox(localRay, tmpBox) === null) {
+            return null;
+        }
+    } else if (ray.intersectBox(localRay, box) === null) {
         return null;
     }
     const {positions, indices, uvs} = geometry;
@@ -155,12 +207,9 @@ function intersectGeometry(geometry: Geometry, cullBackFace: boolean): {t: numbe
     let b1 = 0;
     let b2 = 0;
     for (let f = 0; f * 3 + 2 < indices.length; f++) {
-        const i0 = indices[f * 3]! * 3;
-        const i1 = indices[f * 3 + 1]! * 3;
-        const i2 = indices[f * 3 + 2]! * 3;
-        vec3.set(tmpA, positions[i0]!, positions[i0 + 1]!, positions[i0 + 2]!);
-        vec3.set(tmpB, positions[i1]!, positions[i1 + 1]!, positions[i1 + 2]!);
-        vec3.set(tmpC, positions[i2]!, positions[i2 + 1]!, positions[i2 + 2]!);
+        vertexAt(tmpA, positions, indices[f * 3]!);
+        vertexAt(tmpB, positions, indices[f * 3 + 1]!);
+        vertexAt(tmpC, positions, indices[f * 3 + 2]!);
         const t = ray.intersectTriangle(localRay, tmpA, tmpB, tmpC, cullBackFace, tmpBary);
         if (t !== null && t < bestT) {
             bestT = t;
@@ -177,9 +226,9 @@ function intersectGeometry(geometry: Geometry, cullBackFace: boolean): {t: numbe
     const ia = indices[bestFace * 3]!;
     const ib = indices[bestFace * 3 + 1]!;
     const ic = indices[bestFace * 3 + 2]!;
-    vec3.set(tmpA, positions[ia * 3]!, positions[ia * 3 + 1]!, positions[ia * 3 + 2]!);
-    vec3.set(tmpB, positions[ib * 3]!, positions[ib * 3 + 1]!, positions[ib * 3 + 2]!);
-    vec3.set(tmpC, positions[ic * 3]!, positions[ic * 3 + 1]!, positions[ic * 3 + 2]!);
+    vertexAt(tmpA, positions, ia);
+    vertexAt(tmpB, positions, ib);
+    vertexAt(tmpC, positions, ic);
     vec3.cross(tmpLocalNormal, vec3.subtract(tmpB, tmpB, tmpA), vec3.subtract(tmpC, tmpC, tmpA));
     // Seen from behind (double-sided picking): face the normal toward the ray.
     if (vec3.dot(tmpLocalNormal, localRay.direction) > 0) {

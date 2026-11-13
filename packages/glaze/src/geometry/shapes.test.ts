@@ -152,3 +152,17 @@ describe("segment counts are sanitized", () => {
         }
     });
 });
+
+describe("computeTangents across a mirrored UV seam", () => {
+    test("a vertex shared by mirrored triangles keeps a unit tangent (the two sides don't cancel)", () => {
+        // two triangles sharing the edge 0-1, the second with its UVs mirrored in u
+        const positions = new Float32Array([0, 0, 0, 0, 1, 0, 1, 0, 0, -1, 0, 0]);
+        const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
+        const uvs = new Float32Array([0, 1, 0, 0, 1, 1, 1, 1]);
+        const indices = new Uint32Array([0, 2, 1, 0, 1, 3]);
+        const t = computeTangents(positions, normals, uvs, indices, 4);
+        for (const v of [0, 1]) {
+            assert.ok(Math.abs(Math.hypot(t[v * 4]!, t[v * 4 + 1]!, t[v * 4 + 2]!) - 1) < 1e-5, `vertex ${v}`);
+        }
+    });
+});
