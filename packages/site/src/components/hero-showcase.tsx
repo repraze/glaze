@@ -265,10 +265,10 @@ function GBufferSlide() {
         const {albedo, normal, worldPos, emissive} = graph.addPass(new DeferredScenePass({scene}));
         const split = new SplitViewPass({
             slots: [
-                {input: "albedo", rect: {x: 0, y: 0, w: 0.5, h: 0.5}},
+                {input: "albedo", rect: {x: 0, y: 0, w: 0.5, h: 0.5}, colorSpace: "linear-srgb"},
                 {input: "normal", rect: {x: 0.5, y: 0, w: 0.5, h: 0.5}},
                 {input: "worldPos", rect: {x: 0, y: 0.5, w: 0.5, h: 0.5}},
-                {input: "emissive", rect: {x: 0.5, y: 0.5, w: 0.5, h: 0.5}},
+                {input: "emissive", rect: {x: 0.5, y: 0.5, w: 0.5, h: 0.5}, colorSpace: "linear-srgb"},
             ],
         });
         graph.addPass(split, {albedo, normal, worldPos, emissive}, {canvasSlot: "canvas"});

@@ -1,5 +1,6 @@
 import {mat4, vec3} from "gl-matrix";
 
+import {COLOR_WGSL, type ColorSpace, srgbToLinear} from "../color";
 import type {Geometry} from "../geometry/geometry";
 import {PBRMaterial} from "../material/material";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
@@ -279,8 +280,15 @@ const CUBE_FACE_DIRS: {dir: [number, number, number]; up: [number, number, numbe
 
 const LIGHTING_BUFFER_SIZE = 1424;
 
-function buildLightingShader(): string {
+function buildLightingShader(encode: boolean): string {
     return /* wgsl */ `
+${COLOR_WGSL}
+
+// lit in linear light; encoded here only when this pass writes straight to the screen
+fn outputColor(c: vec3<f32>) -> vec4<f32> {
+    return vec4<f32>(${encode ? "linearToSrgb(c)" : "c"}, 1.0);
+}
+
 struct DirectionalLight {
     direction:        vec4<f32>,      // xyz = direction, w = castShadow (0/1)
     colorIntensity:   vec4<f32>,      // xyz = color, w = intensity
@@ -435,7 +443,7 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
         );
         let wp4 = lighting.invViewProjection * vec4<f32>(ndc, 1.0, 1.0);
         let ray = normalize(wp4.xyz / wp4.w - lighting.cameraPosition.xyz);
-        return vec4<f32>(sampleBgMap(ray) * lighting.backgroundColor.rgb, 1.0);
+        return outputColor(sampleBgMap(ray) * lighting.backgroundColor.rgb);
     }
     let albedo       = albedo4.rgb;
     let ao           = albedo4.a;
@@ -523,7 +531,7 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
     }
 
     colour += emissive;
-    return vec4<f32>(colour, 1.0);
+    return outputColor(colour);
 }
 `;
 }
@@ -547,6 +555,11 @@ export interface DeferredScenePassOptions {
      * Set to renderer.format when rendering directly to canvas via canvasSlot: 'color'.
      */
     colorFormat?: GPUTextureFormat;
+    /**
+     * What the 'color' output holds. `"linear-srgb"` (default): linear light, for a BlitPass (or your own pass) to
+     * tone map and encode. `"srgb"`: encoded for the screen, when this pass renders straight to the canvas.
+     */
+    colorSpace?: ColorSpace;
 }
 
 /**
@@ -554,7 +567,7 @@ export interface DeferredScenePassOptions {
  *
  * Output slots:
  *   color    — final lit scene (colorFormat, default rgba16float)
- *   albedo   — rgba8unorm,  rgb=albedo, a=ambient occlusion
+ *   albedo   — rgba8unorm-srgb, rgb=albedo (linear when sampled), a=ambient occlusion
  *   normal   — rgba16float, rgb=world normal, a=roughness
  *   worldPos — rgba16float, rgb=world position, a=metallic
  *   emissive — rgba16float, rgb=emissive, a=receiveShadow
@@ -569,6 +582,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
     private readonly scene: Scene;
     private readonly colorFormat: GPUTextureFormat;
+    private readonly outputColorSpace: ColorSpace;
 
     private device!: GPUDevice;
 
@@ -617,13 +631,14 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     // Cached mesh GPU resources
     private meshCache = new Map<Mesh, MeshGPUResources>();
 
-    constructor({scene, colorFormat = "rgba16float"}: DeferredScenePassOptions) {
+    constructor({scene, colorFormat = "rgba16float", colorSpace = "linear-srgb"}: DeferredScenePassOptions) {
         super();
         this.scene = scene;
         this.colorFormat = colorFormat;
+        this.outputColorSpace = colorSpace;
         this.outputSlots = [
             {name: "color", spec: {format: colorFormat}},
-            {name: "albedo", spec: {format: "rgba8unorm"}},
+            {name: "albedo", spec: {format: "rgba8unorm-srgb"}}, // linear albedo, sRGB-encoded storage keeps darks
             {name: "normal", spec: {format: "rgba16float"}},
             {name: "worldPos", spec: {format: "rgba16float"}},
             {name: "emissive", spec: {format: "rgba16float"}},
@@ -841,7 +856,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             bindGroupLayouts: [this.lightingBindGroupLayout, this.shadowSceneBindGroupLayout],
         });
 
-        const lightingModule = device.createShaderModule({label: "Lighting", code: buildLightingShader()});
+        const lightingModule = device.createShaderModule({
+            label: "Lighting",
+            code: buildLightingShader(this.outputColorSpace === "srgb"),
+        });
 
         this.lightingPipeline = device.createRenderPipeline({
             label: "DeferredScene:lighting",
@@ -932,7 +950,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     module,
                     entryPoint: "fs_main",
                     targets: [
-                        {format: "rgba8unorm"},
+                        {format: "rgba8unorm-srgb"},
                         {format: "rgba16float"},
                         {format: "rgba16float"},
                         {format: "rgba16float"},
@@ -1214,8 +1232,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const {outputs} = ctx;
 
         // Build lighting bind group each frame so G-buffer views are always current.
-        const envView = this.scene.environmentMap?.view ?? this.defaultWhiteView;
-        const bgView = this.scene.backgroundMap?.view ?? this.defaultWhiteView;
+        const envView = this.scene.environmentMap?.srgbView ?? this.defaultWhiteView;
+        const bgView = this.scene.backgroundMap?.srgbView ?? this.defaultWhiteView;
         const lightingBG = this.device.createBindGroup({
             label: "DeferredScene:lightingBindGroup",
             layout: this.lightingBindGroupLayout,
@@ -1291,9 +1309,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const u32 = new Uint32Array(data);
 
         const ambient = this.scene.ambientColor;
-        f32[0] = ambient[0];
-        f32[1] = ambient[1];
-        f32[2] = ambient[2];
+        f32[0] = srgbToLinear(ambient[0]);
+        f32[1] = srgbToLinear(ambient[1]);
+        f32[2] = srgbToLinear(ambient[2]);
         f32[3] = 1.0;
 
         const cam = this.scene.activeCamera;
@@ -1317,9 +1335,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 1] = dir[1];
             f32[base + 2] = dir[2];
             f32[base + 3] = l.castShadow ? 1.0 : 0.0;
-            f32[base + 4] = l.color[0];
-            f32[base + 5] = l.color[1];
-            f32[base + 6] = l.color[2];
+            f32[base + 4] = srgbToLinear(l.color[0]);
+            f32[base + 5] = srgbToLinear(l.color[1]);
+            f32[base + 6] = srgbToLinear(l.color[2]);
             f32[base + 7] = l.intensity;
             if (lm) {
                 f32.set(lm, base + 8);
@@ -1334,9 +1352,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 1] = wp[13]!;
             f32[base + 2] = wp[14]!;
             f32[base + 3] = l.range;
-            f32[base + 4] = l.color[0];
-            f32[base + 5] = l.color[1];
-            f32[base + 6] = l.color[2];
+            f32[base + 4] = srgbToLinear(l.color[0]);
+            f32[base + 5] = srgbToLinear(l.color[1]);
+            f32[base + 6] = srgbToLinear(l.color[2]);
             f32[base + 7] = l.intensity;
             f32[base + 8] = l.castShadow ? 1.0 : 0.0;
         }
@@ -1355,9 +1373,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 5] = dir[1];
             f32[base + 6] = dir[2];
             f32[base + 7] = l.castShadow ? 1.0 : 0.0;
-            f32[base + 8] = l.color[0];
-            f32[base + 9] = l.color[1];
-            f32[base + 10] = l.color[2];
+            f32[base + 8] = srgbToLinear(l.color[0]);
+            f32[base + 9] = srgbToLinear(l.color[1]);
+            f32[base + 10] = srgbToLinear(l.color[2]);
             f32[base + 11] = l.intensity;
             f32[base + 12] = Math.cos(l.innerAngle);
             f32[base + 13] = Math.cos(l.outerAngle);
@@ -1367,9 +1385,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         }
 
         const bg = this.scene.backgroundColor;
-        f32[332] = bg[0];
-        f32[333] = bg[1];
-        f32[334] = bg[2];
+        f32[332] = srgbToLinear(bg[0]);
+        f32[333] = srgbToLinear(bg[1]);
+        f32[334] = srgbToLinear(bg[2]);
         f32[335] = 1.0;
 
         // Reflections sample the environment map times environmentColor. Without a map the sampled texel is a white
@@ -1377,9 +1395,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         // every object with a light outline at grazing angles.
         const env = this.scene.environmentColor;
         const sky = this.scene.environmentMap === null ? this.scene.ambientColor : null;
-        f32[336] = env[0] * (sky?.[0] ?? 1);
-        f32[337] = env[1] * (sky?.[1] ?? 1);
-        f32[338] = env[2] * (sky?.[2] ?? 1);
+        f32[336] = srgbToLinear(env[0]) * srgbToLinear(sky?.[0] ?? 1);
+        f32[337] = srgbToLinear(env[1]) * srgbToLinear(sky?.[1] ?? 1);
+        f32[338] = srgbToLinear(env[2]) * srgbToLinear(sky?.[2] ?? 1);
         f32[339] = 1.0;
 
         f32.set(this.currentInvVP, 340);

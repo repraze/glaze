@@ -94,7 +94,10 @@ const stop = renderer.startAnimation(graph);`}
                     </li>
                     <li>Composable passes: a pass is a class with named inputs and outputs; the graph wires them.</li>
                     <li>Deferred PBR for 3D: one G-buffer, many lights, shadows, image-based ambient.</li>
-                    <li>Neutral color: what you write is what the canvas shows, conversions are explicit.</li>
+                    <li>
+                        Linear light inside, sRGB at the edges: colors are written as picked, lit correctly, encoded for
+                        the screen at the end.
+                    </li>
                     <li>Plain classes and gl-matrix vectors: mutate a property, the next frame uses it.</li>
                 </ul>
             </section>

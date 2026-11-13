@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {describe, test} from "node:test";
 
+import {srgbToLinear} from "../color";
 import type {Texture} from "../texture";
 import {packMaterialUniforms, PBRMaterial} from "./material";
 
@@ -62,12 +63,15 @@ describe("PBRMaterial — uniforms", () => {
         });
         mat.heightScale = 0.0625;
         const data = packMaterialUniforms(mat);
-        assert.deepEqual(Array.from(data.slice(0, 4)), [0.25, 0.5, 0.75, 1]); // albedo
+        // colors are given in sRGB and packed as linear light
+        const near = (actual: ArrayLike<number>, expected: number[]) =>
+            expected.forEach((e, i) => assert.ok(Math.abs(actual[i]! - e) < 1e-6, `${i}: ${actual[i]} ≠ ${e}`));
+        near(data.slice(0, 4), [srgbToLinear(0.25), srgbToLinear(0.5), srgbToLinear(0.75), 1]); // albedo
         assert.equal(data[4], 0.125); // roughness
         assert.equal(data[5], 0.875); // metallic
         assert.equal(data[6], 0.0625); // heightScale
         assert.equal(data[7], 2); // normalScale
-        assert.deepEqual(Array.from(data.slice(8, 12)), [0.5, 0.25, 0, 1]); // emissive
+        near(data.slice(8, 12), [srgbToLinear(0.5), srgbToLinear(0.25), 0, 1]); // emissive
         assert.equal(data[12], 0.5); // occlusionStrength
     });
 });

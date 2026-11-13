@@ -54,9 +54,14 @@ export const doc = defineDoc({
                     name: "backgroundColor",
                     type: "vec3",
                     default: "[0, 0, 0]",
-                    description: "Clear color behind the scene.",
+                    description: "Behind the scene (sRGB: shown exactly, without tone mapping); tints backgroundMap.",
                 },
-                {name: "ambientColor", type: "vec3", default: "[0.05, 0.05, 0.05]", description: "Flat ambient light."},
+                {
+                    name: "ambientColor",
+                    type: "vec3",
+                    default: "[0.25, 0.25, 0.25]",
+                    description: "Flat ambient light (sRGB, decoded like every color).",
+                },
                 {
                     name: "environmentMap",
                     type: "Texture | null",

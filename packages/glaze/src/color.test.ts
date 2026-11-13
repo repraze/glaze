@@ -3,7 +3,16 @@ import {describe, test} from "node:test";
 
 import {vec3, vec4} from "gl-matrix";
 
-import {colorRgb, colorRgba, linearToSrgb, setColorRgb, setColorRgba, srgbToLinear} from "./color";
+import {
+    colorRgb,
+    colorRgba,
+    linearToSrgb,
+    linearToSrgbRgb,
+    setColorRgb,
+    setColorRgba,
+    srgbToLinear,
+    srgbToLinearRgb,
+} from "./color";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -299,5 +308,14 @@ describe("srgbToLinear / linearToSrgb", () => {
         // c ≤ 0.04045 → c / 12.92
         const c = 0.02;
         assert.ok(near(srgbToLinear(c), c / 12.92, EPS));
+    });
+});
+
+describe("srgbToLinearRgb / linearToSrgbRgb", () => {
+    test("decode hex to linear light and round-trip back", () => {
+        const out = srgbToLinearRgb([0, 0, 0], "#808080");
+        assert.ok(Math.abs(out[0] - 0.2158605) < 1e-6);
+        const back = linearToSrgbRgb([0, 0, 0], out);
+        assert.ok(Math.abs(back[1] - 128 / 255) < 1e-6);
     });
 });

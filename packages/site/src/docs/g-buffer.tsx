@@ -146,10 +146,11 @@ export function Viewer() {
                     const scenePass = new DeferredScenePass({scene});
                     const split = new SplitViewPass({
                         slots: [
-                            {input: "albedo", rect: {x: 0, y: 0, w: 0.5, h: 0.5}},
+                            // albedo and emissive are light (encoded for the screen), normals and positions data
+                            {input: "albedo", rect: {x: 0, y: 0, w: 0.5, h: 0.5}, colorSpace: "linear-srgb"},
                             {input: "normal", rect: {x: 0.5, y: 0, w: 0.5, h: 0.5}},
                             {input: "worldPos", rect: {x: 0, y: 0.5, w: 0.5, h: 0.5}},
-                            {input: "emissive", rect: {x: 0.5, y: 0.5, w: 0.5, h: 0.5}},
+                            {input: "emissive", rect: {x: 0.5, y: 0.5, w: 0.5, h: 0.5}, colorSpace: "linear-srgb"},
                         ],
                     });
                     const graph = new RenderGraph();
@@ -211,13 +212,20 @@ export function OneChannel() {
                     scene.add(mesh);
 
                     const scenePass = new DeferredScenePass({scene});
-                    const blit = new BlitPass({input: "source", toneMapping: "aces"});
+                    // light is tone mapped and encoded; normals and positions are shown as stored
+                    const lightBlit = new BlitPass({input: "source", toneMapping: "aces"});
+                    const dataBlit = new BlitPass({input: "source", inputColorSpace: "srgb"});
                     return ({time}) => {
                         palette.apply();
                         mesh.setEuler(time * 0.3, time * 0.5, 0);
                         const graph = new RenderGraph();
                         const outputs = graph.addPass(scenePass);
-                        graph.addPass(blit, {source: outputs[live.current]}, {canvasSlot: "canvas"});
+                        const data = live.current === "normal" || live.current === "worldPos";
+                        graph.addPass(
+                            data ? dataBlit : lightBlit,
+                            {source: outputs[live.current]},
+                            {canvasSlot: "canvas"},
+                        );
                         return graph;
                     };
                 }}

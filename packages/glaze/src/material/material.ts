@@ -1,4 +1,4 @@
-import type {ColorRgb, ColorRgba} from "../color";
+import {type ColorRgb, type ColorRgba, srgbToLinear} from "../color";
 import type {Texture} from "../texture";
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -61,17 +61,18 @@ const MATERIAL_BUFFER_SIZE = 64;
  * @internal
  */
 export function packMaterialUniforms(mat: PBRMaterial, out = new Float32Array(MATERIAL_BUFFER_SIZE / 4)): Float32Array {
-    out[0] = mat.color[0];
-    out[1] = mat.color[1];
-    out[2] = mat.color[2];
+    // colors are set in sRGB, lit in linear light
+    out[0] = srgbToLinear(mat.color[0]);
+    out[1] = srgbToLinear(mat.color[1]);
+    out[2] = srgbToLinear(mat.color[2]);
     out[3] = mat.opacity;
     out[4] = mat.roughness;
     out[5] = mat.metallic;
     out[6] = mat.heightScale;
     out[7] = mat.normalScale;
-    out[8] = mat.emissive[0];
-    out[9] = mat.emissive[1];
-    out[10] = mat.emissive[2];
+    out[8] = srgbToLinear(mat.emissive[0]);
+    out[9] = srgbToLinear(mat.emissive[1]);
+    out[10] = srgbToLinear(mat.emissive[2]);
     out[11] = mat.emissive[3];
     out[12] = mat.occlusionStrength;
     out[13] = mat.alphaCutoff;
@@ -214,10 +215,10 @@ export class PBRMaterial extends Material {
                 layout: bindGroupLayout,
                 entries: [
                     {binding: 0, resource: {buffer: this.buffer}},
-                    {binding: 1, resource: this.albedoMap?.view ?? defaultWhiteView},
+                    {binding: 1, resource: this.albedoMap?.srgbView ?? defaultWhiteView},
                     {binding: 2, resource: sampler},
                     {binding: 3, resource: this.normalMap?.view ?? defaultNormalView},
-                    {binding: 4, resource: this.emissiveMap?.view ?? defaultWhiteView},
+                    {binding: 4, resource: this.emissiveMap?.srgbView ?? defaultWhiteView},
                     {binding: 5, resource: metallicRoughness?.view ?? defaultWhiteView},
                     {binding: 6, resource: this.heightMap?.view ?? defaultWhiteView},
                     {binding: 7, resource: occlusion?.view ?? defaultWhiteView},

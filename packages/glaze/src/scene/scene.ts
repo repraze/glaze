@@ -10,9 +10,15 @@ import {Mesh} from "./mesh";
 export class Scene {
     readonly root = new Entity();
     activeCamera: Camera | null = null;
-    ambientColor: vec3 = vec3.fromValues(0.05, 0.05, 0.05);
+    // Colors are sRGB (hex ÷ 255, what a color picker shows); the scene pass decodes them to linear light.
+    /** Light from everywhere, times albedo and occlusion. */
+    ambientColor: vec3 = vec3.fromValues(0.25, 0.25, 0.25);
+    /** Shown where nothing is drawn: exactly this color on screen with tone mapping "none". */
     backgroundColor: vec3 = vec3.fromValues(0, 0, 0);
-    /** Tint and strength of reflections; without an environmentMap they reflect ambientColor times this. */
+    /**
+     * Tint and strength of reflections (sRGB like the other colors: 0.5 is about a fifth of the light); without an
+     * environmentMap they reflect ambientColor times this.
+     */
     environmentColor: vec3 = vec3.fromValues(1.0, 1.0, 1.0);
     environmentMap: Texture | null = null;
     backgroundMap: Texture | null = null;

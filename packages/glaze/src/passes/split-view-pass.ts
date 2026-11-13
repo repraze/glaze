@@ -1,3 +1,4 @@
+import {COLOR_WGSL, type ColorSpace} from "../color";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 
@@ -28,6 +29,13 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> QuadInput {
 fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
     return clamp(textureSample(inputTex, inputSampler, in.uv), vec4<f32>(0.0), vec4<f32>(1.0));
 }
+
+@fragment
+fn fs_encode(in: QuadInput) -> @location(0) vec4<f32> {
+    let c = clamp(textureSample(inputTex, inputSampler, in.uv), vec4<f32>(0.0), vec4<f32>(1.0));
+    return vec4<f32>(linearToSrgb(c.rgb), c.a);
+}
+${COLOR_WGSL}
 `;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -50,6 +58,11 @@ export interface SplitViewSlot {
     input: string;
     /** Normalized position and size of this view on the canvas. */
     rect: ViewportRect;
+    /**
+     * `"linear-srgb"` encodes the texture for the screen (the scene's color, albedo and emissive);
+     * `"srgb"` (default) shows its values as they are (normals, positions, anything already encoded).
+     */
+    colorSpace?: ColorSpace;
 }
 
 export interface SplitViewPassOptions {
@@ -72,6 +85,7 @@ export class SplitViewPass extends Pass {
     private device!: GPUDevice;
     private canvasFormat!: GPUTextureFormat;
     private pipeline!: GPURenderPipeline;
+    private encodePipeline!: GPURenderPipeline;
     private sampler!: GPUSampler;
     private canvasWidth = 1;
     private canvasHeight = 1;
@@ -113,17 +127,17 @@ export class SplitViewPass extends Pass {
             ],
         });
 
-        this.pipeline = device.createRenderPipeline({
-            label: "SplitViewPass",
-            layout: device.createPipelineLayout({bindGroupLayouts: [bindGroupLayout]}),
-            vertex: {module: shaderModule, entryPoint: "vs_main"},
-            fragment: {
-                module: shaderModule,
-                entryPoint: "fs_main",
-                targets: [{format: canvasFormat}],
-            },
-            primitive: {topology: "triangle-list"},
-        });
+        const layout = device.createPipelineLayout({bindGroupLayouts: [bindGroupLayout]});
+        const pipeline = (entryPoint: string) =>
+            device.createRenderPipeline({
+                label: `SplitViewPass:${entryPoint}`,
+                layout,
+                vertex: {module: shaderModule, entryPoint: "vs_main"},
+                fragment: {module: shaderModule, entryPoint, targets: [{format: canvasFormat}]},
+                primitive: {topology: "triangle-list"},
+            });
+        this.pipeline = pipeline("fs_main");
+        this.encodePipeline = pipeline("fs_encode");
     }
 
     resize(width: number, height: number): void {
@@ -148,8 +162,6 @@ export class SplitViewPass extends Pass {
             ],
         });
 
-        pass.setPipeline(this.pipeline);
-
         const cw = ctx.width;
         const ch = ctx.height;
 
@@ -164,6 +176,7 @@ export class SplitViewPass extends Pass {
             const w = Math.max(1, Math.floor(slot.rect.w * cw));
             const h = Math.max(1, Math.floor(slot.rect.h * ch));
 
+            pass.setPipeline(slot.colorSpace === "linear-srgb" ? this.encodePipeline : this.pipeline);
             pass.setViewport(x, y, w, h, 0, 1);
             pass.setScissorRect(x, y, w, h);
             pass.setBindGroup(0, this.getBindGroup(inputView));

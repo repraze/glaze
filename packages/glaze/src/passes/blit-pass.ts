@@ -1,3 +1,4 @@
+import {COLOR_WGSL, type ColorSpace} from "../color";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 
@@ -22,18 +23,20 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> QuadInput {
 }
 `;
 
-function buildFragmentShader(toneMapping: ToneMapping): string {
+function buildFragmentShader(toneMapping: ToneMapping, encode: boolean): string {
     const tonemapFn = TONE_MAP_FN[toneMapping];
     return /* wgsl */ `
 @group(0) @binding(0) var inputSampler: sampler;
 @group(0) @binding(1) var inputTex: texture_2d<f32>;
 
 ${tonemapFn}
+${COLOR_WGSL}
 
 @fragment
 fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
     let color = textureSample(inputTex, inputSampler, in.uv);
-    return vec4<f32>(applyToneMap(color.rgb), color.a);
+    let mapped = applyToneMap(color.rgb);
+    return vec4<f32>(${encode ? "linearToSrgb(mapped)" : "mapped"}, color.a);
 }
 `;
 }
@@ -64,12 +67,18 @@ export interface BlitPassOptions {
     input?: string;
     /** Tone mapping applied before writing to canvas. Defaults to "none". */
     toneMapping?: ToneMapping;
+    /**
+     * What the input holds. `"linear-srgb"` (default: DeferredScenePass's color) is tone mapped, then encoded to
+     * sRGB for the screen. `"srgb"`: already encoded (a 2D pass's output), copied as is.
+     */
+    inputColorSpace?: ColorSpace;
 }
 
 // ─── BlitPass ─────────────────────────────────────────────────────────────────
 
 /**
- * Copies one input texture to the canvas with optional tone mapping.
+ * Puts one input texture on the canvas: tone mapping, then the sRGB encode the screen expects (skipped for an
+ * `"srgb"` input, and when the canvas format is itself `-srgb`).
  * Zero declared output slots — always renders directly to the canvas via canvasSlot.
  */
 export class BlitPass extends Pass {
@@ -78,6 +87,7 @@ export class BlitPass extends Pass {
 
     private readonly inputName: string;
     private readonly toneMapping: ToneMapping;
+    private readonly inputColorSpace: ColorSpace;
 
     private device!: GPUDevice;
     private canvasFormat!: GPUTextureFormat;
@@ -91,6 +101,7 @@ export class BlitPass extends Pass {
         super();
         this.inputName = options.input ?? "color";
         this.toneMapping = options.toneMapping ?? "none";
+        this.inputColorSpace = options.inputColorSpace ?? "linear-srgb";
         this.inputSlots = [{name: this.inputName}];
     }
 
@@ -106,7 +117,12 @@ export class BlitPass extends Pass {
         });
 
         const shaderModule = device.createShaderModule({
-            code: VERTEX_SHADER + buildFragmentShader(this.toneMapping),
+            code:
+                VERTEX_SHADER +
+                buildFragmentShader(
+                    this.toneMapping,
+                    this.inputColorSpace === "linear-srgb" && !canvasFormat.endsWith("-srgb"),
+                ),
         });
 
         const bindGroupLayout = device.createBindGroupLayout({

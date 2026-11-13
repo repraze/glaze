@@ -11,14 +11,14 @@ export const doc = defineDoc({
     title: "Color management",
     category: "Assets",
     description:
-        "The renderer applies no gamma: what a pass writes is what the canvas shows. colorRgb turns CSS hex into 0-1 floats without conversion, so a ShaderPass color matches the same CSS color, and the transfer functions convert explicitly when you need linear light.",
+        "Colors go in as sRGB, the numbers a color picker shows. The scene pass decodes them and lights in linear light, where light adds up correctly; BlitPass tone maps and encodes back to sRGB for the screen. 2D passes write sRGB straight to the canvas.",
     engineFile: "color.ts",
     order: 2,
     demos: [
         {
             title: "Same color, two renderers",
             description:
-                "Left: a CSS background. Right: an EffectPass writing colorRgb(hex) to the canvas. With no conversion they match; convert, and you see what a misplaced transfer function does.",
+                "Left: a CSS background. Right: an EffectPass writing colorRgb(hex) to the canvas. A 2D pass's output is already sRGB, so they match; convert, and you see what a misplaced transfer function does.",
             component: SideBySide,
             layout: "full",
         },
@@ -31,7 +31,10 @@ export const doc = defineDoc({
         },
     ],
     notes: Notes,
-    sections: [{id: "in-the-scene-pass", title: "In the scene pass"}],
+    sections: [
+        {id: "in-the-scene-pass", title: "In the scene pass"},
+        {id: "your-own-passes", title: "Your own passes"},
+    ],
     props: [
         {
             component: "Color helpers",
@@ -39,7 +42,7 @@ export const doc = defineDoc({
                 {
                     name: "colorRgb(hex | rgb)",
                     type: "[r, g, b]",
-                    description: "#rgb, #rgba, #rrggbb, #rrggbbaa → 0-1, no gamma.",
+                    description: "#rgb, #rgba, #rrggbb, #rrggbbaa → 0-1, still sRGB.",
                 },
                 {
                     name: "colorRgba(hex | rgb | rgba, alpha?)",
@@ -54,6 +57,20 @@ export const doc = defineDoc({
                 {name: "setColorRgba(out, hex | rgba, alpha?)", type: "ColorRgba"},
                 {name: "srgbToLinear(c)", type: "number", description: "IEC 61966-2-1 decode, per channel."},
                 {name: "linearToSrgb(c)", type: "number", description: "IEC 61966-2-1 encode, per channel."},
+                {name: "srgbToLinearRgb(out, hex | rgb)", type: "ColorRgb", description: "A whole color, in place."},
+                {name: "linearToSrgbRgb(out, rgb)", type: "ColorRgb", description: "A whole color, in place."},
+                {
+                    name: "COLOR_WGSL",
+                    type: "string",
+                    description:
+                        "srgbToLinear / linearToSrgb on vec3<f32>, for your WGSL. ShaderPass and EffectPass include them.",
+                },
+                {
+                    name: "ColorSpace",
+                    type: '"srgb" | "linear-srgb"',
+                    description:
+                        "Encoded for the screen, or linear light. Textures, BlitPass and the scene pass take one.",
+                },
                 {name: "ColorRgb / ColorRgba", type: "vec3 / vec4", description: "Tuples or Float32Arrays."},
             ],
         },
@@ -62,22 +79,60 @@ export const doc = defineDoc({
 
 function Notes() {
     return (
-        <section id="in-the-scene-pass" className="flex scroll-mt-24 flex-col gap-3">
-            <h2 className="font-mono text-xl font-semibold">In the scene pass</h2>
-            <p className="text-sm text-muted-foreground">
-                DeferredScenePass lights in whatever space its inputs are in. Feeding it hex colors as-is looks right
-                for most scenes; for physically correct light, convert albedo and light colors to linear and encode at
-                the end (a ShaderPass, or tone mapping that outputs sRGB).
-            </p>
-            <Code
-                code={`import {colorRgb, linearToSrgb, setColorRgb, srgbToLinear} from "@repraze/glaze";
+        <div className="flex flex-col gap-8">
+            <section id="in-the-scene-pass" className="flex scroll-mt-24 flex-col gap-3">
+                <h2 className="font-mono text-xl font-semibold">In the scene pass</h2>
+                <p className="text-sm text-muted-foreground">
+                    Lighting happens in linear light: twice the light is twice the number, and a half-lit grey is not a
+                    dark one. Everything you set is decoded on the way in, nothing needs converting by hand:
+                </p>
+                <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm text-muted-foreground">
+                    <li>
+                        Colors on materials, lights and the scene (hex or 0-1 triples) are sRGB. Intensities, strengths,
+                        roughness and metallic are plain numbers.
+                    </li>
+                    <li>
+                        Albedo, emissive and environment textures are sampled through{" "}
+                        <code className="font-mono text-foreground">texture.srgbView</code>, which decodes as it reads.
+                        Normal, roughness / metallic, occlusion and height maps are data, read as stored. glTF models
+                        are loaded this way.
+                    </li>
+                    <li>
+                        The <code className="font-mono text-foreground">color</code> output is linear and HDR. BlitPass
+                        tone maps it, then encodes to sRGB. With tone mapping{" "}
+                        <code className="font-mono text-foreground">&quot;none&quot;</code>, an unlit color comes out as
+                        exactly the hex you wrote: the page background behind a scene matches the page.
+                    </li>
+                </ul>
+                <Code
+                    code={`const material = new PBRMaterial({color: colorRgb("#ff9243")}); // as picked
+setColorRgb(scene.backgroundColor, "#0c0c10");                      // per frame, no allocation
+const brick = await Texture.fromURL(device, "/brick.jpg");           // color: sRGB (default)
+const normals = await Texture.fromURL(device, "/brick-n.png", {colorSpace: "linear-srgb"}); // data
 
-const albedo = colorRgb("#ff9243").map(srgbToLinear) as [number, number, number];
-const material = new PBRMaterial({color: albedo});
-
-setColorRgb(scene.backgroundColor, "#0c0c10"); // per frame, no allocation`}
-            />
-        </section>
+graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas"}); // tone map, encode`}
+                />
+            </section>
+            <section id="your-own-passes" className="flex scroll-mt-24 flex-col gap-3">
+                <h2 className="font-mono text-xl font-semibold">Your own passes</h2>
+                <p className="text-sm text-muted-foreground">
+                    A 2D pass that draws to the canvas writes sRGB, as on this page. A pass that reads the scene&apos;s
+                    color gets linear light: keep it linear and leave the encode to BlitPass, or, when it writes to the
+                    canvas itself, end with <code className="font-mono text-foreground">linearToSrgb</code>. Quantizing
+                    effects (dithering, posterizing) should encode first, so their steps look even.
+                </p>
+                <Code
+                    code={`new ShaderPass({
+    inputs: [{name: "input0"}],
+    fragmentShader: /* wgsl */ \`
+        @fragment fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
+            let lit = textureSample(input0, inputSampler, in.uv).rgb; // linear
+            return vec4<f32>(linearToSrgb(lit), 1.0);                // for the screen
+        }\`,
+});`}
+                />
+            </section>
+        </div>
     );
 }
 

@@ -136,6 +136,7 @@ function buildAdjustSnippet(brightness: number, contrast: number, invert: boolea
 }
 
 // ─── Unified post-processing pass builder ────────────────────────────────────
+// The scene arrives in linear light; it is encoded to sRGB first, so levels and dither steps are even to the eye.
 
 export function buildPostFragment(
     pixelSize: number,
@@ -165,7 +166,7 @@ export function buildPostFragment(
 @fragment
 fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
     let uv = ${uvExpr};
-    var colour = textureSample(input0, inputSampler, uv).rgb;
+    var colour = linearToSrgb(textureSample(input0, inputSampler, uv).rgb);
     ${adjustSnippet}
     return vec4<f32>(colour, 1.0);
 }
@@ -182,7 +183,7 @@ ${bFn}
 fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
     let uv     = ${uvExpr};
     let px     = ${pxExpr};
-    var colour = textureSample(input0, inputSampler, uv).rgb;
+    var colour = linearToSrgb(textureSample(input0, inputSampler, uv).rgb);
     ${adjustSnippet}
     let lum    = dot(colour, vec3<f32>(0.299, 0.587, 0.114));
     let dc     = select(0.0, 1.0, lum >= bayer(px));
@@ -198,7 +199,7 @@ ${bFn}
 fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
     let uv     = ${uvExpr};
     let px     = ${pxExpr};
-    var colour = textureSample(input0, inputSampler, uv).rgb;
+    var colour = linearToSrgb(textureSample(input0, inputSampler, uv).rgb);
     ${adjustSnippet}
     let lum    = dot(colour, vec3<f32>(0.299, 0.587, 0.114));
     let levels = ${colorLevels.toFixed(1)};
@@ -216,7 +217,7 @@ ${bFn}
 fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
     let uv        = ${uvExpr};
     let px        = ${pxExpr};
-    var colour    = textureSample(input0, inputSampler, uv).rgb;
+    var colour    = linearToSrgb(textureSample(input0, inputSampler, uv).rgb);
     ${adjustSnippet}
     let threshold = bayer(px);
     let levels    = ${colorLevels.toFixed(1)};
@@ -234,7 +235,7 @@ ${bFn}
 fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
     let uv      = ${uvExpr};
     let px      = ${pxExpr};
-    var colour  = textureSample(input0, inputSampler, uv).rgb;
+    var colour  = linearToSrgb(textureSample(input0, inputSampler, uv).rgb);
     ${adjustSnippet}
     let lum     = dot(colour, vec3<f32>(0.299, 0.587, 0.114));
     let levels  = 4.0;

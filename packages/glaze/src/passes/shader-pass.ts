@@ -1,3 +1,4 @@
+import {COLOR_WGSL} from "../color";
 import type {PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 
@@ -139,7 +140,9 @@ export class ShaderPass<const Out extends string = string> extends Pass<Out> {
 
     private buildPipeline(): void {
         const inputDecls = this.buildInputTextureDecls();
-        const shaderSource = [VERTEX_SHADER, GLOBALS_DECL, inputDecls, this.fragmentShaderSource].join("\n");
+        const shaderSource = [VERTEX_SHADER, GLOBALS_DECL, COLOR_WGSL, inputDecls, this.fragmentShaderSource].join(
+            "\n",
+        );
         const shaderModule = this.device.createShaderModule({code: shaderSource});
 
         const globalsLayout = this.device.createBindGroupLayout({

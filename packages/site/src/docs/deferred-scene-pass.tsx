@@ -42,7 +42,7 @@ export const doc = defineDoc({
         {
             title: "Straight to the canvas",
             description:
-                "With colorFormat set to the canvas format and canvasSlot 'color', the pass is the whole graph: no blit, no tone mapping (values above 1 clip).",
+                "With colorFormat set to the canvas format, colorSpace 'srgb' and canvasSlot 'color', the pass is the whole graph: it encodes for the screen itself, no blit, no tone mapping (values above 1 clip).",
             component: Direct,
             layout: "full",
         },
@@ -63,6 +63,13 @@ export const doc = defineDoc({
                     default: '"rgba16float"',
                     description:
                         "Format of the 'color' output. Use renderer.format to render it straight to the canvas.",
+                },
+                {
+                    name: "colorSpace",
+                    type: '"linear-srgb" | "srgb"',
+                    default: '"linear-srgb"',
+                    description:
+                        "What 'color' holds: linear light for a BlitPass to tone map and encode, or 'srgb' encoded for the screen (straight to the canvas).",
                 },
             ],
         },
@@ -269,7 +276,7 @@ export function Direct() {
 
                     const graph = new RenderGraph();
                     graph.addPass(
-                        new DeferredScenePass({scene, colorFormat: renderer.format}),
+                        new DeferredScenePass({scene, colorFormat: renderer.format, colorSpace: "srgb"}),
                         {},
                         {canvasSlot: "color"},
                     );

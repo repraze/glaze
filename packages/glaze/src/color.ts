@@ -7,9 +7,16 @@ export type ColorRgba = vec4; // [number, number, number, number] | IndexedColle
 export type StrictColorRgb = [number, number, number];
 export type StrictColorRgba = [number, number, number, number];
 
-/** Describes what color space values live in.
- *  Passes that do physically-based rendering use this to decide when to
- *  apply sRGB↔linear conversions on their inputs and outputs. */
+/**
+ * What a texture's or a pass's values mean:
+ *
+ * - `"srgb"`: encoded, as stored in images and CSS. Equal steps look equal; what a screen expects.
+ * - `"linear-srgb"`: linear light, sRGB primaries. Light adds and multiplies correctly here, so the scene pass
+ *   lights in it, and something at the end of the frame (BlitPass) encodes it back to `"srgb"`.
+ *
+ * Colors you set on materials, lights and the scene (hex or 0-1 triples) are always `"srgb"`, the numbers a color
+ * picker shows; the scene pass decodes them. Intensities and strengths are linear.
+ */
 export type ColorSpace = "linear-srgb" | "srgb";
 
 // ─── Transfer function utilities ──────────────────────────────────────────────
@@ -23,6 +30,38 @@ export function srgbToLinear(c: number): number {
 export function linearToSrgb(c: number): number {
     return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(Math.max(c, 0), 1 / 2.4) - 0.055;
 }
+
+/** Decodes an sRGB color (hex or 0-1 triple) to linear light, into `out`. */
+export function srgbToLinearRgb(out: ColorRgb, input: string | ColorRgb): ColorRgb {
+    setColorRgb(out, input);
+    out[0] = srgbToLinear(out[0]);
+    out[1] = srgbToLinear(out[1]);
+    out[2] = srgbToLinear(out[2]);
+    return out;
+}
+
+/** Encodes a linear-light color to sRGB, into `out`. */
+export function linearToSrgbRgb(out: ColorRgb, input: ColorRgb): ColorRgb {
+    out[0] = linearToSrgb(input[0]);
+    out[1] = linearToSrgb(input[1]);
+    out[2] = linearToSrgb(input[2]);
+    return out;
+}
+
+/**
+ * WGSL `srgbToLinear(c: vec3<f32>)` and `linearToSrgb(c: vec3<f32>)`, the same transfer functions on the GPU.
+ * ShaderPass and EffectPass include them: a pass that reads the scene's linear color and writes to the canvas
+ * ends with `linearToSrgb`.
+ */
+export const COLOR_WGSL = /* wgsl */ `
+fn srgbToLinear(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
+}
+fn linearToSrgb(c: vec3<f32>) -> vec3<f32> {
+    let x = max(c, vec3<f32>(0.0));
+    return select(1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - 0.055, x * 12.92, x <= vec3<f32>(0.0031308));
+}
+`;
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -58,7 +97,8 @@ function parseHex(input: string): StrictColorRgba {
  * or pass through an existing ColorRgb (tuple or Float32Array) unchanged.
  *
  * Supports: #rgb  #rgba  #rrggbb  #rrggbbaa
- * No gamma conversion is applied — values map directly from hex bytes (÷ 255).
+ * The values stay sRGB (hex bytes ÷ 255): that is what materials, lights and the scene take. Use
+ * {@link srgbToLinearRgb} for linear light, e.g. in your own shader's uniforms.
  */
 export function colorRgb(input: string | ColorRgb): StrictColorRgb {
     if (typeof input === "string") {

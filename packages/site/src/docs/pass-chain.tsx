@@ -123,6 +123,13 @@ export const doc = defineDoc({
                     default: '"none"',
                     description: "Applied before writing to the canvas.",
                 },
+                {
+                    name: "inputColorSpace",
+                    type: '"linear-srgb" | "srgb"',
+                    default: '"linear-srgb"',
+                    description:
+                        "Linear light (the scene's color) is tone mapped then encoded to sRGB; 'srgb' input (a 2D pass's output) is copied as is.",
+                },
             ],
         },
     ],

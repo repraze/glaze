@@ -1,6 +1,6 @@
 import {mat3, mat4, type quat, vec3} from "gl-matrix";
 
-import {linearToSrgb} from "../color";
+import {type ColorSpace, linearToSrgb} from "../color";
 import {computeTangents, Geometry} from "../geometry/geometry";
 import {PBRMaterial, type PBRMaterialOptions} from "../material/material";
 import {Texture} from "../texture";
@@ -695,7 +695,11 @@ export async function createPBRMaterialFromGltf(
     const mat = new PBRMaterial(plan.options);
 
     // one GPU texture per image, however many slots (and materials) use it
-    function loadTex(source: GltfTextureSource | null): Promise<Texture | null> {
+    // color maps are sRGB, the rest data (that only changes how mip levels average: both views exist)
+    function loadTex(
+        source: GltfTextureSource | null,
+        colorSpace: ColorSpace = "linear-srgb",
+    ): Promise<Texture | null> {
         if (!source) {
             return Promise.resolve(null);
         }
@@ -703,8 +707,8 @@ export async function createPBRMaterialFromGltf(
         if (!texture) {
             texture =
                 source.type === "uri"
-                    ? Texture.fromURL(device, resolveUri(source.uri))
-                    : Texture.fromBlob(device, new Blob([source.data], {type: source.mimeType}));
+                    ? Texture.fromURL(device, resolveUri(source.uri), {colorSpace})
+                    : Texture.fromBlob(device, new Blob([source.data], {type: source.mimeType}), {colorSpace});
             loaded.set(source, texture);
         }
         return texture;
@@ -712,9 +716,9 @@ export async function createPBRMaterialFromGltf(
 
     [mat.albedoMap, mat.normalMap, mat.emissiveMap, mat.ormMap, mat.metallicRoughnessMap, mat.occlusionMap] =
         await Promise.all([
-            loadTex(plan.albedoMap),
+            loadTex(plan.albedoMap, "srgb"),
             loadTex(plan.normalMap),
-            loadTex(plan.emissiveMap),
+            loadTex(plan.emissiveMap, "srgb"),
             loadTex(plan.ormMap),
             loadTex(plan.metallicRoughnessMap),
             loadTex(plan.occlusionMap),

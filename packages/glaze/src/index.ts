@@ -1,5 +1,15 @@
 export type {ColorRgb, ColorRgba, ColorSpace, StrictColorRgb, StrictColorRgba} from "./color";
-export {colorRgb, colorRgba, linearToSrgb, setColorRgb, setColorRgba, srgbToLinear} from "./color";
+export {
+    COLOR_WGSL,
+    colorRgb,
+    colorRgba,
+    linearToSrgb,
+    linearToSrgbRgb,
+    setColorRgb,
+    setColorRgba,
+    srgbToLinear,
+    srgbToLinearRgb,
+} from "./color";
 export type {OrbitControlsOptions} from "./controls/orbit-controls";
 export {OrbitControls} from "./controls/orbit-controls";
 export {computeTangents, Geometry} from "./geometry/geometry";

@@ -1,3 +1,4 @@
+import {COLOR_WGSL} from "../color";
 import type {PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 import type {TextureUniform, Uniform} from "../uniform";
@@ -283,6 +284,7 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
         const wgsl = [
             VERTEX_SHADER,
             GLOBALS_DECL,
+            COLOR_WGSL,
             this.buildWgslDecls(this.inputsGroup, this.uniformsGroup, this.texturesGroup),
             this.opts.fragmentShader,
         ].join("\n");
