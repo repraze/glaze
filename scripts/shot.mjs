@@ -3,7 +3,7 @@
 //   node scripts/shot.mjs <path> <out.png> [options]
 //
 //   --theme=dark|light  --hc  --accent=<name>  --radius=none|sm|md|lg|xl   site theme (default dark/orange/xl)
-//   --webgpu            enable WebGPU (SwiftShader); headless can't composite it, so scenes may look empty
+//   --webgpu            enable WebGPU (SwiftShader, CPU: let scenes settle with --wait=2000)
 //   --width=1440 --height=900  --full                                          viewport / full page
 //   --el=<selector>     screenshot only this element (first match), e.g. "[data-slot=demo-frame]"
 //   --nth=<n>           which match of --el (0-based)
@@ -40,7 +40,16 @@ const theme = {
     accent: opt.accent ?? "orange",
     radius: opt.radius ?? "xl",
 };
-const browser = await chromium.launch({env, args: opt.webgpu ? ["--enable-unsafe-webgpu"] : []});
+// WebGPU in headless runs on SwiftShader (CPU Vulkan). The compositor must be on the same Vulkan too (ANGLE on
+// Vulkan), or the WebGPU canvas renders but never reaches the screenshot.
+const WEBGPU_ARGS = [
+    "--enable-unsafe-webgpu",
+    "--enable-unsafe-swiftshader",
+    "--enable-features=Vulkan",
+    "--use-vulkan=swiftshader",
+    "--use-angle=vulkan",
+];
+const browser = await chromium.launch({env, args: opt.webgpu ? WEBGPU_ARGS : []});
 const page = await browser.newPage({
     viewport: {width: Number(opt.width ?? 1440), height: Number(opt.height ?? 900)},
     deviceScaleFactor: Number(opt.dpr ?? 1),
