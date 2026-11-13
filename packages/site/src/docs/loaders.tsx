@@ -1,10 +1,12 @@
 import {
     BlitPass,
-    createPBRMaterialFromGltf,
+    box3,
+    computeWorldBounds,
     DeferredScenePass,
     DirectionalLight,
     Entity,
-    loadGLBFromURL,
+    type GltfModel,
+    loadGltf,
     loadOBJFromURL,
     Mesh,
     parseOBJ,
@@ -29,14 +31,14 @@ export const doc = defineDoc({
     title: "Loaders",
     category: "Assets",
     description:
-        "Parsers for binary glTF (GLB), OBJ and STL that return Geometry, plus URL helpers. GLB primitives come with a GPU-free material descriptor, which createPBRMaterialFromGltf turns into a PBRMaterial with its textures.",
+        "loadGltf turns a glTF 2.0 file (.glb, or .gltf with its buffers and images) into an entity tree: named nodes with their transforms, shared geometry and materials, ready to add to a scene. OBJ and STL parse to Geometry; parseGLB flattens a GLB to primitives.",
     engineFile: "loaders/glb.ts",
     order: 1,
     demos: [
         {
-            title: "GLB model viewer",
+            title: "glTF model viewer",
             description:
-                "Ported from the repraze.com lab: Khronos glTF sample models, shipped with this site, parsed, given their PBR materials and fitted to the view, under an environment map.",
+                "Khronos glTF sample models, shipped with this site, loaded as entity trees (the badge counts nodes, meshes and materials) and framed with computeWorldBounds, under an environment map.",
             component: ModelViewer,
             layout: "full",
         },
@@ -55,8 +57,25 @@ export const doc = defineDoc({
     ],
     props: [
         {
-            component: "GLB",
+            component: "glTF",
             rows: [
+                {
+                    name: "loadGltf(device, url, {resolveUri?})",
+                    type: "Promise<GltfModel>",
+                    description: ".glb or .gltf; external URIs resolve against the model's URL.",
+                },
+                {name: "parseGltf(device, bytes, {resolveUri?})", type: "Promise<GltfModel>"},
+                {
+                    name: "GltfModel",
+                    type: "{root, nodes, meshes, materials, textures, destroy()}",
+                    description: "root is the default scene; nodes by glTF index.",
+                },
+                {
+                    name: "computeWorldBounds(entity)",
+                    type: "Box3",
+                    description: "World box around a subtree's meshes: frame or centre a model.",
+                },
+                {name: "entity.name / find(name) / traverse(fn)", type: "string / Entity | null / void"},
                 {name: "parseGLB(buffer)", type: "GLBPrimitive[]", description: "One entry per mesh primitive."},
                 {
                     name: "loadGLBFromURL(url)",
@@ -110,8 +129,9 @@ function MaterialsNotes() {
             <p className="text-sm text-muted-foreground">
                 Parsing needs no GPU, so it can run in a worker or a test. Textures referenced by URI resolve against
                 the model&apos;s folder through <code className="font-mono text-foreground">resolveUri</code>; embedded
-                images decode from the binary chunk. Node transforms of the default scene are baked into each
-                primitive&apos;s geometry.
+                images decode from the binary chunk or a data URI. loadGltf keeps the node tree (names, translation,
+                rotation, scale); a node whose mesh has one primitive is that Mesh, otherwise it holds one Mesh per
+                primitive. parseGLB instead bakes the default scene&apos;s transforms into flat primitives.
             </p>
             <p className="text-sm text-muted-foreground">
                 The metallic-roughness texture supplies roughness (green) and metallic (blue) only. Occlusion comes from
@@ -121,14 +141,12 @@ function MaterialsNotes() {
                 the sRGB values Glaze works in. Textures on a second UV set are skipped: Glaze geometry has one.
             </p>
             <Code
-                code={`const primitives = await loadGLBFromURL(url);
-const base = url.slice(0, url.lastIndexOf("/") + 1);
-for (const {geometry, material} of primitives) {
-    const pbr = material
-        ? await createPBRMaterialFromGltf(renderer.device, material, (uri) => base + uri)
-        : new PBRMaterial();
-    scene.add(new Mesh(geometry, pbr));
-}`}
+                code={`const model = await loadGltf(renderer.device, "/models/donut/donut.glb");
+scene.add(model.root);
+
+model.root.find("Icing")!.enabled = false;         // nodes keep their glTF names
+const box = computeWorldBounds(model.root);         // frame it
+// later: scene.remove(model.root); model.destroy();`}
             />
         </section>
     );
@@ -199,48 +217,33 @@ export function ModelViewer() {
                     let fit: Entity | null = null;
                     let requested = "";
 
+                    let current: GltfModel | null = null;
                     const load = async (url: string) => {
-                        const primitives = await loadGLBFromURL(url);
-                        const base = url.slice(0, url.lastIndexOf("/") + 1);
-                        const materials = await Promise.all(
-                            primitives.map(({material}) =>
-                                material
-                                    ? createPBRMaterialFromGltf(renderer.device, material, (uri) => base + uri)
-                                    : palette.material(new PBRMaterial(), (c) => c.neutral),
-                            ),
-                        );
+                        const model = await loadGltf(renderer.device, url);
                         if (url !== requested) {
+                            model.destroy();
                             return;
                         }
-                        const min = [Infinity, Infinity, Infinity];
-                        const max = [-Infinity, -Infinity, -Infinity];
+                        // frame it: centre the model's world bounds on the pivot and scale it to ~2 units
                         const next = new Entity();
-                        primitives.forEach(({geometry}, i) => {
-                            for (let v = 0; v < geometry.positions.length; v += 3) {
-                                for (let axis = 0; axis < 3; axis++) {
-                                    min[axis] = Math.min(min[axis]!, geometry.positions[v + axis]!);
-                                    max[axis] = Math.max(max[axis]!, geometry.positions[v + axis]!);
-                                }
-                            }
-                            next.add(new Mesh(geometry, materials[i]!));
-                        });
-                        const size = Math.max(max[0]! - min[0]!, max[1]! - min[1]!, max[2]! - min[2]!) || 1;
-                        const scale = 2 / size;
+                        next.add(model.root);
+                        const bounds = computeWorldBounds(model.root);
+                        const size = box3.getSize(vec3.create(), bounds);
+                        const scale = 2 / (Math.max(size[0], size[1], size[2]) || 1);
+                        const centre = box3.getCenter(vec3.create(), bounds);
                         vec3.set(next.scale, scale, scale, scale);
-                        vec3.set(
-                            next.position,
-                            (-(min[0]! + max[0]!) / 2) * scale,
-                            (-(min[1]! + max[1]!) / 2) * scale,
-                            (-(min[2]! + max[2]!) / 2) * scale,
-                        );
+                        vec3.scale(next.position, centre, -scale);
                         if (fit) {
                             pivot.remove(fit);
                         }
+                        current?.destroy();
+                        current = model;
                         fit = next;
                         pivot.add(fit);
+                        const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
                         setStatus({
                             state: "ready",
-                            detail: `${primitives.length} primitive${primitives.length > 1 ? "s" : ""}`,
+                            detail: `${plural(model.nodes.length, "node")} · ${plural(model.meshes.length, "mesh", "meshes")} · ${plural(model.materials.length, "material")}`,
                         });
                     };
 

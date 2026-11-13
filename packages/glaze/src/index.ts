@@ -31,6 +31,8 @@ export type {
     GltfTextureSource,
 } from "./loaders/glb";
 export {createPBRMaterialFromGltf, loadGLBFromURL, parseGLB, planGltfMaterial} from "./loaders/glb";
+export type {GltfLoadOptions, GltfModel} from "./loaders/gltf";
+export {loadGltf, parseGltf} from "./loaders/gltf";
 export {loadOBJFromURL, parseOBJ} from "./loaders/obj";
 export {loadSTLFromURL, parseSTL} from "./loaders/stl";
 export type {AlphaMode, PBRMaterialOptions, StandardMaterialOptions} from "./material/material";
@@ -76,6 +78,7 @@ export {Mesh} from "./scene/mesh";
 export type {RaycastHit, RaycastOptions} from "./scene/raycast";
 export {raycast} from "./scene/raycast";
 export {Scene} from "./scene/scene";
+export {computeWorldBounds} from "./scene/world-bounds";
 export type {TextureOptions} from "./texture";
 export {generateMipmaps, mipLevelCount, Texture} from "./texture";
 export {TextureUniform, Uniform} from "./uniform";

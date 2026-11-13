@@ -129,3 +129,25 @@ describe("Entity.lookAlong", () => {
         assert.ok(near(e.quaternion, before));
     });
 });
+
+describe("Entity names", () => {
+    test("find walks depth first; traverse can skip a subtree", () => {
+        const root = new Entity();
+        const a = new Entity();
+        a.name = "a";
+        const b = new Entity();
+        b.name = "b";
+        const deep = new Entity();
+        deep.name = "b";
+        a.add(deep);
+        root.add(a).add(b);
+        assert.equal(root.find("b"), deep);
+        const seen: string[] = [];
+        root.traverse((e) => {
+            seen.push(e.name || "root");
+            return e !== a;
+        });
+        assert.deepEqual(seen, ["root", "a", "b"]);
+        assert.equal(root.find("nope"), null);
+    });
+});

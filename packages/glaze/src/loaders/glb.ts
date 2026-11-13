@@ -13,6 +13,8 @@ interface GltfAccessor {
     componentType: number; // 5120=i8, 5121=u8, 5122=i16, 5123=u16, 5125=u32, 5126=f32
     count: number;
     type: string; // "SCALAR", "VEC2", "VEC3", "VEC4"
+    /** Integer data mapped to 0..1 (unsigned) or -1..1 (signed), as quantized UVs and normals use. */
+    normalized?: boolean;
 }
 
 interface GltfBufferView {
@@ -58,18 +60,23 @@ interface GltfImageDef {
     mimeType?: string;
 }
 
-interface GltfMeshPrimitive {
+/** @internal */
+export interface GltfMeshPrimitive {
     attributes: Record<string, number>;
     indices?: number;
     mode?: number;
     material?: number;
 }
 
-interface GltfMesh {
+/** @internal */
+export interface GltfMesh {
+    name?: string;
     primitives: GltfMeshPrimitive[];
 }
 
-interface GltfNode {
+/** @internal */
+export interface GltfNode {
+    name?: string;
     mesh?: number;
     children?: number[];
     matrix?: number[];
@@ -78,13 +85,14 @@ interface GltfNode {
     scale?: [number, number, number];
 }
 
-interface GltfJson {
+/** @internal The subset of glTF JSON Glaze reads. */
+export interface GltfJson {
     accessors?: GltfAccessor[];
     bufferViews?: GltfBufferView[];
-    buffers?: {byteLength: number}[];
+    buffers?: {byteLength: number; uri?: string}[];
     meshes?: GltfMesh[];
     nodes?: GltfNode[];
-    scenes?: {nodes?: number[]}[];
+    scenes?: {name?: string; nodes?: number[]}[];
     scene?: number;
     materials?: GltfMaterialDef[];
     textures?: GltfTextureDef[];
@@ -173,7 +181,24 @@ export interface GLBPrimitive {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function readAccessor(json: GltfJson, bin: ArrayBuffer, accessorIndex: number): ArrayLike<number> {
+/** @internal Reads an accessor's elements, from whichever buffer its buffer view names. */
+export function readAccessor(json: GltfJson, buffers: ArrayBuffer[], accessorIndex: number): ArrayLike<number> {
+    const raw = readAccessorRaw(json, buffers, accessorIndex);
+    const accessor = json.accessors![accessorIndex]!;
+    if (!accessor.normalized || raw instanceof Float32Array) {
+        return raw;
+    }
+    // KHR_mesh_quantization-style normalized integers to floats
+    const max = {5120: 127, 5121: 255, 5122: 32767, 5123: 65535, 5125: 4294967295}[accessor.componentType] ?? 1;
+    const signed = accessor.componentType === 5120 || accessor.componentType === 5122;
+    const out = new Float32Array(raw.length);
+    for (let i = 0; i < raw.length; i++) {
+        out[i] = signed ? Math.max(raw[i]! / max, -1) : raw[i]! / max;
+    }
+    return out;
+}
+
+function readAccessorRaw(json: GltfJson, buffers: ArrayBuffer[], accessorIndex: number): ArrayLike<number> {
     const accessor = json.accessors![accessorIndex]!;
     const elemCount = TYPE_ELEMENT_COUNT[accessor.type] ?? 1;
     const totalCount = accessor.count * elemCount;
@@ -188,6 +213,10 @@ function readAccessor(json: GltfJson, bin: ArrayBuffer, accessorIndex: number): 
     }
 
     const bv = json.bufferViews![accessor.bufferView]!;
+    const bin = buffers[bv.buffer];
+    if (bin === undefined) {
+        throw new Error(`glTF: buffer ${bv.buffer} is missing`);
+    }
     const byteStride = bv.byteStride;
     const baseOffset = (bv.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
 
@@ -196,8 +225,8 @@ function readAccessor(json: GltfJson, bin: ArrayBuffer, accessorIndex: number): 
         return new ct.ctor(bin, baseOffset, totalCount);
     }
 
-    // Interleaved — copy out element by element
-    const out = new Float32Array(totalCount);
+    // Interleaved: copy out element by element (keeping the component type, so normalization still applies)
+    const out = new (ct.ctor as unknown as new (n: number) => ArrayLike<number> & {[i: number]: number})(totalCount);
     for (let i = 0; i < accessor.count; i++) {
         const elemOffset = baseOffset + i * byteStride;
         const src = new ct.ctor(bin, elemOffset, elemCount);
@@ -224,7 +253,7 @@ function toUint32(data: ArrayLike<number>): Uint32Array {
 
 function extractTextureSource(
     json: GltfJson,
-    bin: ArrayBuffer,
+    buffers: ArrayBuffer[],
     textureIndex: number,
     cache: Map<number, GltfTextureSource | null>,
 ): GltfTextureSource | null {
@@ -234,24 +263,32 @@ function extractTextureSource(
     }
     // one source object per image, so slots sharing an image share the object (and the GPU texture)
     if (!cache.has(texture.source)) {
-        cache.set(texture.source, extractImageSource(json, bin, texture.source));
+        cache.set(texture.source, extractImageSource(json, buffers, texture.source));
     }
     return cache.get(texture.source)!;
 }
 
-function extractImageSource(json: GltfJson, bin: ArrayBuffer, imageIndex: number): GltfTextureSource | null {
+function extractImageSource(json: GltfJson, buffers: ArrayBuffer[], imageIndex: number): GltfTextureSource | null {
     const image = json.images?.[imageIndex];
     if (!image) {
         return null;
     }
 
     if (image.uri !== undefined) {
+        const data = decodeDataUri(image.uri);
+        if (data !== null) {
+            return {type: "embedded", data: data.bytes, mimeType: image.mimeType ?? data.mimeType};
+        }
         return {type: "uri", uri: image.uri};
     }
 
     if (image.bufferView !== undefined) {
         const bv = json.bufferViews?.[image.bufferView];
         if (!bv) {
+            return null;
+        }
+        const bin = buffers[bv.buffer];
+        if (bin === undefined) {
             return null;
         }
         const src = new Uint8Array(bin, bv.byteOffset ?? 0, bv.byteLength);
@@ -265,16 +302,17 @@ function extractImageSource(json: GltfJson, bin: ArrayBuffer, imageIndex: number
     return null;
 }
 
-function extractMaterial(
+/** @internal */
+export function extractMaterial(
     json: GltfJson,
-    bin: ArrayBuffer,
+    buffers: ArrayBuffer[],
     materialIndex: number,
     cache: Map<number, GltfTextureSource | null>,
 ): GltfMaterialDescriptor {
     const mat = json.materials?.[materialIndex];
     const pbr = mat?.pbrMetallicRoughness ?? {};
     const tex = (ref: GltfTextureRef | undefined) =>
-        ref !== undefined ? extractTextureSource(json, bin, ref.index, cache) : null;
+        ref !== undefined ? extractTextureSource(json, buffers, ref.index, cache) : null;
 
     return {
         name: mat?.name ?? "",
@@ -305,7 +343,96 @@ function extractMaterial(
 
 // ─── Node transforms ─────────────────────────────────────────────────────────
 
-function nodeMatrix(node: GltfNode): mat4 {
+/** @internal A primitive's vertex data, untransformed; null for non-triangle or position-less primitives. */
+export function readPrimitive(
+    json: GltfJson,
+    buffers: ArrayBuffer[],
+    prim: GltfMeshPrimitive,
+): {
+    positions: Float32Array;
+    normals: Float32Array;
+    uvs: Float32Array;
+    tangents: Float32Array | null;
+    indices: Uint32Array;
+} | null {
+    // Only TRIANGLES (mode 4, also the default)
+    if (prim.mode !== undefined && prim.mode !== 4) {
+        return null;
+    }
+    const posIdx = prim.attributes["POSITION"];
+    if (posIdx === undefined) {
+        return null;
+    }
+    const normIdx = prim.attributes["NORMAL"];
+    const uvIdx = prim.attributes["TEXCOORD_0"];
+    const tanIdx = prim.attributes["TANGENT"];
+    const positions = toFloat32(readAccessor(json, buffers, posIdx));
+    const vertexCount = positions.length / 3;
+    const normals =
+        normIdx !== undefined ? toFloat32(readAccessor(json, buffers, normIdx)) : new Float32Array(vertexCount * 3);
+    const uvs = uvIdx !== undefined ? toFloat32(readAccessor(json, buffers, uvIdx)) : new Float32Array(vertexCount * 2);
+    const tangents = tanIdx !== undefined ? toFloat32(readAccessor(json, buffers, tanIdx)) : null;
+    let indices: Uint32Array;
+    if (prim.indices !== undefined) {
+        indices = toUint32(readAccessor(json, buffers, prim.indices));
+    } else {
+        indices = new Uint32Array(vertexCount);
+        for (let i = 0; i < vertexCount; i++) {
+            indices[i] = i;
+        }
+    }
+    return {positions, normals, uvs, tangents, indices};
+}
+
+/** @internal Splits a GLB file into its JSON and binary chunk (the file's buffer 0). */
+export function parseGlbContainer(buffer: ArrayBuffer): {json: GltfJson; buffers: ArrayBuffer[]} {
+    const view = new DataView(buffer);
+    if (buffer.byteLength < 12 || view.getUint32(0, true) !== 0x46546c67) {
+        throw new Error("GLB: invalid magic number");
+    }
+    const version = view.getUint32(4, true);
+    if (version !== 2) {
+        throw new Error(`GLB: unsupported version ${version}`);
+    }
+    if (buffer.byteLength < 20) {
+        throw new Error("GLB: truncated header");
+    }
+    const jsonChunkLength = view.getUint32(12, true);
+    if (view.getUint32(16, true) !== 0x4e4f534a) {
+        throw new Error("GLB: first chunk is not JSON");
+    }
+    const json: GltfJson = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, jsonChunkLength)));
+    let bin: ArrayBuffer = new ArrayBuffer(0);
+    const binOffset = 20 + jsonChunkLength;
+    if (binOffset + 8 <= buffer.byteLength) {
+        const binChunkLength = view.getUint32(binOffset, true);
+        if (view.getUint32(binOffset + 4, true) === 0x004e4942) {
+            bin = buffer.slice(binOffset + 8, binOffset + 8 + binChunkLength);
+        }
+    }
+    return {json, buffers: [bin]};
+}
+
+/** @internal The bytes of a base64 `data:` URI, or null for any other URI. */
+export function decodeDataUri(uri: string): {bytes: Uint8Array<ArrayBuffer>; mimeType: string} | null {
+    const match = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(uri);
+    if (match === null) {
+        return null;
+    }
+    const [, mimeType = "", base64, payload = ""] = match;
+    if (base64 === undefined) {
+        return {bytes: new TextEncoder().encode(decodeURIComponent(payload)) as Uint8Array<ArrayBuffer>, mimeType};
+    }
+    const binary = atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return {bytes, mimeType: mimeType || "application/octet-stream"};
+}
+
+/** @internal A node's local transform. */
+export function nodeMatrix(node: GltfNode): mat4 {
     if (node.matrix) {
         return mat4.clone(node.matrix as unknown as mat4);
     }
@@ -414,82 +541,18 @@ function bakeTransform(
  * The material descriptor is `null` when the primitive has no material index.
  */
 export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
-    const view = new DataView(buffer);
-
-    // GLB header (12 bytes)
-    const magic = view.getUint32(0, true);
-    const version = view.getUint32(4, true);
-    if (magic !== 0x46546c67) {
-        throw new Error("GLB: invalid magic number");
-    }
-    if (version !== 2) {
-        throw new Error(`GLB: unsupported version ${version}`);
-    }
-
-    // JSON chunk
-    const jsonChunkLength = view.getUint32(12, true);
-    const jsonChunkType = view.getUint32(16, true);
-    if (jsonChunkType !== 0x4e4f534a) {
-        throw new Error("GLB: first chunk is not JSON");
-    }
-    const jsonText = new TextDecoder().decode(new Uint8Array(buffer, 20, jsonChunkLength));
-    const json: GltfJson = JSON.parse(jsonText);
-
-    // BIN chunk (optional)
-    let bin: ArrayBuffer = new ArrayBuffer(0);
-    const binOffset = 20 + jsonChunkLength;
-    if (binOffset + 8 <= buffer.byteLength) {
-        const binChunkLength = view.getUint32(binOffset, true);
-        const binChunkType = view.getUint32(binOffset + 4, true);
-        if (binChunkType === 0x004e4942) {
-            bin = buffer.slice(binOffset + 8, binOffset + 8 + binChunkLength);
-        }
-    }
-
+    const {json, buffers} = parseGlbContainer(buffer);
     const primitives: GLBPrimitive[] = [];
     const imageCache = new Map<number, GltfTextureSource | null>();
 
     for (const {mesh, matrix} of meshInstances(json)) {
         for (const prim of mesh.primitives) {
-            // Only support TRIANGLES (mode 4, which is also the default)
-            if (prim.mode !== undefined && prim.mode !== 4) {
+            const data = readPrimitive(json, buffers, prim);
+            if (data === null) {
                 continue;
             }
-
-            const posIdx = prim.attributes["POSITION"];
-            const normIdx = prim.attributes["NORMAL"];
-            const uvIdx = prim.attributes["TEXCOORD_0"];
-            const tanIdx = prim.attributes["TANGENT"];
-
-            if (posIdx === undefined) {
-                continue;
-            }
-
-            let positions = toFloat32(readAccessor(json, bin, posIdx));
-
-            let normals =
-                normIdx !== undefined
-                    ? toFloat32(readAccessor(json, bin, normIdx))
-                    : new Float32Array((positions.length / 3) * 3); // zeros
-
-            const uvs =
-                uvIdx !== undefined
-                    ? toFloat32(readAccessor(json, bin, uvIdx))
-                    : new Float32Array((positions.length / 3) * 2);
-
-            let tangents = tanIdx !== undefined ? toFloat32(readAccessor(json, bin, tanIdx)) : null;
-
-            let indices: Uint32Array;
-            if (prim.indices !== undefined) {
-                indices = toUint32(readAccessor(json, bin, prim.indices));
-            } else {
-                // Non-indexed: generate sequential indices
-                const count = positions.length / 3;
-                indices = new Uint32Array(count);
-                for (let i = 0; i < count; i++) {
-                    indices[i] = i;
-                }
-            }
+            let {positions, normals, tangents, indices} = data;
+            const {uvs} = data;
 
             if (matrix) {
                 ({positions, normals, tangents, indices} = bakeTransform(
@@ -504,7 +567,8 @@ export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
             tangents ??= computeTangents(positions, normals, uvs, indices, positions.length / 3);
 
             const geometry = new Geometry({positions, normals, uvs, indices, tangents});
-            const material = prim.material !== undefined ? extractMaterial(json, bin, prim.material, imageCache) : null;
+            const material =
+                prim.material !== undefined ? extractMaterial(json, buffers, prim.material, imageCache) : null;
 
             primitives.push({geometry, material});
         }
@@ -618,17 +682,19 @@ export function planGltfMaterial(descriptor: GltfMaterialDescriptor): GltfMateri
  * @param resolveUri  Maps a relative URI (from the GLTF file) to a URL that can
  *                    be fetched. Defaults to the identity (URI used as-is), which
  *                    works when the GLB is served from the same directory.
+ * @param loaded      Texture cache keyed by source; share it between a model's materials.
  */
 export async function createPBRMaterialFromGltf(
     device: GPUDevice,
     descriptor: GltfMaterialDescriptor,
     resolveUri: (uri: string) => string = (uri) => uri,
+    /** Shares GPU textures across materials: pass the same map for every material of a model. */
+    loaded: Map<GltfTextureSource, Promise<Texture>> = new Map(),
 ): Promise<PBRMaterial> {
     const plan = planGltfMaterial(descriptor);
     const mat = new PBRMaterial(plan.options);
 
-    // one GPU texture per image, however many slots use it
-    const loaded = new Map<GltfTextureSource, Promise<Texture>>();
+    // one GPU texture per image, however many slots (and materials) use it
     function loadTex(source: GltfTextureSource | null): Promise<Texture | null> {
         if (!source) {
             return Promise.resolve(null);

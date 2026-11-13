@@ -208,7 +208,13 @@ occlusion source, occlusion is 1. `normalScale` and `occlusionStrength` scale th
 
 ## Loaders
 
-`parseGLB(buffer)` / `loadGLBFromURL(url)` → `{geometry, material}[]`, with
+`loadGltf(device, url, {resolveUri?})` / `parseGltf(device, bytes)` → `GltfModel` `{root, nodes, meshes, materials,
+textures, destroy()}`: a `.glb` or `.gltf` (external or data-URI buffers and images) as an entity tree. Nodes keep
+their names (`root.find("Icing")`) and transforms; a one-primitive node is the `Mesh` itself, otherwise it holds a
+`Mesh` per primitive; geometry, materials and textures are shared across nodes. Normalized integer attributes are
+decoded. `computeWorldBounds(entity)` boxes a subtree to frame it.
+
+`parseGLB(buffer)` / `loadGLBFromURL(url)` → `{geometry, material}[]` (flat, transforms baked), with
 `createPBRMaterialFromGltf(device, material, resolveUri?)` (the mapping itself, GPU-free, is
 `planGltfMaterial(material)`). Node transforms of the default scene are baked into the geometry. `parseOBJ(text)` / `loadOBJFromURL(url)`;
 `parseSTL(buffer)` (binary or text STL) / `loadSTLFromURL(url)`.

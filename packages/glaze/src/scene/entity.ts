@@ -35,6 +35,8 @@ export class Entity {
     readonly children: Entity[] = [];
     parent: Entity | null = null;
     enabled: boolean = true;
+    /** A label for finding the entity (`find`); loaders copy node names here. */
+    name: string = "";
 
     /**
      * The layers this entity is on, a 32-bit mask (default: layer 0). One mask for everything: `raycast` queries
@@ -69,6 +71,31 @@ export class Entity {
             child.parent = null;
         }
         return this;
+    }
+
+    /** Calls `fn` for this entity and every descendant, depth first; return false from `fn` to skip a subtree. */
+    traverse(fn: (entity: Entity) => boolean | void): void {
+        if (fn(this) === false) {
+            return;
+        }
+        for (const child of this.children) {
+            child.traverse(fn);
+        }
+    }
+
+    /** The first entity named `name` in this subtree (this one included), depth first; null if none. */
+    find(name: string): Entity | null {
+        let found: Entity | null = null;
+        this.traverse((e) => {
+            if (found !== null) {
+                return false;
+            }
+            if (e.name === name) {
+                found = e;
+                return false;
+            }
+        });
+        return found;
     }
 
     // ─── Rotation ─────────────────────────────────────────────────────────────
