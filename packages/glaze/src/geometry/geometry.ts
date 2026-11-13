@@ -1,3 +1,5 @@
+import {box3, type ReadonlyBox3, type ReadonlySphere, sphere} from "../math/bounds";
+
 export interface GeometryOptions {
     positions: Float32Array;
     normals: Float32Array;
@@ -29,6 +31,25 @@ export class Geometry {
         this.tangents = tangents;
         this.vertexCount = positions.length / 3;
         this.indexCount = indices.length;
+    }
+
+    private _boundingBox: ReadonlyBox3 | null = null;
+    private _boundingSphere: ReadonlySphere | null = null;
+
+    /** Local-space box around the positions, computed on first use and cached (see `updateBounds`). */
+    get boundingBox(): ReadonlyBox3 {
+        return (this._boundingBox ??= box3.fromPositions(box3.create(), this.positions));
+    }
+
+    /** Local-space sphere around the positions, computed on first use and cached (see `updateBounds`). */
+    get boundingSphere(): ReadonlySphere {
+        return (this._boundingSphere ??= sphere.fromPositions(sphere.create(), this.positions));
+    }
+
+    /** Drops the cached bounds after `positions` were edited in place; they are recomputed on next use. */
+    updateBounds(): void {
+        this._boundingBox = null;
+        this._boundingSphere = null;
     }
 
     /**

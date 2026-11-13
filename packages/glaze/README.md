@@ -222,6 +222,26 @@ setColorRgb(scene.ambientColor, "#050508"); // in place, for per-frame updates
 srgbToLinear(0.5); // ≈ 0.214
 ```
 
+## Bounds and rays
+
+In gl-matrix's style (plain data, free functions, `out` first, aliasing allowed): `box3` and `sphere` for bounding
+volumes, `ray` for rays. Geometry caches its local bounds on first use.
+
+```ts
+import {box3, ray} from "@repraze/glaze";
+
+const worldBox = box3.transformMat4(box3.create(), mesh.geometry.boundingBox, mesh.worldMatrix);
+const r = ray.fromNdc(ray.create(), invViewProjection, ndcX, ndcY); // through a screen point, from the near plane
+const t = ray.intersectBox(r, worldBox); // distance, or null on a miss
+```
+
+`box3`: `create`, `fromValues`, `fromPositions`, `expandByPoint`, `union`, `transformMat4` (box around the
+transformed box), `getCenter`, `getSize`, `containsPoint`, `intersectsBox`, `isEmpty`. `sphere`: `create`,
+`fromValues`, `fromPositions`, `transformMat4`, `containsPoint`, `isEmpty`. `ray`: `create`, `fromValues`, `at`,
+`fromNdc`, `transformMat4` (keeps the direction unnormalised, so local-space `t` equals world-space `t`),
+`intersectBox`, `intersectSphere`, `intersectTriangle(r, a, b, c, cullBackFace?, barycentric?)`.
+`geometry.boundingBox` / `boundingSphere` are cached; call `geometry.updateBounds()` after editing positions.
+
 ## Helpers
 
 `lerp`, `clamp`, `smoothstep`, `smootherstep`, `easeIn`, `easeOut`, `easeInOut`, `pingpong`, `oscillate`,
