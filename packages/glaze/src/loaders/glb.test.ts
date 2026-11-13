@@ -451,6 +451,10 @@ describe("planGltfMaterial", () => {
             emissive: [0, 0, 0, 0],
             normalScale: 1,
             occlusionStrength: 1,
+            opacity: 1,
+            alphaMode: "opaque",
+            alphaCutoff: 0.5,
+            doubleSided: false,
         });
         for (const map of [
             plan.albedoMap,

@@ -48,7 +48,7 @@ describe("PBRMaterial — uniforms", () => {
         assert.equal(mat.occlusionStrength, 1);
         const data = packMaterialUniforms(mat);
         assert.equal(data.byteLength, 64);
-        assert.deepEqual(Array.from(data), [1, 1, 1, 1, 0.5, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0]);
+        assert.deepEqual(Array.from(data), [1, 1, 1, 1, 0.5, 0, 0, 1, 0, 0, 0, 0, 1, 0.5, 0, 0]);
     });
 
     test("packs factors, normal scale and occlusion strength at their offsets", () => {

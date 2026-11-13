@@ -22,7 +22,24 @@ export interface PBRMaterialOptions {
     normalScale?: number;
     /** How much the occlusion map darkens ambient light, 0..1 (glTF `occlusionTexture.strength`). Default 1. */
     occlusionStrength?: number;
+    /** Multiplies the albedo map's alpha (glTF baseColorFactor alpha). Default 1. */
+    opacity?: number;
+    /** How alpha is used. Default "opaque". */
+    alphaMode?: AlphaMode;
+    /** "mask": fragments with alpha below this are cut. Default 0.5. */
+    alphaCutoff?: number;
+    /** Render back faces too, lit from their own side. Default false. */
+    doubleSided?: boolean;
 }
+
+/**
+ * How a material's alpha (albedo map alpha × opacity) is used, after glTF's alphaMode:
+ * - "opaque": ignored.
+ * - "mask": a cutout: below alphaCutoff the surface is absent (leaves, lace, fences).
+ * - "blend": see-through. The deferred pass dithers it (each pixel kept with probability alpha), a stable
+ *   screen-door transparency that needs no sorting and still writes depth and shadows-free G-buffer data.
+ */
+export type AlphaMode = "opaque" | "mask" | "blend";
 
 /**
  * Uniform struct layout (std140, 64 bytes):
@@ -34,7 +51,8 @@ export interface PBRMaterialOptions {
  *   normalScale:       f32        offset 28  ( 4 bytes)
  *   emissive:          vec4<f32>  offset 32  (16 bytes)
  *   occlusionStrength: f32        offset 48  ( 4 bytes)
- *   _pad:              vec3<f32>  offset 52  (12 bytes)
+ *   alphaCutoff:       f32        offset 52  ( 4 bytes)
+ *   _pad:              vec2<f32>  offset 56  ( 8 bytes)
  */
 const MATERIAL_BUFFER_SIZE = 64;
 
@@ -46,7 +64,7 @@ export function packMaterialUniforms(mat: PBRMaterial, out = new Float32Array(MA
     out[0] = mat.color[0];
     out[1] = mat.color[1];
     out[2] = mat.color[2];
-    out[3] = 1.0;
+    out[3] = mat.opacity;
     out[4] = mat.roughness;
     out[5] = mat.metallic;
     out[6] = mat.heightScale;
@@ -56,6 +74,7 @@ export function packMaterialUniforms(mat: PBRMaterial, out = new Float32Array(MA
     out[10] = mat.emissive[2];
     out[11] = mat.emissive[3];
     out[12] = mat.occlusionStrength;
+    out[13] = mat.alphaCutoff;
     return out;
 }
 
@@ -108,6 +127,11 @@ export class PBRMaterial extends Material {
     /** R=height (0=low, 1=high). Used for parallax occlusion mapping when heightScale > 0. */
     heightMap: Texture | null = null;
     heightScale: number = 0;
+    /** Multiplies the albedo map's alpha. */
+    opacity: number;
+    alphaMode: AlphaMode;
+    alphaCutoff: number;
+    doubleSided: boolean;
 
     private buffer: GPUBuffer | null = null;
     private bindGroup: GPUBindGroup | null = null;
@@ -121,6 +145,10 @@ export class PBRMaterial extends Material {
         emissive = [0, 0, 0, 0],
         normalScale = 1,
         occlusionStrength = 1,
+        opacity = 1,
+        alphaMode = "opaque",
+        alphaCutoff = 0.5,
+        doubleSided = false,
     }: PBRMaterialOptions = {}) {
         super();
         this.color = color;
@@ -129,6 +157,10 @@ export class PBRMaterial extends Material {
         this.emissive = emissive;
         this.normalScale = normalScale;
         this.occlusionStrength = occlusionStrength;
+        this.opacity = opacity;
+        this.alphaMode = alphaMode;
+        this.alphaCutoff = alphaCutoff;
+        this.doubleSided = doubleSided;
     }
 
     /** The texture sampled for roughness (G) and metallic (B): {@link metallicRoughnessMap}, else {@link ormMap}. */

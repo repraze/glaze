@@ -194,7 +194,12 @@ gold.roughness = 0.3;
 gold.markDirty(); // after changing scalars
 ```
 
-`Texture.fromPixels(device, data, w, h)`, `Texture.fromURL(device, url)`, `Texture.fromBlob(device, blob)`.
+`Texture.fromPixels(device, data, w, h)`, `Texture.fromURL(device, url)`, `Texture.fromBlob(device, blob)`: each builds
+a mip chain on the GPU (`{mipmaps: false}` to skip), sampled trilinear with 8x anisotropy and repeat wrapping.
+
+Alpha follows glTF: `opacity` multiplies the albedo map's alpha, and `alphaMode` is `"opaque"` (ignored), `"mask"`
+(cut below `alphaCutoff`, default 0.5: leaves, lace) or `"blend"` (see-through, dithered by the deferred pass: no
+sorting needed). `doubleSided: true` draws back faces too, lit from their own side.
 Meshes sharing a material share its GPU buffer and bind group. Emission is the rgb of `emissive` (alpha unused).
 
 Occlusion, roughness and metallic follow glTF: `ormMap` is a packed texture (r occlusion, g roughness, b metallic);

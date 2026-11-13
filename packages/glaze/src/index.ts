@@ -33,7 +33,7 @@ export type {
 export {createPBRMaterialFromGltf, loadGLBFromURL, parseGLB, planGltfMaterial} from "./loaders/glb";
 export {loadOBJFromURL, parseOBJ} from "./loaders/obj";
 export {loadSTLFromURL, parseSTL} from "./loaders/stl";
-export type {PBRMaterialOptions, StandardMaterialOptions} from "./material/material";
+export type {AlphaMode, PBRMaterialOptions, StandardMaterialOptions} from "./material/material";
 export {Material, PBRMaterial, StandardMaterial} from "./material/material";
 export {
     bounce,
@@ -76,5 +76,6 @@ export {Mesh} from "./scene/mesh";
 export type {RaycastHit, RaycastOptions} from "./scene/raycast";
 export {raycast} from "./scene/raycast";
 export {Scene} from "./scene/scene";
-export {Texture} from "./texture";
+export type {TextureOptions} from "./texture";
+export {generateMipmaps, mipLevelCount, Texture} from "./texture";
 export {TextureUniform, Uniform} from "./uniform";

@@ -40,6 +40,9 @@ interface GltfMaterialDef {
     occlusionTexture?: GltfTextureRef & {strength?: number};
     emissiveTexture?: GltfTextureRef;
     emissiveFactor?: [number, number, number];
+    alphaMode?: "OPAQUE" | "MASK" | "BLEND";
+    alphaCutoff?: number;
+    doubleSided?: boolean;
     extensions?: {
         KHR_materials_emissive_strength?: {emissiveStrength?: number};
     };
@@ -154,6 +157,11 @@ export interface GltfMaterialDescriptor {
     metallicRoughnessTexture: GltfTextureSource | null;
     /** TEXCOORD_n set each texture reads (default 0). Glaze geometry carries TEXCOORD_0 only. */
     texCoords?: Record<GltfTextureSlot, number>;
+    /** glTF alphaMode (default "OPAQUE") and alphaCutoff (default 0.5, used by "MASK"). */
+    alphaMode?: "OPAQUE" | "MASK" | "BLEND";
+    alphaCutoff?: number;
+    /** Back faces rendered too (default false). */
+    doubleSided?: boolean;
 }
 
 /** One mesh primitive returned by {@link parseGLB}. */
@@ -282,6 +290,9 @@ function extractMaterial(
         emissiveTexture: tex(mat?.emissiveTexture),
         occlusionTexture: tex(mat?.occlusionTexture),
         metallicRoughnessTexture: tex(pbr.metallicRoughnessTexture),
+        alphaMode: mat?.alphaMode ?? "OPAQUE",
+        alphaCutoff: mat?.alphaCutoff ?? 0.5,
+        doubleSided: mat?.doubleSided ?? false,
         texCoords: {
             baseColor: pbr.baseColorTexture?.texCoord ?? 0,
             normal: mat?.normalTexture?.texCoord ?? 0,
@@ -573,7 +584,7 @@ export function planGltfMaterial(descriptor: GltfMaterialDescriptor): GltfMateri
     const metallicRoughness = usable("metallicRoughness", descriptor.metallicRoughnessTexture);
     const packed = occlusion !== null && metallicRoughness !== null && sameImage(occlusion, metallicRoughness);
 
-    const [r, g, b] = descriptor.baseColorFactor;
+    const [r, g, b, a] = descriptor.baseColorFactor;
     const strength = descriptor.emissiveStrength ?? 1;
     const [er, eg, eb] = descriptor.emissiveFactor;
     return {
@@ -584,6 +595,10 @@ export function planGltfMaterial(descriptor: GltfMaterialDescriptor): GltfMateri
             emissive: [linearToSrgb(er * strength), linearToSrgb(eg * strength), linearToSrgb(eb * strength), 0],
             normalScale: descriptor.normalScale ?? 1,
             occlusionStrength: occlusion ? (descriptor.occlusionStrength ?? 1) : 1,
+            opacity: a,
+            alphaMode: descriptor.alphaMode === "MASK" ? "mask" : descriptor.alphaMode === "BLEND" ? "blend" : "opaque",
+            alphaCutoff: descriptor.alphaCutoff ?? 0.5,
+            doubleSided: descriptor.doubleSided ?? false,
         },
         albedoMap: usable("baseColor", descriptor.baseColorTexture),
         normalMap: usable("normal", descriptor.normalTexture),

@@ -34,17 +34,28 @@ fn vs_shadow(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
 export interface GBufferFeatures {
     parallaxMapping: boolean; // heightMap is assigned
     normalMapping: boolean; // normalMap is assigned
+    /** "mask" cuts below alphaCutoff; "blend" dithers by alpha. */
+    alpha?: "opaque" | "mask" | "blend";
+    /** No back-face culling; back faces flip their normal. */
+    doubleSided?: boolean;
 }
 
 function getGBufferFeatures(mat: PBRMaterial): GBufferFeatures {
     return {
         parallaxMapping: mat.heightMap != null,
         normalMapping: mat.normalMap != null,
+        alpha: mat.alphaMode,
+        doubleSided: mat.doubleSided,
     };
 }
 
 function featureKey(f: GBufferFeatures): string {
-    return (f.parallaxMapping ? "P" : "") + (f.normalMapping ? "N" : "");
+    return (
+        (f.parallaxMapping ? "P" : "") +
+        (f.normalMapping ? "N" : "") +
+        (f.alpha === "mask" ? "M" : f.alpha === "blend" ? "B" : "") +
+        (f.doubleSided ? "2" : "")
+    );
 }
 
 function buildGBufferShader(f: GBufferFeatures): string {
@@ -71,6 +82,7 @@ struct MaterialUniforms {
     normalScale:       f32,
     emissive:          vec4<f32>,
     occlusionStrength: f32,
+    alphaCutoff:       f32,
 };
 
 @group(0) @binding(0) var<uniform> camera:     CameraUniforms;
@@ -147,8 +159,15 @@ struct GBufferOutput {
 };
 
 @fragment
-fn fs_main(input: VertexOutput) -> GBufferOutput {
-    let N = normalize(input.worldNormal);
+fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> GBufferOutput {
+${
+    f.doubleSided
+        ? `
+    // a back face is lit from its own side
+    let N = select(-1.0, 1.0, frontFacing) * normalize(input.worldNormal);`
+        : `
+    let N = normalize(input.worldNormal);`
+}
 ${
     needsTbn
         ? `
@@ -182,8 +201,20 @@ ${
     let shadingNormal = N;
 `
 }
-    let texAlbedo = textureSample(albedoMap, matSampler, uv).rgb;
-    let albedo    = texAlbedo * mat.albedo.rgb;
+    let texAlbedo4 = textureSample(albedoMap, matSampler, uv);
+    let texAlbedo  = texAlbedo4.rgb;
+    let albedo     = texAlbedo * mat.albedo.rgb;
+${
+    f.alpha === "mask"
+        ? `
+    if (texAlbedo4.a * mat.albedo.a < mat.alphaCutoff) { discard; }`
+        : f.alpha === "blend"
+          ? `
+    // screen-door transparency: keep the pixel with probability alpha (interleaved gradient noise threshold)
+    let ign = fract(52.9829189 * fract(dot(input.clipPos.xy, vec2<f32>(0.06711056, 0.00583715))));
+    if (texAlbedo4.a * mat.albedo.a <= ign) { discard; }`
+          : ""
+}
 
     let mr        = textureSample(metallicRoughnessMap, matSampler, uv);
     let occlusion = textureSample(occlusionMap, matSampler, uv).r;
@@ -759,6 +790,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         this.texSampler = device.createSampler({
             magFilter: "linear",
             minFilter: "linear",
+            mipmapFilter: "linear",
+            maxAnisotropy: 8,
             addressModeU: "repeat",
             addressModeV: "repeat",
         });
@@ -905,7 +938,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                         {format: "rgba16float"},
                     ],
                 },
-                primitive: {topology: "triangle-list", cullMode: "back"},
+                primitive: {topology: "triangle-list", cullMode: features.doubleSided ? "none" : "back"},
                 depthStencil: {
                     format: "depth24plus",
                     depthWriteEnabled: true,
