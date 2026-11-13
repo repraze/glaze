@@ -1,4 +1,4 @@
-import {type ColorRgb, type ColorRgba, srgbToLinear} from "../color";
+import {type ColorRgb, srgbToLinear} from "../color";
 import type {Texture} from "../texture";
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -17,7 +17,10 @@ export interface PBRMaterialOptions {
     color?: ColorRgb;
     roughness?: number;
     metallic?: number;
-    emissive?: ColorRgba;
+    /** Light the surface gives off, sRGB like `color` (black: none). */
+    emissive?: ColorRgb;
+    /** Multiplies {@link emissive} in linear light: 2 is twice the light, for glows above 1. Default 1. */
+    emissiveIntensity?: number;
     /** Scales the tangent-space XY of the normal map (glTF `normalTexture.scale`). Default 1. */
     normalScale?: number;
     /** How much the occlusion map darkens ambient light, 0..1 (glTF `occlusionTexture.strength`). Default 1. */
@@ -70,10 +73,10 @@ export function packMaterialUniforms(mat: PBRMaterial, out = new Float32Array(MA
     out[5] = mat.metallic;
     out[6] = mat.heightScale;
     out[7] = mat.normalScale;
-    out[8] = srgbToLinear(mat.emissive[0]);
-    out[9] = srgbToLinear(mat.emissive[1]);
-    out[10] = srgbToLinear(mat.emissive[2]);
-    out[11] = mat.emissive[3];
+    out[8] = srgbToLinear(mat.emissive[0]) * mat.emissiveIntensity;
+    out[9] = srgbToLinear(mat.emissive[1]) * mat.emissiveIntensity;
+    out[10] = srgbToLinear(mat.emissive[2]) * mat.emissiveIntensity;
+    out[11] = 0;
     out[12] = mat.occlusionStrength;
     out[13] = mat.alphaCutoff;
     return out;
@@ -104,7 +107,8 @@ export class PBRMaterial extends Material {
     color: ColorRgb;
     roughness: number;
     metallic: number;
-    emissive: ColorRgba;
+    emissive: ColorRgb;
+    emissiveIntensity: number;
 
     albedoMap: Texture | null = null;
     normalMap: Texture | null = null;
@@ -143,7 +147,8 @@ export class PBRMaterial extends Material {
         color = [1, 1, 1],
         roughness = 0.5,
         metallic = 0.0,
-        emissive = [0, 0, 0, 0],
+        emissive = [0, 0, 0],
+        emissiveIntensity = 1,
         normalScale = 1,
         occlusionStrength = 1,
         opacity = 1,
@@ -156,6 +161,7 @@ export class PBRMaterial extends Material {
         this.roughness = roughness;
         this.metallic = metallic;
         this.emissive = emissive;
+        this.emissiveIntensity = emissiveIntensity;
         this.normalScale = normalScale;
         this.occlusionStrength = occlusionStrength;
         this.opacity = opacity;

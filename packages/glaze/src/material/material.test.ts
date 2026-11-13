@@ -57,7 +57,8 @@ describe("PBRMaterial — uniforms", () => {
             color: [0.25, 0.5, 0.75],
             roughness: 0.125,
             metallic: 0.875,
-            emissive: [0.5, 0.25, 0, 1],
+            emissive: [0.5, 0.25, 0],
+            emissiveIntensity: 2,
             normalScale: 2,
             occlusionStrength: 0.5,
         });
@@ -71,7 +72,7 @@ describe("PBRMaterial — uniforms", () => {
         assert.equal(data[5], 0.875); // metallic
         assert.equal(data[6], 0.0625); // heightScale
         assert.equal(data[7], 2); // normalScale
-        near(data.slice(8, 12), [srgbToLinear(0.5), srgbToLinear(0.25), 0, 1]); // emissive
+        near(data.slice(8, 12), [srgbToLinear(0.5) * 2, srgbToLinear(0.25) * 2, 0, 0]); // emissive × intensity, linear
         assert.equal(data[12], 0.5); // occlusionStrength
     });
 });

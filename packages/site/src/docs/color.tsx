@@ -1,17 +1,36 @@
-import {colorRgb, EffectPass, linearToSrgb, RenderGraph, ShaderPass, srgbToLinear, Uniform} from "@repraze/glaze";
+import {
+    BlitPass,
+    colorRgb,
+    createIcosphere,
+    createPlane,
+    DeferredScenePass,
+    DirectionalLight,
+    EffectPass,
+    linearToSrgb,
+    Mesh,
+    PBRMaterial,
+    PerspectiveCamera,
+    RenderGraph,
+    Scene,
+    ShaderPass,
+    srgbToLinear,
+    type ToneMapping,
+    Uniform,
+} from "@repraze/glaze";
+import {vec3} from "gl-matrix";
 import {useState} from "react";
 
-import {ControlSegmented, ControlSelect, DemoStage} from "@/glaze/demo-stage";
+import {ControlSegmented, ControlSelect, ControlSlider, DemoStage} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
 import {HUE_OPTIONS} from "@/glaze/helpers";
-import {type Hue, useSceneColors} from "@/glaze/scene-colors";
+import {type Hue, paletteBinder, useSceneColors} from "@/glaze/scene-colors";
 import {Code, defineDoc} from "@/lib/doc-kit";
 
 export const doc = defineDoc({
     title: "Color management",
     category: "Assets",
     description:
-        "Colors go in as sRGB, the numbers a color picker shows. The scene pass decodes them and lights in linear light, where light adds up correctly; BlitPass tone maps and encodes back to sRGB for the screen. 2D passes write sRGB straight to the canvas.",
+        "Colors go in as sRGB, the numbers a color picker shows. The scene pass decodes them and lights in linear light, where light adds up correctly; BlitPass applies exposure and a view transform, then encodes back to sRGB for the screen. 2D passes write sRGB straight to the canvas.",
     engineFile: "color.ts",
     order: 2,
     demos: [
@@ -20,6 +39,13 @@ export const doc = defineDoc({
             description:
                 "Left: a CSS background. Right: an EffectPass writing colorRgb(hex) to the canvas. A 2D pass's output is already sRGB, so they match; convert, and you see what a misplaced transfer function does.",
             component: SideBySide,
+            layout: "full",
+        },
+        {
+            title: "View transforms",
+            description:
+                "Saturated paint under a hot key light, and a glow at 6× white: light well above 1. BlitPass decides how it reaches the screen. None clips, Neutral keeps colors and rolls off highlights, AgX and ACES are filmic. Push the exposure to see where each one gives.",
+            component: ViewTransforms,
             layout: "full",
         },
         {
@@ -33,6 +59,7 @@ export const doc = defineDoc({
     notes: Notes,
     sections: [
         {id: "in-the-scene-pass", title: "In the scene pass"},
+        {id: "tone-mapping", title: "Tone mapping"},
         {id: "your-own-passes", title: "Your own passes"},
     ],
     props: [
@@ -113,6 +140,43 @@ const normals = await Texture.fromURL(device, "/brick-n.png", {colorSpace: "line
 graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas"}); // tone map, encode`}
                 />
             </section>
+            <section id="tone-mapping" className="flex scroll-mt-24 flex-col gap-3">
+                <h2 className="font-mono text-xl font-semibold">Tone mapping</h2>
+                <p className="text-sm text-muted-foreground">
+                    The scene&apos;s light has no ceiling; a screen does. BlitPass&apos;s{" "}
+                    <code className="font-mono text-foreground">toneMapping</code> picks how one becomes the other, what
+                    Blender calls the view transform, and <code className="font-mono text-foreground">exposure</code>{" "}
+                    scales the light first, in stops. Both are properties: change them any frame.
+                </p>
+                <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm text-muted-foreground">
+                    <li>
+                        <code className="font-mono text-foreground">&quot;none&quot;</code>: clip at 1. Flat and exact,
+                        a lit color shows as picked; highlights burn out. Graphic, cartoon looks, UI-matched colors.
+                    </li>
+                    <li>
+                        <code className="font-mono text-foreground">&quot;neutral&quot;</code>: Khronos PBR Neutral. The
+                        same as none up to about 0.76, then highlights roll off. Products, food, anything whose color
+                        must read true.
+                    </li>
+                    <li>
+                        <code className="font-mono text-foreground">&quot;agx&quot;</code>: filmic, Blender&apos;s
+                        default. Wide latitude; very bright colors fade to white like film instead of shifting hue.
+                    </li>
+                    <li>
+                        <code className="font-mono text-foreground">&quot;aces&quot;</code>: filmic with more contrast
+                        and saturation, the games look.{" "}
+                        <code className="font-mono text-foreground">&quot;reinhard&quot;</code> is the simple curve, for
+                        comparison.
+                    </li>
+                </ul>
+                <Code
+                    code={`const blit = new BlitPass({toneMapping: "agx", exposure: 0.5});
+graph.addPass(blit, {color}, {canvasSlot: "canvas"});
+
+blit.toneMapping = "neutral"; // next frame, no rebuild
+blit.exposure = -1;           // half the light`}
+                />
+            </section>
             <section id="your-own-passes" className="flex scroll-mt-24 flex-col gap-3">
                 <h2 className="font-mono text-xl font-semibold">Your own passes</h2>
                 <p className="text-sm text-muted-foreground">
@@ -189,6 +253,105 @@ export function SideBySide() {
                     </span>
                 </div>
             </div>
+        </DemoStage>
+    );
+}
+
+const VIEW_TRANSFORMS: {value: ToneMapping; label: string}[] = [
+    {value: "none", label: "None (clip)"},
+    {value: "neutral", label: "Neutral"},
+    {value: "agx", label: "AgX"},
+    {value: "aces", label: "ACES"},
+    {value: "reinhard", label: "Reinhard"},
+];
+
+export function ViewTransforms() {
+    const colors = useSceneColors();
+    const [toneMapping, setToneMapping] = useState<ToneMapping>("agx");
+    const [exposure, setExposure] = useState(0);
+    const live = useLatest({toneMapping, exposure});
+    return (
+        <DemoStage
+            controls={
+                <>
+                    <ControlSelect
+                        label="Tone mapping"
+                        value={toneMapping}
+                        options={VIEW_TRANSFORMS}
+                        onChange={setToneMapping}
+                    />
+                    <ControlSlider
+                        label="Exposure"
+                        value={exposure}
+                        onChange={setExposure}
+                        min={-3}
+                        max={3}
+                        step={0.25}
+                        format={(v) => `${v > 0 ? "+" : ""}${v} EV`}
+                    />
+                </>
+            }
+        >
+            <GlazeCanvas
+                label="Four saturated spheres and a glowing one on a floor, under a bright key light, through the chosen tone mapping"
+                setup={({orbitControls}) => {
+                    const scene = new Scene();
+                    const palette = paletteBinder(colors);
+                    palette.scene(scene);
+                    const camera = new PerspectiveCamera({fov: Math.PI / 4});
+                    orbitControls(camera, {distance: 8, elevation: 24, target: [0, 0.6, 0], spin: 6});
+                    scene.add(camera);
+                    scene.activeCamera = camera;
+                    // a hot key (5× white) and a soft fill: the lit sides go well above 1
+                    scene.add(
+                        palette.light(
+                            new DirectionalLight({direction: [-0.4, -1, -0.5], intensity: 5, castShadow: true}),
+                            (c) => c.key,
+                        ),
+                    );
+                    scene.add(
+                        palette.light(
+                            new DirectionalLight({direction: [0.6, -0.3, 0.6], intensity: 0.6}),
+                            (c) => c.fill,
+                        ),
+                    );
+                    scene.add(
+                        new Mesh(
+                            createPlane({width: 14, height: 14}),
+                            palette.material(new PBRMaterial({roughness: 0.9}), (c) => c.floor),
+                        ),
+                    );
+                    const ball = createIcosphere({radius: 0.55, subdivisions: 3});
+                    const paints: ((c: typeof colors.current) => string)[] = [
+                        (c) => c.hues.red,
+                        (c) => c.hues.yellow,
+                        (c) => c.hues.green,
+                        (c) => c.hues.blue,
+                    ];
+                    paints.forEach((pick, i) => {
+                        const mesh = new Mesh(ball, palette.material(new PBRMaterial({roughness: 0.35}), pick));
+                        vec3.set(mesh.position, (i - 2) * 1.4, 0.55, 0);
+                        scene.add(mesh);
+                    });
+                    const glow = new Mesh(
+                        ball,
+                        palette.emissive(new PBRMaterial({color: [0, 0, 0]}), (c) => c.accentFill, 6),
+                    );
+                    vec3.set(glow.position, 2 * 1.4, 0.55, 0);
+                    scene.add(glow);
+
+                    const blit = new BlitPass();
+                    const graph = new RenderGraph();
+                    const {color} = graph.addPass(new DeferredScenePass({scene}));
+                    graph.addPass(blit, {color}, {canvasSlot: "canvas"});
+                    return () => {
+                        palette.apply();
+                        blit.toneMapping = live.current.toneMapping;
+                        blit.exposure = live.current.exposure;
+                        return graph;
+                    };
+                }}
+            />
         </DemoStage>
     );
 }

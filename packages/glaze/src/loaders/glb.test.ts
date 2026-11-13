@@ -422,7 +422,7 @@ describe("planGltfMaterial", () => {
         assert.deepEqual(plan.skipped, ["occlusion"]);
     });
 
-    test("factors: metallic and roughness as-is, colors from linear to sRGB, emissive × strength", () => {
+    test("factors: metallic and roughness as-is, colors from linear to sRGB, emissive strength as intensity", () => {
         const plan = planGltfMaterial(
             materialGLB({
                 pbrMetallicRoughness: {baseColorFactor: [0.2, 0.5, 1, 1], metallicFactor: 0.3, roughnessFactor: 0.7},
@@ -436,7 +436,8 @@ describe("planGltfMaterial", () => {
         assert.equal(plan.options.metallic, 0.3);
         assert.equal(plan.options.roughness, 0.7);
         close(plan.options.color, [linearToSrgb(0.2), linearToSrgb(0.5), 1]);
-        close(plan.options.emissive, [linearToSrgb(0.2), 0, linearToSrgb(0.5), 0]);
+        close(plan.options.emissive!, [linearToSrgb(0.1), 0, linearToSrgb(0.25)]);
+        assert.equal(plan.options.emissiveIntensity, 2);
         assert.equal(plan.options.normalScale, 0.4);
         assert.equal(uri(plan.normalMap), "c.png");
     });
@@ -448,7 +449,8 @@ describe("planGltfMaterial", () => {
             color: plan.options.color,
             metallic: 1,
             roughness: 1,
-            emissive: [0, 0, 0, 0],
+            emissive: [0, 0, 0],
+            emissiveIntensity: 1,
             normalScale: 1,
             occlusionStrength: 1,
             opacity: 1,

@@ -1,4 +1,4 @@
-import {type ColorRgb, colorRgb, type PBRMaterial, type Scene, setColorRgb} from "@repraze/glaze";
+import {type ColorRgb, type PBRMaterial, type Scene, setColorRgb} from "@repraze/glaze";
 import {type ThemeContextValue, useResolvedTheme} from "@repraze/kernelkit/provider";
 import {type AccentName, allModes, createPalette} from "@repraze/termicolor";
 
@@ -133,9 +133,9 @@ export function paletteBinder(colors: {current: SceneColors}) {
             return material;
         },
         emissive<M extends PBRMaterial>(material: M, pick: ColorPick, intensity = 1): M {
+            material.emissiveIntensity = intensity;
             writes.push((c) => {
-                const [r, g, b] = colorRgb(pick(c));
-                material.emissive = [r * intensity, g * intensity, b * intensity, 1];
+                setColorRgb(material.emissive, pick(c));
                 material.markDirty();
             });
             return material;

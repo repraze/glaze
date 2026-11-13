@@ -1,6 +1,5 @@
 import {
     BlitPass,
-    colorRgb,
     createCube,
     createIcosphere,
     createPlane,
@@ -16,6 +15,7 @@ import {
     ray,
     RenderGraph,
     Scene,
+    setColorRgb,
     sphereCollider,
 } from "@repraze/glaze";
 import {vec3} from "gl-matrix";
@@ -378,12 +378,12 @@ export function PickDragOrbit() {
                         gemHitbox.collider = cfg.hitbox ? gemShape : null;
                         controls.damping = cfg.damping ? 0.15 : 0;
                         controls.update(delta);
-                        const [r, g, b] = colorRgb(colors.current.accentFill);
                         for (const item of items) {
                             const k = glow(item);
                             const key = `${k}:${colors.current.accentFill}`;
                             if (shown.get(item) !== key) {
-                                item.material.emissive = [r * k, g * k, b * k, 1];
+                                setColorRgb(item.material.emissive, colors.current.accentFill);
+                                item.material.emissiveIntensity = k;
                                 item.material.markDirty();
                                 shown.set(item, key);
                             }

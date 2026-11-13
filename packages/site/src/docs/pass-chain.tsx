@@ -119,9 +119,15 @@ export const doc = defineDoc({
                 {name: "input", type: "string", default: '"color"', description: "Name of the input slot to copy."},
                 {
                     name: "toneMapping",
-                    type: '"none" | "aces" | "reinhard"',
+                    type: '"none" | "neutral" | "agx" | "aces" | "reinhard"',
                     default: '"none"',
-                    description: "Applied before writing to the canvas.",
+                    description: "How light above 1 reaches the screen; a property, change it any frame.",
+                },
+                {
+                    name: "exposure",
+                    type: "number",
+                    default: "0",
+                    description: "Stops before tone mapping: +1 doubles the light. A property too.",
                 },
                 {
                     name: "inputColorSpace",
@@ -238,12 +244,9 @@ export function ChainDemo() {
                             }),
                         ]),
                     );
-                    const blits = Object.fromEntries(
-                        TONE_MAPPINGS.flatMap((t) => [
-                            [`color:${t.value}`, new BlitPass({input: "color", toneMapping: t.value})],
-                            [`output:${t.value}`, new BlitPass({input: "output", toneMapping: t.value})],
-                        ]),
-                    );
+                    // one blit per input name; tone mapping can change every frame
+                    const blitColor = new BlitPass({input: "color"});
+                    const blitOutput = new BlitPass({input: "output"});
 
                     return ({time}) => {
                         const c = colors.current;
@@ -253,14 +256,16 @@ export function ChainDemo() {
                         [c.accent, c.hues.cyan, c.hues.purple].forEach((hex, i) => tint(paints[i]!, hex));
                         balls.forEach((ball, i) => ball.setEuler(time * 0.3, time * (0.4 + i * 0.2), 0));
                         const {post, toneMapping} = live.current;
+                        blitColor.toneMapping = toneMapping;
+                        blitOutput.toneMapping = toneMapping;
                         const graph = new RenderGraph();
                         const {color} = graph.addPass(scenePass);
                         const postPass = postPasses[post];
                         if (postPass) {
                             const {output} = graph.addPass(postPass, {input0: color});
-                            graph.addPass(blits[`output:${toneMapping}`]!, {output}, {canvasSlot: "canvas"});
+                            graph.addPass(blitOutput, {output}, {canvasSlot: "canvas"});
                         } else {
-                            graph.addPass(blits[`color:${toneMapping}`]!, {color}, {canvasSlot: "canvas"});
+                            graph.addPass(blitColor, {color}, {canvasSlot: "canvas"});
                         }
                         return graph;
                     };
@@ -282,8 +287,10 @@ const POSTS: {value: PostId; label: string}[] = [
 
 const TONE_MAPPINGS: {value: ToneMapping; label: string}[] = [
     {value: "aces", label: "ACES"},
+    {value: "agx", label: "AgX"},
+    {value: "neutral", label: "Neutral"},
     {value: "reinhard", label: "Reinhard"},
-    {value: "none", label: "None (clamp)"},
+    {value: "none", label: "None (clip)"},
 ];
 
 const POST_SHADERS: Record<Exclude<PostId, "none">, string> = {

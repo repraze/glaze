@@ -1,6 +1,5 @@
 import {
     BlitPass,
-    colorRgb,
     createSphere,
     DeferredScenePass,
     DirectionalLight,
@@ -9,6 +8,7 @@ import {
     PerspectiveCamera,
     RenderGraph,
     Scene,
+    setColorRgb,
 } from "@repraze/glaze";
 import {vec3} from "gl-matrix";
 import {useState} from "react";
@@ -273,8 +273,8 @@ export function Inspector() {
                         tint(material, preset.color(c));
                         material.roughness = cfg.roughness;
                         material.metallic = cfg.metallic;
-                        const [r, g, b] = colorRgb(preset.emissive(c));
-                        material.emissive = [r * cfg.emission, g * cfg.emission, b * cfg.emission, 1];
+                        setColorRgb(material.emissive, preset.emissive(c));
+                        material.emissiveIntensity = cfg.emission;
                         const maps = sets.get(cfg.textures);
                         material.albedoMap = maps?.albedo ?? null;
                         material.normalMap = maps?.normal ?? null;
