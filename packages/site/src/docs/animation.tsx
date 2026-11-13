@@ -98,7 +98,7 @@ export const doc = defineDoc({
                 {
                     name: "morphWeights",
                     type: "Float32Array",
-                    description: "One weight per morph target of its geometry; the pass uses the first 8.",
+                    description: "One weight per morph target of its geometry; only non-zero ones cost anything.",
                 },
                 {
                     name: "geometry.morphTargets",

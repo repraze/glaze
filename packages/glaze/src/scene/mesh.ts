@@ -8,8 +8,13 @@ export class Mesh extends Entity {
     castShadow: boolean;
     receiveShadow: boolean;
     /**
+     * Skipped when its bounds are outside the camera's view (default true). Turn it off for a mesh whose vertices
+     * a custom shader moves beyond its geometry's bounds.
+     */
+    frustumCulled = true;
+    /**
      * How much of each of its geometry's morph targets this mesh adds (0..1 usually), one per target. glTF
-     * animations drive it; set it yourself for blend shapes. The pass reads the first 8.
+     * animations drive it; set it yourself for blend shapes. Only targets with a non-zero weight cost anything.
      */
     morphWeights: Float32Array;
 

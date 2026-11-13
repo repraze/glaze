@@ -17,25 +17,28 @@ import type {Texture, TextureSampling, WrapMode} from "../texture";
 
 // ─── WGSL shaders ─────────────────────────────────────────────────────────────
 
-/** The per-mesh uniforms (192 bytes), shared by every mesh shader. */
 const IDENTITY = mat4.create();
 
+/** The per-mesh uniforms (160 bytes), shared by every mesh shader. */
 const MODEL_UNIFORMS_WGSL = /* wgsl */ `
 struct ModelUniforms {
     model:        mat4x4<f32>,
     normalMatrix: mat4x4<f32>,
     flags:        vec4<f32>,   // x = receiveShadow
-    morph:        vec4<f32>,   // x = morph targets, y = vertices
-    morphWeights: array<vec4<f32>, 2>,
+    morph:        vec4<f32>,   // x = morph targets with a weight this frame, y = vertices
 };
 `;
 
+const MODEL_UNIFORMS_SIZE = 160;
+
 /**
  * Morph targets: per target and vertex, a position and a normal delta (group 1 binding 2), added by the mesh's
- * weights. Before skinning, as glTF defines.
+ * weights. Before skinning, as glTF defines. Only targets with a weight this frame are listed (binding 3, as
+ * target index and weight), so a face rig with dozens of shapes costs what the active ones do.
  */
 const MORPH_WGSL = /* wgsl */ `
 @group(1) @binding(2) var<storage, read> morphDeltas: array<vec4<f32>>;
+@group(1) @binding(3) var<storage, read> morphActive: array<vec2<f32>>;
 
 struct Morphed {
     position: vec3<f32>,
@@ -46,13 +49,11 @@ fn applyMorphs(vertex: u32, position: vec3<f32>, normal: vec3<f32>) -> Morphed {
     var out = Morphed(position, normal);
     let count    = u32(model.morph.x);
     let vertices = u32(model.morph.y);
-    for (var t = 0u; t < count; t++) {
-        let w = model.morphWeights[t / 4u][t % 4u];
-        if (w != 0.0) {
-            let at = (t * vertices + vertex) * 2u;
-            out.position += morphDeltas[at].xyz * w;
-            out.normal   += morphDeltas[at + 1u].xyz * w;
-        }
+    for (var i = 0u; i < count; i++) {
+        let pair = morphActive[i]; // target index, weight
+        let at = (u32(pair.x) * vertices + vertex) * 2u;
+        out.position += morphDeltas[at].xyz * pair.y;
+        out.normal   += morphDeltas[at + 1u].xyz * pair.y;
     }
     return out;
 }
@@ -1114,6 +1115,12 @@ function destroyGeometryResources(res: GeometryGPUResources): void {
     res.indexBuffer.destroy();
 }
 
+function destroyMeshResources(res: MeshGPUResources): void {
+    res.modelBuffer.destroy();
+    res.jointBuffer?.destroy();
+    res.morphWeightBuffer?.destroy();
+}
+
 function destroyMaterialResources(res: MaterialGPUResources): void {
     res.buffer.destroy();
 }
@@ -1133,6 +1140,8 @@ interface MeshGPUResources {
     /** Skinned meshes: joint matrices (storage), sized for `jointCount`. */
     jointBuffer: GPUBuffer | null;
     jointCount: number;
+    /** Morphed meshes: this frame's active (target index, weight) pairs (storage). */
+    morphWeightBuffer: GPUBuffer | null;
     /** Drawn with its geometry's morph targets. */
     morphed: boolean;
     /** This frame's world transform mirrors (set with the model uniforms). */
@@ -1306,10 +1315,13 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     // Per-frame scratch, reused: no allocation per mesh per frame
     private readonly opaqueDraws: {mesh: Mesh; material: PBRMaterial; features: GBufferFeatures; key: string}[] = [];
     private readonly blendDraws: {mesh: Mesh; depth: number}[] = [];
-    private readonly modelData = new Float32Array(48);
+    private readonly modelData = new Float32Array(MODEL_UNIFORMS_SIZE / 4);
+    private morphPairs = new Float32Array(16);
     private readonly normalMatrix = mat4.create();
     private readonly tmpCenter = vec3.create();
     private readonly tmpEye = vec3.create();
+    /** This frame's camera view-projection, for culling. */
+    private readonly viewProjection = mat4.create();
     private readonly materialScratch = new Float32Array(MATERIAL_BUFFER_SIZE / 4);
     private readonly tmpForward = vec3.create();
 
@@ -1374,6 +1386,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         }
 
         this.scene.updateWorldMatrices();
+        // the camera may be outside the scene's tree (never added): its world matrix comes from its own parents
+        const activeCamera = this.scene.activeCamera;
+        activeCamera?.computeWorldMatrix(activeCamera.worldMatrix);
 
         const visible = this.scene.activeCamera?.visibleLayers ?? 0xffffffff;
         const meshes = this.scene.collectMeshes().filter((m) => (m.layers & visible) !== 0);
@@ -1424,12 +1439,17 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         // depth along the view axis (not distance): right for orthographic cameras and wide panes alike
         const w = camera?.worldMatrix;
         const forward = w ? vec3.set(this.tmpForward, -w[8]!, -w[9]!, -w[10]!) : vec3.set(this.tmpForward, 0, 0, -1);
+        const culling = camera !== null;
         for (const mesh of meshes) {
             if (!(mesh.material instanceof PBRMaterial)) {
                 continue;
             }
+            // outside the camera's view: not drawn (its shadow still is, by the shadow passes' own culling)
+            const radius = this.meshBounds(mesh, this.tmpCenter);
+            if (culling && mesh.frustumCulled && !sphere.inFrustum(this.tmpCenter, radius, this.viewProjection)) {
+                continue;
+            }
             if (mesh.material.alphaMode === "blend") {
-                this.meshBounds(mesh, this.tmpCenter);
                 blend.push({mesh, depth: vec3.dot(vec3.subtract(this.tmpCenter, this.tmpCenter, eye), forward)});
             } else {
                 const mirrored = this.meshCache.get(mesh)?.mirrored ?? false;
@@ -1470,10 +1490,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         for (const b of this.pointShadowFaceBuffers) {
             b.destroy();
         }
-        for (const r of this.meshCache.values()) {
-            r.modelBuffer.destroy();
-            r.jointBuffer?.destroy();
-        }
+        this.meshCache.forEach(destroyMeshResources);
         this.meshCache.clear();
         this.materialCache.forEach(destroyMaterialResources);
         this.materialCache.clear();
@@ -1716,13 +1733,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                           ]
                         : []),
                     ...(morphed
-                        ? [
-                              {
-                                  binding: 2,
-                                  visibility: GPUShaderStage.VERTEX,
-                                  buffer: {type: "read-only-storage" as const},
-                              },
-                          ]
+                        ? [2, 3].map((binding) => ({
+                              binding,
+                              visibility: GPUShaderStage.VERTEX,
+                              buffer: {type: "read-only-storage" as const},
+                          }))
                         : []),
                 ],
             });
@@ -2383,6 +2398,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const camPos = camera ? mat4.getTranslation(vec3.create(), camera.worldMatrix) : vec3.create();
 
         mat4.invert(this.currentInvVP, vpMatrix);
+        mat4.copy(this.viewProjection, vpMatrix);
 
         const data = new Float32Array(208 / 4);
         data.set(viewMatrix, 0);
@@ -2414,14 +2430,28 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         data.set(model, 0);
         data.set(normalMatrix, 16);
         data[32] = mesh.receiveShadow ? 1.0 : 0.0;
-        // morph targets: count (up to 8), vertices, then the weights
-        const targets = Math.min(mesh.geometry.morphTargets?.length ?? 0, 8);
-        data[36] = targets;
-        data[37] = mesh.geometry.vertexCount;
-        data.fill(0, 40, 48);
-        for (let t = 0; t < targets; t++) {
-            data[40 + t] = mesh.morphWeights[t] ?? 0;
+        // morph targets: the ones with a weight, as (index, weight) pairs; their count and the vertex count here
+        let active = 0;
+        if (res.morphWeightBuffer !== null) {
+            const targets = mesh.geometry.morphTargets!.length;
+            const pairs =
+                this.morphPairs.length >= targets * 2
+                    ? this.morphPairs
+                    : (this.morphPairs = new Float32Array(targets * 2));
+            for (let t = 0; t < targets; t++) {
+                const w = mesh.morphWeights[t] ?? 0;
+                if (w !== 0) {
+                    pairs[active * 2] = t;
+                    pairs[active * 2 + 1] = w;
+                    active++;
+                }
+            }
+            if (active > 0) {
+                this.device.queue.writeBuffer(res.morphWeightBuffer, 0, pairs, 0, active * 2);
+            }
         }
+        data[36] = active;
+        data[37] = mesh.geometry.vertexCount;
         this.device.queue.writeBuffer(res.modelBuffer, 0, data);
     }
 
@@ -2643,8 +2673,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 continue;
             }
             // first draw, or its geometry or skinning changed
-            res?.modelBuffer.destroy();
-            res?.jointBuffer?.destroy();
+            if (res !== undefined) {
+                destroyMeshResources(res);
+            }
             this.meshCache.set(mesh, this.createMeshResources(mesh, skinned));
         }
     }
@@ -2725,7 +2756,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const geo = this.geometryResources(mesh.geometry);
         const modelBuffer = device.createBuffer({
             label: "Mesh:model",
-            size: 192,
+            size: MODEL_UNIFORMS_SIZE,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         const jointCount = skinned ? (mesh as SkinnedMesh).skin!.joints.length : 0;
@@ -2737,13 +2768,26 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
               })
             : null;
         const morphed = geo.morphBuffer !== null;
+        // the active (target, weight) pairs: room for every target
+        const morphWeightBuffer = morphed
+            ? device.createBuffer({
+                  label: "Mesh:morphWeights",
+                  size: Math.max(1, mesh.geometry.morphTargets!.length) * 8,
+                  usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+              })
+            : null;
         const modelBindGroup = device.createBindGroup({
             label: "Mesh:modelBindGroup",
             layout: this.modelLayout(jointBuffer !== null, morphed),
             entries: [
                 {binding: 0, resource: {buffer: modelBuffer}},
                 ...(jointBuffer ? [{binding: 1, resource: {buffer: jointBuffer}}] : []),
-                ...(morphed ? [{binding: 2, resource: {buffer: geo.morphBuffer!}}] : []),
+                ...(morphed
+                    ? [
+                          {binding: 2, resource: {buffer: geo.morphBuffer!}},
+                          {binding: 3, resource: {buffer: morphWeightBuffer!}},
+                      ]
+                    : []),
             ],
         });
         return {
@@ -2758,6 +2802,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             modelBindGroup,
             jointBuffer,
             jointCount,
+            morphWeightBuffer,
             morphed,
             mirrored: false,
         };
@@ -2863,8 +2908,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const old = this.frame - EVICT_AFTER_FRAMES;
         for (const [mesh, res] of this.meshCache) {
             if (res.lastFrame < old) {
-                res.modelBuffer.destroy();
-                res.jointBuffer?.destroy();
+                destroyMeshResources(res);
                 this.meshCache.delete(mesh);
             }
         }
@@ -2886,7 +2930,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private uploadJoints(mesh: SkinnedMesh, res: MeshGPUResources): void {
         const matrices = mesh.updateJointMatrices();
         if (matrices.length / 16 !== res.jointCount) {
-            res.jointBuffer?.destroy();
+            destroyMeshResources(res);
             this.meshCache.set(mesh, this.createMeshResources(mesh, true));
             res = this.meshCache.get(mesh)!;
         }
@@ -2906,7 +2950,14 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 m[8]! * m[8]! + m[9]! * m[9]! + m[10]! * m[10]!,
             ),
         );
-        const reach = mesh.geometry.morphTargets !== undefined ? mesh.geometry.morphReach : 0;
+        // targets add up: weighted reaches bound how far this frame's blend moves a vertex
+        let reach = 0;
+        if (mesh.geometry.morphTargets !== undefined) {
+            const reaches = mesh.geometry.morphReaches;
+            for (let t = 0; t < reaches.length; t++) {
+                reach += Math.abs(mesh.morphWeights[t] ?? 0) * reaches[t]!;
+            }
+        }
         if (!isSkinned(mesh)) {
             vec3.transformMat4(center, bounds.center as vec3, m);
             return (bounds.radius + reach) * scale;

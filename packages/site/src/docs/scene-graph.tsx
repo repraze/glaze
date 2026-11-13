@@ -136,6 +136,12 @@ export const doc = defineDoc({
                 },
                 {name: "castShadow", type: "boolean", default: "true"},
                 {name: "receiveShadow", type: "boolean", default: "true"},
+                {
+                    name: "frustumCulled",
+                    type: "boolean",
+                    default: "true",
+                    description: "Skipped when its bounds are outside the camera's view.",
+                },
             ],
         },
     ],

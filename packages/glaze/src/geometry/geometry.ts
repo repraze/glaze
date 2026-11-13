@@ -143,21 +143,26 @@ export class Geometry {
 
     /** How far any morph target moves any vertex: what bounds grow by when weights are up to 1. */
     get morphReach(): number {
-        if (this._morphReach !== null) {
-            return this._morphReach;
-        }
-        let reach = 0;
-        for (const target of this.morphTargets ?? []) {
-            for (let i = 0; i < target.positions.length; i += 3) {
-                reach = Math.max(
-                    reach,
-                    Math.hypot(target.positions[i]!, target.positions[i + 1]!, target.positions[i + 2]!),
-                );
-            }
-        }
-        return (this._morphReach = reach);
+        return Math.max(0, ...this.morphReaches);
     }
-    private _morphReach: number | null = null;
+
+    /** Per morph target, the furthest it moves a vertex at weight 1. */
+    get morphReaches(): readonly number[] {
+        if (this._morphReach === null) {
+            this._morphReach = (this.morphTargets ?? []).map((target) => {
+                let reach = 0;
+                for (let i = 0; i < target.positions.length; i += 3) {
+                    reach = Math.max(
+                        reach,
+                        Math.hypot(target.positions[i]!, target.positions[i + 1]!, target.positions[i + 2]!),
+                    );
+                }
+                return reach;
+            });
+        }
+        return this._morphReach;
+    }
+    private _morphReach: number[] | null = null;
 
     /**
      * Call after editing the vertex data (positions, normals, uvs, tangents, joints, weights, morph targets or
