@@ -21,7 +21,7 @@ export function DemoStage({
 }) {
     return (
         <div className="flex flex-col xl:flex-row">
-            <div className={cn("relative h-80 min-w-0 flex-1 sm:h-96 xl:h-auto xl:min-h-96", className)}>
+            <div className={cn("relative h-80 min-w-0 sm:h-96 xl:h-auto xl:min-h-96 xl:flex-1", className)}>
                 {children}
             </div>
             {controls ? (
