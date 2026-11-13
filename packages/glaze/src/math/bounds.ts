@@ -220,4 +220,36 @@ export const sphere = {
         out.radius = s.radius * Math.sqrt(Math.max(sx, sy, sz));
         return out;
     },
+
+    /**
+     * False when the sphere is entirely outside the frustum of a view-projection matrix (WebGPU's 0..1 depth):
+     * for culling. Conservative near the frustum's corners (it may say true for a sphere just outside one).
+     */
+    inFrustum(center: ReadonlyVec3, radius: number, m: ReadonlyMat4): boolean {
+        const x = center[0], y = center[1], z = center[2]; // prettier-ignore
+        // rows of m (column-major): r0 = (m0 m4 m8 m12), ...; planes after Gribb & Hartmann
+        for (let p = 0; p < 6; p++) {
+            const row = p >> 1; // 0: x, 1: y, 2: z
+            let a: number, b: number, c: number, d: number;
+            if (p === 4) {
+                // near: z >= 0
+                a = m[2]!;
+                b = m[6]!;
+                c = m[10]!;
+                d = m[14]!;
+            } else {
+                const sign = p & 1 ? -1 : 1; // left/bottom/(far) add, right/top subtract
+                const k = p === 5 ? 2 : row;
+                const s = p === 5 ? -1 : sign;
+                a = m[3]! + s * m[k]!;
+                b = m[7]! + s * m[4 + k]!;
+                c = m[11]! + s * m[8 + k]!;
+                d = m[15]! + s * m[12 + k]!;
+            }
+            if (a * x + b * y + c * z + d < -radius * Math.hypot(a, b, c)) {
+                return false;
+            }
+        }
+        return true;
+    },
 };

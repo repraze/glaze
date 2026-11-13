@@ -3,6 +3,7 @@ import {mat4, vec3} from "gl-matrix";
 import {COLOR_WGSL, type ColorSpace, srgbToLinear} from "../color";
 import type {Geometry} from "../geometry/geometry";
 import {MATERIAL_BUFFER_SIZE, packMaterialUniforms, PBRMaterial} from "../material/material";
+import {sphere} from "../math/bounds";
 import {isMirrored} from "../math/transform";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
@@ -493,6 +494,17 @@ interface ShadowSizes {
 
 const POINT_SHADOW_MATRICES_SIZE = MAX_POINT * 6 * 64;
 
+/** Texels each cube face reaches past its 90° edge: the widest filter (32) plus the bilinear taps. */
+const POINT_GUARD_TEXELS = 34;
+
+/**
+ * A cube face's half-width in tan units (1 is exactly 90°). Faces overlap by a guard band, so a filter near an
+ * edge still reads real depths from its own face instead of clamped texels from the edge.
+ */
+function pointFaceScale(size: number): number {
+    return 1 / Math.max(1 - (2 * POINT_GUARD_TEXELS) / size, 0.5);
+}
+
 const CUBE_FACE_DIRS: {dir: [number, number, number]; up: [number, number, number]}[] = [
     {dir: [1, 0, 0], up: [0, -1, 0]},
     {dir: [-1, 0, 0], up: [0, -1, 0]},
@@ -842,7 +854,8 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let attn    = clamp(1.0 - dist / pl.position.w, 0.0, 1.0);
         var shadow  = 1.0;
         if (pl.flags.x > 0.5 && receiveShadow > 0.0 && attn > 0.0 && dot(N, L) > 0.0) {
-            let lf    = worldPos - pl.position.xyz;
+            // the face is chosen by where the lookup lands (off the surface), not by the surface point itself
+            let lf    = shadowLookup(worldPos, N, L, 2.0 * dist * ${pointFaceScale(sizes.point).toFixed(6)} / f32(${sizes.point}), pl.shadowBias) - pl.position.xyz;
             let absLF = abs(lf);
             var faceIdx: i32;
             if (absLF.x >= absLF.y && absLF.x >= absLF.z) {
@@ -853,8 +866,8 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
                 faceIdx = select(5, 4, lf.z > 0.0);
             }
             let layer = i32(i) * 6 + faceIdx;
-            // a 90° face: a texel spans 2 · depth / size, the depth being the largest axis
-            let texel = 2.0 * max(absLF.x, max(absLF.y, absLF.z)) / f32(${sizes.point});
+            // a face a little over 90° wide: a texel spans 2 · scale · depth / size, the depth being the largest axis
+            let texel = 2.0 * ${pointFaceScale(sizes.point).toFixed(6)} * max(absLF.x, max(absLF.y, absLF.z)) / f32(${sizes.point});
             let raw   = perspectiveShadow(pointShadowMaps, layer, pointShadowMatrices.matrices[layer], worldPos, N, L, texel, pl.shadow, pl.shadowBias, f32(${sizes.point}), rotation);
             shadow    = mix(1.0, raw, receiveShadow);
         }
@@ -2055,7 +2068,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                         depthStoreOp: "store",
                     },
                 });
-                drawShadowMeshes(pass, this.pointShadowFaceBGs[slot]!);
+                // only casters this face (a frustum out to the light's range) can see
+                const face = faceMatrices[f]!;
+                drawShadowMeshes(pass, this.pointShadowFaceBGs[slot]!, (caster) =>
+                    sphere.inFrustum(caster.center, caster.radius, face),
+                );
                 pass.end();
             }
         }
@@ -2076,7 +2093,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     depthStoreOp: "store",
                 },
             });
-            drawShadowMeshes(pass, this.spotShadowLightBGs[i]!);
+            drawShadowMeshes(pass, this.spotShadowLightBGs[i]!, (caster) =>
+                sphere.inFrustum(caster.center, caster.radius, lsMatrix),
+            );
             pass.end();
         }
     }
@@ -2443,7 +2462,13 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             const view = mat4.create();
             mat4.lookAt(view, eye, center, vec3.fromValues(up[0], up[1], up[2]));
             const proj = mat4.create();
-            mat4.perspectiveZO(proj, Math.PI / 2, 1.0, SHADOW_NEAR, light.range);
+            mat4.perspectiveZO(
+                proj,
+                2 * Math.atan(pointFaceScale(this.shadowSizes.point)),
+                1,
+                SHADOW_NEAR,
+                light.range,
+            );
             const vp = mat4.create();
             mat4.multiply(vp, proj, view);
             return vp;

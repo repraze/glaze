@@ -103,3 +103,20 @@ describe("Geometry bounds", () => {
         assert.ok(Math.abs(g.boundingSphere.radius - 0.75) < 1e-5);
     });
 });
+
+describe("sphere.inFrustum", () => {
+    const proj = mat4.perspectiveZO(mat4.create(), Math.PI / 2, 1, 0.1, 10);
+    const view = mat4.lookAt(mat4.create(), [0, 0, 0], [0, 0, -1], [0, 1, 0]);
+    const vp = mat4.multiply(mat4.create(), proj, view);
+    test("inside, touching and outside each plane", () => {
+        assert.ok(sphere.inFrustum([0, 0, -5], 0.1, vp));
+        assert.ok(!sphere.inFrustum([0, 0, 5], 1, vp)); // behind
+        assert.ok(!sphere.inFrustum([0, 0, -12], 1, vp)); // past far
+        assert.ok(sphere.inFrustum([0, 0, -10.5], 1, vp)); // straddles far
+        assert.ok(!sphere.inFrustum([8, 0, -5], 1, vp)); // right of the 45° side
+        assert.ok(sphere.inFrustum([5.5, 0, -5], 1, vp)); // straddles it
+        assert.ok(!sphere.inFrustum([0, -8, -5], 1, vp));
+        assert.ok(!sphere.inFrustum([-8, 0, -5], 1, vp));
+        assert.ok(!sphere.inFrustum([0, 8, -5], 1, vp));
+    });
+});
