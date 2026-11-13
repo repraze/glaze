@@ -3,6 +3,7 @@ import {mat4, vec3} from "gl-matrix";
 import {COLOR_WGSL, type ColorSpace, srgbToLinear} from "../color";
 import type {Geometry} from "../geometry/geometry";
 import {PBRMaterial} from "../material/material";
+import {isMirrored} from "../math/transform";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 import type {Camera} from "../scene/camera";
@@ -15,6 +16,8 @@ import {SkinnedMesh} from "../scene/skin";
 // ─── WGSL shaders ─────────────────────────────────────────────────────────────
 
 /** The per-mesh uniforms (192 bytes), shared by every mesh shader. */
+const IDENTITY = mat4.create();
+
 const MODEL_UNIFORMS_WGSL = /* wgsl */ `
 struct ModelUniforms {
     model:        mat4x4<f32>,
@@ -159,6 +162,8 @@ export interface GBufferFeatures {
     skinned?: boolean;
     /** Has morph targets (blend shapes), weighted by mesh.morphWeights. */
     morphed?: boolean;
+    /** Its world transform mirrors (negative determinant): triangles wind clockwise, tangent handedness flips. */
+    mirrored?: boolean;
 }
 
 /** A mesh drawn with skinning: a SkinnedMesh with a skin, whose geometry has joints and weights. */
@@ -171,7 +176,7 @@ function isMorphed(mesh: Mesh): boolean {
     return mesh.geometry.morphTargets !== undefined;
 }
 
-function getGBufferFeatures(mat: PBRMaterial, skinned = false, morphed = false): GBufferFeatures {
+function getGBufferFeatures(mat: PBRMaterial, skinned = false, morphed = false, mirrored = false): GBufferFeatures {
     return {
         parallaxMapping: mat.heightMap != null,
         normalMapping: mat.normalMap != null,
@@ -179,7 +184,13 @@ function getGBufferFeatures(mat: PBRMaterial, skinned = false, morphed = false):
         doubleSided: mat.doubleSided,
         skinned,
         morphed,
+        mirrored,
     };
+}
+
+/** A mirrored transform turns counter-clockwise triangles clockwise on screen: its front faces wind the other way. */
+function frontFace(mirrored: boolean | undefined): GPUFrontFace {
+    return mirrored ? "cw" : "ccw";
 }
 
 function featureKey(f: GBufferFeatures): string {
@@ -189,7 +200,8 @@ function featureKey(f: GBufferFeatures): string {
         (f.alpha === "mask" ? "M" : f.alpha === "blend" ? "B" : "") +
         (f.doubleSided ? "2" : "") +
         (f.skinned ? "S" : "") +
-        (f.morphed ? "T" : "")
+        (f.morphed ? "T" : "") +
+        (f.mirrored ? "X" : "")
     );
 }
 
@@ -294,7 +306,8 @@ fn vs_main(input: VertexInput) -> VertexOutput {${
     output.uv          = input.uv;
     // a tangent lies in the surface: it follows the model matrix (not the normal matrix) under non-uniform scale
     let worldTangentXYZ = normalize((model.model * vec4<f32>(tangent, 0.0)).xyz);
-    output.worldTangent = vec4<f32>(worldTangentXYZ, input.tangent.w);
+    // a mirror flips the handedness of the frame (cross(N, T) turns the other way)
+    output.worldTangent = vec4<f32>(worldTangentXYZ, input.tangent.w${f.mirrored ? " * -1.0" : ""});
     return output;
 }
 
@@ -995,6 +1008,8 @@ interface MeshGPUResources {
     jointCount: number;
     /** Drawn with its geometry's morph targets. */
     morphed: boolean;
+    /** This frame's world transform mirrors (set with the model uniforms). */
+    mirrored: boolean;
 }
 
 /** The interleaved vertex buffer (position, normal, uv, tangent; 48 bytes), with only `locations` read. */
@@ -1145,6 +1160,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private readonly modelData = new Float32Array(48);
     private readonly normalMatrix = mat4.create();
     private readonly tmpCenter = vec3.create();
+    private readonly tmpEye = vec3.create();
+    private readonly tmpForward = vec3.create();
 
     // Cached GPU resources: vertex data per geometry (shared), uniforms per mesh
     private geometryCache = new Map<Geometry, GeometryGPUResources>();
@@ -1215,10 +1232,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         for (const mesh of meshes) {
             const res = this.meshCache.get(mesh);
             if (res) {
-                this.uploadModelUniforms(mesh, res.modelBuffer);
                 if (res.jointBuffer !== null) {
-                    this.uploadJoints(mesh as SkinnedMesh, res);
+                    this.uploadJoints(mesh as SkinnedMesh, res); // first: the model uniforms read them
                 }
+                this.uploadModelUniforms(this.meshCache.get(mesh)!, mesh);
             }
         }
         this.uploadCameraUniforms(this.scene.activeCamera, ctx.width, ctx.height);
@@ -1238,7 +1255,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
     /**
      * Opaque and masked meshes go to the G-buffer, grouped by pipeline so each variant is bound once. See-through
-     * ("blend") meshes are drawn after lighting, farthest first, by the distance to their bounds' center.
+     * ("blend") meshes are drawn after lighting, farthest first, by their bounds' center depth along the view.
      */
     private sortDraws(meshes: Mesh[]): void {
         const opaque = this.opaqueDraws;
@@ -1246,16 +1263,20 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         opaque.length = 0;
         blend.length = 0;
         const camera = this.scene.activeCamera;
-        const eye = camera ? mat4.getTranslation(vec3.create(), camera.worldMatrix) : vec3.create();
+        const eye = camera ? mat4.getTranslation(this.tmpEye, camera.worldMatrix) : vec3.set(this.tmpEye, 0, 0, 0);
+        // depth along the view axis (not distance): right for orthographic cameras and wide panes alike
+        const w = camera?.worldMatrix;
+        const forward = w ? vec3.set(this.tmpForward, -w[8]!, -w[9]!, -w[10]!) : vec3.set(this.tmpForward, 0, 0, -1);
         for (const mesh of meshes) {
             if (!(mesh.material instanceof PBRMaterial)) {
                 continue;
             }
             if (mesh.material.alphaMode === "blend") {
                 this.meshBounds(mesh, this.tmpCenter);
-                blend.push({mesh, depth: vec3.squaredDistance(this.tmpCenter, eye)});
+                blend.push({mesh, depth: vec3.dot(vec3.subtract(this.tmpCenter, this.tmpCenter, eye), forward)});
             } else {
-                const features = getGBufferFeatures(mesh.material, isSkinned(mesh), isMorphed(mesh));
+                const mirrored = this.meshCache.get(mesh)?.mirrored ?? false;
+                const features = getGBufferFeatures(mesh.material, isSkinned(mesh), isMorphed(mesh), mirrored);
                 opaque.push({mesh, material: mesh.material, features, key: featureKey(features)});
             }
         }
@@ -1564,13 +1585,19 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     }
 
     /** The shadow pipeline for a caster: depth only when opaque, alpha-tested for mask / blend, skinned or not. */
-    private shadowPipelineFor(material: PBRMaterial | null, skinned = false, morphed = false): GPURenderPipeline {
+    private shadowPipelineFor(
+        material: PBRMaterial | null,
+        skinned = false,
+        morphed = false,
+        mirrored = false,
+    ): GPURenderPipeline {
         const alpha = material?.alphaMode ?? "opaque";
         const doubleSided = material?.doubleSided ?? false;
-        if (alpha === "opaque" && !doubleSided && !skinned && !morphed) {
+        if (alpha === "opaque" && !doubleSided && !skinned && !morphed && !mirrored) {
             return this.shadowPipeline;
         }
-        const key = alpha + (doubleSided ? "2" : "") + (skinned ? "S" : "") + (morphed ? "T" : "");
+        const key =
+            alpha + (doubleSided ? "2" : "") + (skinned ? "S" : "") + (morphed ? "T" : "") + (mirrored ? "X" : "");
         let pipeline = this.shadowPipelines.get(key);
         if (pipeline === undefined) {
             const modelLayout = this.modelLayout(skinned, morphed);
@@ -1594,7 +1621,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 },
                 ...(opaque ? {} : {fragment: {module, entryPoint: "fs_shadow", targets: []}}),
                 depthStencil: SHADOW_DEPTH_STATE,
-                primitive: {topology: "triangle-list", cullMode: doubleSided ? "none" : "back"},
+                primitive: {
+                    topology: "triangle-list",
+                    cullMode: doubleSided ? "none" : "back",
+                    frontFace: frontFace(mirrored),
+                },
             });
             this.shadowPipelines.set(key, pipeline);
         }
@@ -1632,7 +1663,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                         },
                     ],
                 },
-                primitive: {topology: "triangle-list", cullMode},
+                primitive: {topology: "triangle-list", cullMode, frontFace: frontFace(features.mirrored)},
                 // tested against the opaque scene, but not written: see-through surfaces don't hide each other
                 depthStencil: {format: "depth24plus", depthWriteEnabled: false, depthCompare: "less"},
             });
@@ -1669,7 +1700,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                         {format: "rgba16float"},
                     ],
                 },
-                primitive: {topology: "triangle-list", cullMode: features.doubleSided ? "none" : "back"},
+                primitive: {
+                    topology: "triangle-list",
+                    cullMode: features.doubleSided ? "none" : "back",
+                    frontFace: frontFace(features.mirrored),
+                },
                 depthStencil: {
                     format: "depth24plus",
                     depthWriteEnabled: true,
@@ -1806,7 +1841,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 continue;
             }
             const material = mesh.material instanceof PBRMaterial ? mesh.material : null;
-            const pipeline = this.shadowPipelineFor(material, res.jointBuffer !== null, res.morphed);
+            const pipeline = this.shadowPipelineFor(material, res.jointBuffer !== null, res.morphed, res.mirrored);
             let rank = ranks.get(pipeline);
             if (rank === undefined) {
                 rank = ranks.size;
@@ -2140,7 +2175,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             if (!res) {
                 continue;
             }
-            const features = getGBufferFeatures(material, res.jointBuffer !== null, res.morphed);
+            const features = getGBufferFeatures(material, res.jointBuffer !== null, res.morphed, res.mirrored);
             pass.setBindGroup(1, res.modelBindGroup);
             pass.setBindGroup(
                 2,
@@ -2192,11 +2227,19 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         this.device.queue.writeBuffer(this.cameraBuffer, 0, data);
     }
 
-    private uploadModelUniforms(mesh: Mesh, buffer: GPUBuffer): void {
-        const model = mesh.worldMatrix;
+    private uploadModelUniforms(res: MeshGPUResources, mesh: Mesh): void {
+        // A skinned mesh's joint matrices are already in world space (glTF: the skin, not the mesh node, places
+        // the vertices), so its model matrix is identity. Its mirroring is its joints' (the first stands for all).
+        const skinned = res.jointBuffer !== null;
+        const model = skinned ? IDENTITY : mesh.worldMatrix;
         const normalMatrix = this.normalMatrix;
-        mat4.invert(normalMatrix, model);
+        // a collapsed (zero-scale) transform has no inverse: identity rather than the previous mesh's matrix
+        if (mat4.invert(normalMatrix, model) === null) {
+            mat4.identity(normalMatrix);
+        }
         mat4.transpose(normalMatrix, normalMatrix);
+        const joints = (mesh as SkinnedMesh).jointMatrices;
+        res.mirrored = skinned ? joints.length >= 16 && isMirrored(joints) : isMirrored(model);
 
         const data = this.modelData;
         data.set(model, 0);
@@ -2210,7 +2253,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         for (let t = 0; t < targets; t++) {
             data[40 + t] = mesh.morphWeights[t] ?? 0;
         }
-        this.device.queue.writeBuffer(buffer, 0, data);
+        this.device.queue.writeBuffer(res.modelBuffer, 0, data);
     }
 
     private uploadLightingUniforms(
@@ -2505,6 +2548,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             jointBuffer,
             jointCount,
             morphed,
+            mirrored: false,
         };
     }
 
@@ -2515,7 +2559,6 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             res.jointBuffer?.destroy();
             this.meshCache.set(mesh, this.createMeshResources(mesh, true));
             res = this.meshCache.get(mesh)!;
-            this.uploadModelUniforms(mesh, res.modelBuffer);
         }
         if (res.jointBuffer !== null && matrices.length > 0) {
             this.device.queue.writeBuffer(res.jointBuffer, 0, matrices as Float32Array<ArrayBuffer>);
@@ -2533,27 +2576,42 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 m[8]! * m[8]! + m[9]! * m[9]! + m[10]! * m[10]!,
             ),
         );
-        const reach = mesh.geometry.morphTargets !== undefined ? mesh.geometry.morphReach * scale : 0;
+        const reach = mesh.geometry.morphTargets !== undefined ? mesh.geometry.morphReach : 0;
         if (!isSkinned(mesh)) {
             vec3.transformMat4(center, bounds.center as vec3, m);
-            return bounds.radius * scale + reach;
+            return (bounds.radius + reach) * scale;
         }
-        // the bind-pose sphere no longer holds once joints move: take the joints' spread, padded by the mesh's
-        // own radius (a vertex sits within it of some joint)
-        const joints = mesh.skin!.joints;
+        // Each joint matrix carries the bind-pose sphere somewhere; a vertex is a weighted blend of where its
+        // joints carry it, so it lies within the union of those spheres.
+        const matrices = mesh.jointMatrices;
+        const count = matrices.length / 16;
+        const c = bounds.center;
         vec3.set(center, 0, 0, 0);
-        for (const joint of joints) {
-            const w = joint.worldMatrix;
-            center[0] += w[12]!;
-            center[1] += w[13]!;
-            center[2] += w[14]!;
+        for (let j = 0; j < count; j++) {
+            const o = j * 16;
+            center[0] += matrices[o]! * c[0] + matrices[o + 4]! * c[1] + matrices[o + 8]! * c[2] + matrices[o + 12]!;
+            center[1] +=
+                matrices[o + 1]! * c[0] + matrices[o + 5]! * c[1] + matrices[o + 9]! * c[2] + matrices[o + 13]!;
+            center[2] +=
+                matrices[o + 2]! * c[0] + matrices[o + 6]! * c[1] + matrices[o + 10]! * c[2] + matrices[o + 14]!;
         }
-        vec3.scale(center, center, 1 / Math.max(joints.length, 1));
-        let spread = 0;
-        for (const joint of joints) {
-            const w = joint.worldMatrix;
-            spread = Math.max(spread, Math.hypot(w[12]! - center[0], w[13]! - center[1], w[14]! - center[2]));
+        vec3.scale(center, center, 1 / Math.max(count, 1));
+        let radius = 0;
+        for (let j = 0; j < count; j++) {
+            const o = j * 16;
+            const x = matrices[o]! * c[0] + matrices[o + 4]! * c[1] + matrices[o + 8]! * c[2] + matrices[o + 12]!;
+            const y = matrices[o + 1]! * c[0] + matrices[o + 5]! * c[1] + matrices[o + 9]! * c[2] + matrices[o + 13]!;
+            const z = matrices[o + 2]! * c[0] + matrices[o + 6]! * c[1] + matrices[o + 10]! * c[2] + matrices[o + 14]!;
+            const jointScale = Math.sqrt(
+                Math.max(
+                    matrices[o]! ** 2 + matrices[o + 1]! ** 2 + matrices[o + 2]! ** 2,
+                    matrices[o + 4]! ** 2 + matrices[o + 5]! ** 2 + matrices[o + 6]! ** 2,
+                    matrices[o + 8]! ** 2 + matrices[o + 9]! ** 2 + matrices[o + 10]! ** 2,
+                ),
+            );
+            const d = Math.hypot(x - center[0], y - center[1], z - center[2]);
+            radius = Math.max(radius, d + (bounds.radius + reach) * jointScale);
         }
-        return spread + bounds.radius * scale + reach;
+        return radius;
     }
 }

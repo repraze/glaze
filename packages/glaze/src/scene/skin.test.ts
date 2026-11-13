@@ -33,8 +33,8 @@ function setup() {
 
 const skinned = (mesh: SkinnedMesh, joint: number, p: [number, number, number]) => {
     const m = mesh.jointMatrices.subarray(joint * 16, joint * 16 + 16);
-    const local = vec4.transformMat4(vec4.create(), [...p, 1], m);
-    return vec3.transformMat4(vec3.create(), [local[0], local[1], local[2]], mesh.worldMatrix);
+    const world = vec4.transformMat4(vec4.create(), [...p, 1], m);
+    return vec3.fromValues(world[0], world[1], world[2]);
 };
 
 describe("SkinnedMesh", () => {

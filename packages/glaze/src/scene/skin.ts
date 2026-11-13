@@ -31,19 +31,18 @@ function identities(count: number): Float32Array {
     return out;
 }
 
-const meshInverse = mat4.create();
 const joint = mat4.create();
 
 /**
  * A mesh deformed by a skin: each vertex follows up to four joints by its weights. The geometry needs joints
- * and weights. Its world matrix still places it, so it can be parented and moved like any mesh.
+ * and weights. Its joints place it (as glTF defines): move the skeleton, not the mesh entity.
  *
  * Picking: a skinned mesh has no collider by default (its triangles move; the geometry's are the bind pose).
  * Attach colliders to the joints instead, e.g. a sphere on the head.
  */
 export class SkinnedMesh extends Mesh {
     skin: Skin | null;
-    /** The joint matrices this frame (mesh space), 16 floats per joint: filled by `updateJointMatrices`. */
+    /** The joint matrices this frame (world space), 16 floats per joint: filled by `updateJointMatrices`. */
     jointMatrices: Float32Array;
 
     constructor(geometry: Geometry, material: Material, skin: Skin | null = null) {
@@ -54,8 +53,9 @@ export class SkinnedMesh extends Mesh {
     }
 
     /**
-     * jointMatrix[i] = inverse(meshWorld) · jointWorld[i] · inverseBind[i]: a joint's movement from its bind pose,
-     * in the mesh's own space (the mesh's world matrix applies after). Call after world matrices are updated.
+     * jointMatrix[i] = jointWorld[i] · inverseBind[i]: where a joint carries a bind-pose vertex, in world space.
+     * The mesh's own world matrix plays no part (glTF: the skin places the vertices), so no inverse of it is
+     * needed either, which a zero scale would break. Call after world matrices are updated.
      */
     updateJointMatrices(): Float32Array {
         const skin = this.skin;
@@ -65,11 +65,9 @@ export class SkinnedMesh extends Mesh {
         if (this.jointMatrices.length !== skin.joints.length * 16) {
             this.jointMatrices = new Float32Array(skin.joints.length * 16);
         }
-        mat4.invert(meshInverse, this.worldMatrix);
         for (let i = 0; i < skin.joints.length; i++) {
             const ibm = skin.inverseBindMatrices.subarray(i * 16, i * 16 + 16);
             mat4.multiply(joint, skin.joints[i]!.worldMatrix, ibm);
-            mat4.multiply(joint, meshInverse, joint);
             this.jointMatrices.set(joint, i * 16);
         }
         return this.jointMatrices;
