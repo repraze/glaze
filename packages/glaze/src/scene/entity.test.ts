@@ -95,3 +95,37 @@ describe("Entity world queries", () => {
         assert.equal(c.parent, b);
     });
 });
+
+describe("Entity.lookAlong", () => {
+    test("points -Z along the direction, whatever its length", () => {
+        const e = new Entity().lookAlong([0, 0, 10]);
+        assert.ok(near(e.getWorldDirection(), [0, 0, 1]));
+    });
+
+    for (const dir of [
+        [0, -1, 0],
+        [0, 1, 0],
+        [0, -5, 1e-7],
+    ] as const) {
+        test(`stays a valid rotation when parallel to up: [${dir.join(", ")}]`, () => {
+            const e = new Entity().lookAlong(dir);
+            assert.ok(Array.from(e.quaternion).every(Number.isFinite));
+            assert.ok(Math.abs(quat.length(e.quaternion) - 1) < 1e-5);
+            assert.ok(near(e.getWorldDirection(), vec3.normalize(vec3.create(), dir)));
+        });
+    }
+
+    test("a camera straight above its target still looks at it", () => {
+        const e = new Entity();
+        vec3.set(e.position, 0, 10, 0);
+        e.lookAt([0, 0, 0]);
+        assert.ok(near(e.getWorldDirection(), [0, -1, 0]));
+    });
+
+    test("a zero direction leaves the rotation unchanged", () => {
+        const e = new Entity().setEuler(0.1, 0.2, 0.3);
+        const before = quat.clone(e.quaternion);
+        e.lookAlong([0, 0, 0]);
+        assert.ok(near(e.quaternion, before));
+    });
+});

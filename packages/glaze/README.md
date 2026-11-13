@@ -164,15 +164,16 @@ Scene (root, activeCamera, backgroundColor, ambientColor, environmentMap, backgr
  └─ Entity (position, quaternion, scale, enabled, children)
       ├─ Mesh      geometry + material, castShadow, receiveShadow
       ├─ Camera    PerspectiveCamera {fov, near, far} | OrthographicCamera {left, right, top, bottom, near, far}
-      └─ Light     DirectionalLight {direction} | PointLight {range} | SpotLight {direction, innerAngle, outerAngle, range}
+      └─ Light     DirectionalLight | PointLight {range} | SpotLight {innerAngle, outerAngle, range}
 ```
 
 Entities look down their local −Z with +Y up. `quaternion` is the rotation; `setEuler(x, y, z)` (radians) and
 `rotateX / rotateY / rotateZ(rad)` set it from angles, `lookAt(target, up?)` points −Z at a world-space target
-(parent rotation included), and `getWorldPosition / getWorldQuaternion / getWorldScale / getWorldDirection()` read
+and `lookAlong(direction, up?)` along a world direction (parent rotation included), and `getWorldPosition / getWorldQuaternion / getWorldScale / getWorldDirection()` read
 the world transform fresh from the parent chain.
 
-Lights take `{color, intensity, castShadow}`. Children inherit their parent's transform; world matrices are
+Lights take `{color, intensity, castShadow}`. Directional and spot lights shine along their −Z: the `direction`
+option sets the initial aim, `lookAt` re-aims them, and a parent's rotation turns them. Children inherit their parent's transform; world matrices are
 updated by the scene pass each frame. Cameras must be in the tree.
 
 ## Geometry

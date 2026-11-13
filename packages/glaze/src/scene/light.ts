@@ -23,15 +23,15 @@ export abstract class Light extends Entity {
 }
 
 export interface DirectionalLightOptions extends LightOptions {
+    /** Initial direction the light travels (sets the rotation through `lookAlong`). */
     direction?: [number, number, number];
 }
 
+/** Parallel light travelling along the entity's -Z: aim it with `lookAt` / `lookAlong`; its position is unused. */
 export class DirectionalLight extends Light {
-    direction: vec3;
-
     constructor({direction = [0, -1, 0], ...rest}: DirectionalLightOptions = {}) {
         super(rest);
-        this.direction = vec3.normalize(vec3.create(), vec3.fromValues(...direction));
+        this.lookAlong(direction);
     }
 }
 
@@ -49,14 +49,15 @@ export class PointLight extends Light {
 }
 
 export interface SpotLightOptions extends LightOptions {
+    /** Initial direction the cone points (sets the rotation through `lookAlong`). */
     direction?: [number, number, number];
     innerAngle?: number;
     outerAngle?: number;
     range?: number;
 }
 
+/** A cone of light from the entity's position along its -Z: aim it with `lookAt` / `lookAlong`. */
 export class SpotLight extends Light {
-    direction: vec3;
     innerAngle: number;
     outerAngle: number;
     range: number;
@@ -69,7 +70,7 @@ export class SpotLight extends Light {
         ...rest
     }: SpotLightOptions = {}) {
         super(rest);
-        this.direction = vec3.normalize(vec3.create(), vec3.fromValues(...direction));
+        this.lookAlong(direction);
         this.innerAngle = innerAngle;
         this.outerAngle = outerAngle;
         this.range = range;

@@ -101,6 +101,7 @@ export const doc = defineDoc({
                 {name: "setEuler(x, y, z)", type: "this", description: "Rotation from Euler angles in radians."},
                 {name: "rotateX / rotateY / rotateZ(rad)", type: "this", description: "Rotate about a local axis."},
                 {name: "lookAt(target, up?)", type: "this", description: "Point −Z at a world-space target."},
+                {name: "lookAlong(direction, up?)", type: "this", description: "Point −Z along a world direction."},
                 {
                     name: "getWorldPosition / Quaternion / Scale / Direction()",
                     type: "vec3 | quat",

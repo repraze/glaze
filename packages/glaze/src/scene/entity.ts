@@ -4,6 +4,10 @@ export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 
 const WORLD_UP: ReadonlyVec3 = vec3.fromValues(0, 1, 0);
+const ORIGIN: ReadonlyVec3 = vec3.fromValues(0, 0, 0);
+// Stand-in up vectors when the look direction is parallel to `up`.
+const FALLBACK_UP_Z: ReadonlyVec3 = vec3.fromValues(0, 0, -1);
+const FALLBACK_UP_X: ReadonlyVec3 = vec3.fromValues(1, 0, 0);
 const DEG = 180 / Math.PI;
 
 // Scratch values for the methods below (never escape them).
@@ -80,11 +84,30 @@ export class Entity {
      */
     lookAt(target: ReadonlyVec3, up: ReadonlyVec3 = WORLD_UP): this {
         const eye = this.getWorldPosition(tmpVec);
-        if (vec3.squaredDistance(eye, target) === 0) {
+        return this.lookAlong(vec3.subtract(tmpVec, target, eye), up);
+    }
+
+    /**
+     * Turns the entity so its -Z axis points along a world-space `direction` (any length), keeping `up` as close to
+     * +Y as possible. When the direction is parallel to `up` (straight down, say) another axis stands in for it.
+     * Accounts for the parent's world rotation. A zero direction leaves it unchanged.
+     */
+    lookAlong(direction: ReadonlyVec3, up: ReadonlyVec3 = WORLD_UP): this {
+        const lenSq = vec3.squaredLength(direction);
+        const upLenSq = vec3.squaredLength(up);
+        if (lenSq === 0 || upLenSq === 0) {
             return this;
         }
+        const cos = vec3.dot(direction, up) / Math.sqrt(lenSq * upLenSq);
+        let safeUp = up;
+        if (Math.abs(cos) > 0.9999) {
+            // targetTo's right axis would be cross(up, forward) = 0: pick the world axis least aligned with it.
+            const ax = Math.abs(direction[0]);
+            const az = Math.abs(direction[2]);
+            safeUp = az <= ax ? FALLBACK_UP_Z : FALLBACK_UP_X;
+        }
         // targetTo builds a world transform (not a view matrix like mat4.lookAt) whose -Z faces the target.
-        mat4.targetTo(tmpMat2, eye, target, up);
+        mat4.targetTo(tmpMat2, ORIGIN, direction, safeUp);
         mat4.getRotation(this.quaternion, tmpMat2);
         if (this.parent !== null) {
             this.parent.getWorldQuaternion(tmpQuat);

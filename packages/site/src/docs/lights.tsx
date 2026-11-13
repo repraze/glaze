@@ -61,10 +61,10 @@ export const doc = defineDoc({
             component: "DirectionalLight",
             rows: [
                 {
-                    name: "direction",
+                    name: "direction (option)",
                     type: "[x, y, z]",
                     default: "[0, -1, 0]",
-                    description: "Where the light travels; normalised.",
+                    description: "Initial aim: the light travels along its −Z. Re-aim with lookAt / lookAlong.",
                 },
             ],
         },
@@ -77,7 +77,12 @@ export const doc = defineDoc({
         {
             component: "SpotLight",
             rows: [
-                {name: "direction", type: "[x, y, z]", default: "[0, -1, 0]"},
+                {
+                    name: "direction (option)",
+                    type: "[x, y, z]",
+                    default: "[0, -1, 0]",
+                    description: "Initial aim of the cone (its −Z). Re-aim with lookAt / lookAlong.",
+                },
                 {
                     name: "innerAngle",
                     type: "number",
@@ -106,6 +111,7 @@ function Notes() {
 const bulb = palette.light(new PointLight({intensity: 8, range: 8, castShadow: true}), (c) => c.hues.red);
 const spot = new SpotLight({direction: [0, -1, 0], innerAngle: Math.PI / 12, outerAngle: Math.PI / 6, range: 10});
 vec3.set(spot.position, 0, 5, 0);
+spot.lookAt([0, 0, 0]); // lights are entities: aim them, or parent them to something that moves
 scene.add(sun).add(bulb).add(spot);
 
 bulb.add(new Mesh(smallSphere, glowMaterial)); // a marker that follows the light`}

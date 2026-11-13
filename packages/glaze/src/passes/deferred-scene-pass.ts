@@ -206,6 +206,12 @@ ${
 
 // ─── Max lights ──────────────────────────────────────────────────────────────
 
+/** The unit -Z axis of a world matrix: where an entity (a directional or spot light) faces. */
+function worldForward(m: mat4, out: vec3): vec3 {
+    return vec3.normalize(out, vec3.set(out, -m[8]!, -m[9]!, -m[10]!));
+}
+const tmpDir = vec3.create();
+
 const MAX_DIRECTIONAL = 4;
 const MAX_POINT = 8;
 const MAX_SPOT = 4;
@@ -1210,7 +1216,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const viewMatrix = camera ? camera.getViewMatrix() : mat4.create();
         const projMatrix = camera ? camera.getProjectionMatrix(aspect) : mat4.create();
         const vpMatrix = camera ? camera.getViewProjectionMatrix(aspect) : mat4.create();
-        const camPos = camera ? camera.getCameraPosition() : vec3.create();
+        const camPos = camera ? mat4.getTranslation(vec3.create(), camera.worldMatrix) : vec3.create();
 
         mat4.invert(this.currentInvVP, vpMatrix);
 
@@ -1257,7 +1263,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         f32[3] = 1.0;
 
         const cam = this.scene.activeCamera;
-        const cp = cam ? cam.getCameraPosition() : vec3.create();
+        const cp = cam ? mat4.getTranslation(vec3.create(), cam.worldMatrix) : vec3.create();
         f32[4] = cp[0];
         f32[5] = cp[1];
         f32[6] = cp[2];
@@ -1272,9 +1278,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             const base = 12 + i * 24;
             const l = dirLights[i]!;
             const lm = dirMatrices[i];
-            f32[base + 0] = l.direction[0];
-            f32[base + 1] = l.direction[1];
-            f32[base + 2] = l.direction[2];
+            const dir = worldForward(l.worldMatrix, tmpDir);
+            f32[base + 0] = dir[0];
+            f32[base + 1] = dir[1];
+            f32[base + 2] = dir[2];
             f32[base + 3] = l.castShadow ? 1.0 : 0.0;
             f32[base + 4] = l.color[0];
             f32[base + 5] = l.color[1];
@@ -1309,9 +1316,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 1] = wp[13]!;
             f32[base + 2] = wp[14]!;
             f32[base + 3] = l.range;
-            f32[base + 4] = l.direction[0];
-            f32[base + 5] = l.direction[1];
-            f32[base + 6] = l.direction[2];
+            const dir = worldForward(wp, tmpDir);
+            f32[base + 4] = dir[0];
+            f32[base + 5] = dir[1];
+            f32[base + 6] = dir[2];
             f32[base + 7] = l.castShadow ? 1.0 : 0.0;
             f32[base + 8] = l.color[0];
             f32[base + 9] = l.color[1];
@@ -1344,7 +1352,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     // ─── Private: shadow matrix helpers ─────────────────────────────────────
 
     private computeDirectionalLightMatrix(light: DirectionalLight): mat4 {
-        const dir = light.direction;
+        const dir = worldForward(light.worldMatrix, vec3.create());
         const up = Math.abs(dir[1]) > 0.9 ? vec3.fromValues(1, 0, 0) : vec3.fromValues(0, 1, 0);
         const eye = vec3.scale(vec3.create(), dir, -20);
 
@@ -1362,7 +1370,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private computeSpotLightMatrix(light: SpotLight): mat4 {
         const wp = light.worldMatrix;
         const eye = vec3.fromValues(wp[12]!, wp[13]!, wp[14]!);
-        const dir = light.direction;
+        const dir = worldForward(light.worldMatrix, vec3.create());
         const up = Math.abs(dir[1]) > 0.9 ? vec3.fromValues(1, 0, 0) : vec3.fromValues(0, 1, 0);
         const center = vec3.add(vec3.create(), eye, dir);
 

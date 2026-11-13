@@ -65,7 +65,6 @@ export const doc = defineDoc({
                 },
                 {name: "getViewMatrix()", type: "mat4", description: "Inverse of the world matrix."},
                 {name: "getViewProjectionMatrix(aspect)", type: "mat4"},
-                {name: "getCameraPosition()", type: "vec3", description: "World-space position."},
             ],
         },
     ],

@@ -1,4 +1,4 @@
-import {mat4, vec3} from "gl-matrix";
+import {mat4} from "gl-matrix";
 
 import {Entity} from "./entity";
 
@@ -15,10 +15,6 @@ export abstract class Camera extends Entity {
         const vp = mat4.create();
         mat4.multiply(vp, this.getProjectionMatrix(aspect), this.getViewMatrix());
         return vp;
-    }
-
-    getCameraPosition(): vec3 {
-        return vec3.fromValues(this.worldMatrix[12]!, this.worldMatrix[13]!, this.worldMatrix[14]!);
     }
 }
 
