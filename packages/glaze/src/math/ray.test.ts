@@ -114,3 +114,14 @@ describe("ray.fromNdc", () => {
         assert.ok(near(r.direction, [0, 0, -1]));
     });
 });
+
+describe("ray.intersectPlane", () => {
+    test("hits a ground plane from above and below, misses parallel or away", () => {
+        const ground = vec3.fromValues(0, 0, 0);
+        const up = vec3.fromValues(0, 1, 0);
+        assert.ok(close(ray.intersectPlane(ray.fromValues([1, 4, 2], [0, -2, 0]), ground, up), 2));
+        assert.ok(close(ray.intersectPlane(ray.fromValues([0, -3, 0], [0, 1, 0]), ground, up), 3));
+        assert.equal(ray.intersectPlane(ray.fromValues([0, 1, 0], [1, 0, 0]), ground, up), null);
+        assert.equal(ray.intersectPlane(ray.fromValues([0, 1, 0], [0, 1, 0]), ground, up), null);
+    });
+});

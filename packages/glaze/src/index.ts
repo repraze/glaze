@@ -1,5 +1,7 @@
 export type {ColorRgb, ColorRgba, ColorSpace, StrictColorRgb, StrictColorRgba} from "./color";
 export {colorRgb, colorRgba, linearToSrgb, setColorRgb, setColorRgba, srgbToLinear} from "./color";
+export type {OrbitControlsOptions} from "./controls/orbit-controls";
+export {OrbitControls} from "./controls/orbit-controls";
 export {computeTangents, Geometry} from "./geometry/geometry";
 export {
     createCone,
@@ -11,6 +13,16 @@ export {
     createSphere,
     createTorus,
 } from "./geometry/shapes";
+export type {
+    InputPointer,
+    InputWheel,
+    PointerConsumer,
+    PointerInputOptions,
+    ScenePointerEvent,
+    ScenePointerEventType,
+    ScenePointerHandler,
+} from "./input/pointer-input";
+export {PointerInput, SCENE_PICKING_PRIORITY} from "./input/pointer-input";
 export type {
     GLBPrimitive,
     GltfMaterialDescriptor,

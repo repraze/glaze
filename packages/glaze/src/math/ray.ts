@@ -130,6 +130,19 @@ export const ray = {
     },
 
     /**
+     * Distance along the ray to the plane through `point` with normal `normal` (either side), or null when the ray
+     * is parallel to it or points away. Handy for dragging on a ground plane.
+     */
+    intersectPlane(r: ReadonlyRay, point: ReadonlyVec3, normal: ReadonlyVec3): number | null {
+        const denom = vec3.dot(normal, r.direction);
+        if (Math.abs(denom) < 1e-12) {
+            return null;
+        }
+        const t = vec3.dot(vec3.subtract(tmpA, point, r.origin), normal) / denom;
+        return t >= 0 ? t : null;
+    },
+
+    /**
      * Distance along the ray to triangle (a, b, c), or null on a miss (Möller–Trumbore). Counter-clockwise triangles
      * face the viewer; with `cullBackFace`, triangles seen from behind miss. When given, `barycentric` receives the
      * weights of (a, b, c) at the hit.

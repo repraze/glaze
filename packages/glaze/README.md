@@ -249,6 +249,33 @@ button.add(hitbox);
 - Layers and `filter` skip only that entity, never its children; a disabled entity skips its subtree. World matrices
   are refreshed first.
 
+## Pointer input and controls
+
+`PointerInput` turns a canvas's pointer events (mouse, touch, pen) into rays, hits and per-entity handlers, and
+shares gestures between consumers so dragging an object never orbits the camera.
+
+```ts
+import {OrbitControls, PointerInput} from "@repraze/glaze";
+
+const input = new PointerInput(canvas, {scene}); // camera: scene.activeCamera unless given
+input.on(car, "click", (e) => select(car)); // a hit on a wheel bubbles up to the car
+input.on(box, "pointerdown", (e) => e.capture()); // own the drag: its moves come here, the camera stays put
+
+const controls = new OrbitControls(camera, {target: [0, 0.5, 0]}).attach(input);
+renderer.startAnimation(({delta}) => (controls.update(delta), graph));
+```
+
+- **Events**: `pointerdown`, `pointermove`, `pointerup`, `click` (a press that moved less than `clickThreshold`),
+  `pointerenter` / `pointerleave` (the nearest hit and its ancestors). Each goes to the entity hit, up its ancestors,
+  then on to the next hit behind; an entity hears it once. `stopPropagation()` ends it. Events carry `ray`, `hits`,
+  `hit`, `target`, `currentTarget` and the `pointer` (CSS px and NDC).
+- **Gestures**: a press is offered to consumers by priority until one claims it; the claimer alone gets its moves,
+  and every consumer offered it gets the release. Scene picking is at `SCENE_PICKING_PRIORITY` (100) and claims when a
+  handler calls `capture()`; controls sit at 0. Implement `PointerConsumer` for your own (a gizmo above 100).
+- **OrbitControls**: drag rotates, wheel or pinch zooms, right-drag, shift-drag or two fingers pan. `damping` eases
+  frame-rate independently; distance and polar limits; `rotate` / `zoom` / `pan` / `setOrbit` drive it from code.
+  Attaching sets `touch-action: none` on the canvas.
+
 ## Bounds and rays
 
 In gl-matrix's style (plain data, free functions, `out` first, aliasing allowed): `box3` and `sphere` for bounding
