@@ -80,7 +80,6 @@ export class ShaderPass<const Out extends string = string> extends Pass<Out> {
 
     private sampler!: GPUSampler;
 
-    private startTime = performance.now();
     private width = 1;
     private height = 1;
 
@@ -95,7 +94,6 @@ export class ShaderPass<const Out extends string = string> extends Pass<Out> {
     initialize(device: GPUDevice, canvasFormat: GPUTextureFormat): void {
         this.device = device;
         this.canvasFormat = canvasFormat;
-        this.startTime = performance.now();
 
         this.sampler = device.createSampler({
             magFilter: "linear",
@@ -118,7 +116,7 @@ export class ShaderPass<const Out extends string = string> extends Pass<Out> {
     }
 
     render(ctx: PassRenderContext): void {
-        this.updateGlobals(ctx.device);
+        this.updateGlobals(ctx.device, ctx.time);
 
         // Rebuild input bind group when upstream views change.
         const inputViews = this.inputDefs.map((s) => ctx.inputs[s.name]!);
@@ -266,10 +264,9 @@ export class ShaderPass<const Out extends string = string> extends Pass<Out> {
         }));
     }
 
-    private updateGlobals(device: GPUDevice): void {
-        const t = (performance.now() - this.startTime) / 1000;
+    private updateGlobals(device: GPUDevice, time: number): void {
         const data = new Float32Array(4);
-        data[0] = t;
+        data[0] = time;
         data[1] = 0;
         data[2] = this.width;
         data[3] = this.height;

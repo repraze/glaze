@@ -113,7 +113,6 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
     private textureBindGroup: GPUBindGroup | null = null;
     private lastTextureRefs: (GPUTexture | null)[] = [];
 
-    private startTime = performance.now();
     private width = 1;
     private height = 1;
 
@@ -131,7 +130,6 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
     initialize(device: GPUDevice, canvasFormat: GPUTextureFormat): void {
         this.device = device;
         this.canvasFormat = canvasFormat;
-        this.startTime = performance.now();
 
         this.globalsBuffer = device.createBuffer({
             size: GLOBALS_BUFFER_SIZE,
@@ -173,7 +171,7 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
     }
 
     render(ctx: PassRenderContext): void {
-        this.writeGlobals(ctx.device);
+        this.writeGlobals(ctx.device, ctx.time);
         this.writeUniforms(ctx.device);
 
         if (this.inputDefs.length > 0) {
@@ -407,10 +405,9 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
 
     // ─── Per-frame writes ──────────────────────────────────────────────────────
 
-    private writeGlobals(device: GPUDevice): void {
-        const t = (performance.now() - this.startTime) / 1000;
+    private writeGlobals(device: GPUDevice, time: number): void {
         const data = new Float32Array(4);
-        data[0] = t;
+        data[0] = time;
         data[1] = 0;
         data[2] = this.width;
         data[3] = this.height;

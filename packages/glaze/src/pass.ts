@@ -44,6 +44,8 @@ export interface PassRenderContext {
     outputs: Record<string, GPUTextureView>;
     width: number;
     height: number;
+    /** Seconds of animation time for this frame, the same for every pass (see `Renderer.renderFrame`). */
+    time: number;
 }
 
 /** `Out` names the output slots, so `RenderGraph.addPass` can return a handle per name. */

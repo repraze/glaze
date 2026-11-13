@@ -111,6 +111,7 @@ export const doc = defineDoc({
                     description: "Attachments; the canvasSlot maps to the swap chain.",
                 },
                 {name: "width / height", type: "number", description: "Size of this pass's outputs."},
+                {name: "time", type: "number", description: "The frame's time in seconds, shared by every pass."},
             ],
         },
         {

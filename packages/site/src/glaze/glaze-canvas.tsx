@@ -120,7 +120,7 @@ export function GlazeCanvas({
                 time += delta;
             }
             try {
-                renderer.renderFrame(frame({time, delta, width: canvas.width, height: canvas.height}));
+                renderer.renderFrame(frame({time, delta, width: canvas.width, height: canvas.height}), time);
             } catch (error) {
                 fail(error);
                 return;

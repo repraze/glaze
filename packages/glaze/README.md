@@ -76,8 +76,8 @@ Renderer               device, canvas context, frame loop, textures between pass
 
 ```ts
 const renderer = await Renderer.init(canvas, {alphaMode: "premultiplied"}); // alphaMode defaults to "opaque"
-renderer.renderFrame(graph); // one frame
-const stop = renderer.startAnimation(graph); // or a loop; also accepts () => graph
+renderer.renderFrame(graph); // one frame; renderFrame(graph, seconds) drives globals.time yourself
+const stop = renderer.startAnimation(graph); // or a loop; also accepts ({time, delta}) => graph
 renderer.resize(width, height); // after the canvas changed size
 renderer.destroy();
 ```

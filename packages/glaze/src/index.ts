@@ -53,6 +53,7 @@ export type {SplitViewPassOptions, SplitViewSlot, ViewportRect} from "./passes/s
 export {SplitViewPass} from "./passes/split-view-pass";
 export type {RenderGraphNode, TextureHandle} from "./render-graph";
 export {RenderGraph} from "./render-graph";
+export type {AnimationFrame} from "./renderer";
 export {Renderer} from "./renderer";
 export {Camera, OrthographicCamera, PerspectiveCamera} from "./scene/camera";
 export type {Collider} from "./scene/collider";

@@ -49,12 +49,13 @@ export const doc = defineDoc({
                     description: '"premultiplied" lets the page show through transparent pixels.',
                 },
                 {
-                    name: "renderFrame(graph)",
+                    name: "renderFrame(graph, time?)",
                     type: "void",
-                    description: "Encodes every pass of the graph into one command buffer and submits it.",
+                    description:
+                        "Encodes every pass into one command buffer and submits it. time (seconds) reaches every pass; default: since init.",
                 },
                 {
-                    name: "startAnimation(graph | () => graph)",
+                    name: "startAnimation(graph | ({time, delta}) => graph)",
                     type: "() => void",
                     description: "requestAnimationFrame loop; the callback form runs before each frame. Returns stop.",
                 },

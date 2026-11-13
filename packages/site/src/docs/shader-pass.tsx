@@ -93,9 +93,10 @@ struct GlobalsUniform { time: f32, _pad0: f32, resolution: vec2<f32> };
 @group(1) @binding(2) var depth: texture_depth_2d;`}
             />
             <p className="text-sm text-muted-foreground">
-                <code className="font-mono text-foreground">globals.time</code> counts seconds from the pass&apos;s
-                initialisation; <code className="font-mono text-foreground">globals.resolution</code> is the size of the
-                pass&apos;s outputs. For your own uniforms, use an EffectPass.
+                <code className="font-mono text-foreground">globals.time</code> is the frame&apos;s time in seconds, the
+                same for every pass (the renderer&apos;s clock, or the time given to renderFrame);{" "}
+                <code className="font-mono text-foreground">globals.resolution</code> is the size of the pass&apos;s
+                outputs. For your own uniforms, use an EffectPass.
             </p>
         </section>
     );

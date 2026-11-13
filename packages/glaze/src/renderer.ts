@@ -22,6 +22,12 @@ function isDepthFormat(format: GPUTextureFormat): boolean {
     );
 }
 
+/** What a `startAnimation` callback receives: seconds since the loop started, and since the previous frame. */
+export interface AnimationFrame {
+    time: number;
+    delta: number;
+}
+
 export class Renderer {
     readonly device: GPUDevice;
     readonly adapter: GPUAdapter;
@@ -31,6 +37,8 @@ export class Renderer {
     private width: number;
     private height: number;
     private animationId: number | null = null;
+    /** Origin of the default frame clock (`renderFrame` without a time). */
+    private readonly clockStart = performance.now();
 
     /** Managed output textures keyed by "<nodeId>:<slotName>". */
     private textureCache = new Map<string, ManagedTexture>();
@@ -127,7 +135,12 @@ export class Renderer {
         }
     }
 
-    renderFrame(graph: RenderGraph): void {
+    /**
+     * Renders one frame of `graph`. `time` (seconds) is handed to every pass as `ctx.time`, which shader passes
+     * expose as `globals.time`: pass your own clock to pause, freeze (reduced motion) or scrub animation. It
+     * defaults to seconds since the renderer was created.
+     */
+    renderFrame(graph: RenderGraph, time: number = (performance.now() - this.clockStart) / 1000): void {
         const canvas = this.context.canvas;
         if (canvas.width === 0 || canvas.height === 0) {
             return;
@@ -186,6 +199,7 @@ export class Renderer {
                 outputs: outputViews,
                 width: passW,
                 height: passH,
+                time,
             });
         }
 
@@ -196,17 +210,24 @@ export class Renderer {
      * Start an animation loop.
      *
      * @param graph - Either a fixed `RenderGraph` or a per-frame callback that
-     *   returns the graph to render (useful for updating scene state each frame).
+     *   returns the graph to render (useful for updating scene state each frame). The callback receives
+     *   `{time, delta}` in seconds since the loop started; the same `time` reaches every pass.
      */
-    startAnimation(graph: RenderGraph | (() => RenderGraph)): () => void {
+    startAnimation(graph: RenderGraph | ((frame: AnimationFrame) => RenderGraph)): () => void {
         let stopped = false;
+        let start: number | null = null;
+        let last = 0;
 
-        const loop = () => {
+        const loop = (now: number) => {
             if (stopped) {
                 return;
             }
-            const resolved = typeof graph === "function" ? graph() : graph;
-            this.renderFrame(resolved);
+            start ??= now;
+            const time = (now - start) / 1000;
+            const delta = last === 0 ? 0 : time - last;
+            last = time;
+            const resolved = typeof graph === "function" ? graph({time, delta}) : graph;
+            this.renderFrame(resolved, time);
             this.animationId = requestAnimationFrame(loop);
         };
 
