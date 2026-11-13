@@ -38,7 +38,7 @@ export class PerspectiveCamera extends Camera {
 
     getProjectionMatrix(aspect: number): mat4 {
         const proj = mat4.create();
-        mat4.perspective(proj, this.fov, aspect, this.near, this.far);
+        mat4.perspectiveZO(proj, this.fov, aspect, this.near, this.far); // WebGPU clip depth is 0..1
         return proj;
     }
 }
