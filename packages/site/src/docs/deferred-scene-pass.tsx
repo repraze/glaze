@@ -71,6 +71,24 @@ export const doc = defineDoc({
                     description:
                         "What 'color' holds: linear light for a BlitPass to tone map and encode, or 'srgb' encoded for the screen (straight to the canvas).",
                 },
+                {
+                    name: "shadowMapSize",
+                    type: "number",
+                    default: "1024",
+                    description: "Texels per side of each directional cascade and spot light shadow map.",
+                },
+                {
+                    name: "pointShadowMapSize",
+                    type: "number",
+                    default: "512",
+                    description: "Texels per side of each of a point light's six maps.",
+                },
+                {
+                    name: "debugCascades (property)",
+                    type: "boolean",
+                    default: "false",
+                    description: "Tints the first directional light's cascades: red, green, blue, yellow.",
+                },
             ],
         },
         {

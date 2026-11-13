@@ -83,6 +83,7 @@ export {Camera, OrthographicCamera, PerspectiveCamera} from "./scene/camera";
 export type {Collider} from "./scene/collider";
 export {boxCollider, geometryCollider, sphereCollider} from "./scene/collider";
 export {ALL_LAYERS, Entity, layer} from "./scene/entity";
+export type {DirectionalLightOptions, DirectionalShadowSettings, LightOptions, ShadowSettings} from "./scene/light";
 export {DirectionalLight, Light, PointLight, SpotLight} from "./scene/light";
 export {Mesh} from "./scene/mesh";
 export type {RaycastHit, RaycastOptions} from "./scene/raycast";

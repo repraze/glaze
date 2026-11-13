@@ -9,6 +9,7 @@ import type {Camera} from "../scene/camera";
 import type {DirectionalLight, PointLight, SpotLight} from "../scene/light";
 import type {Mesh} from "../scene/mesh";
 import type {Scene} from "../scene/scene";
+import {type Cascade, fitCascades, lightView, MAX_CASCADES} from "../scene/shadow-cascades";
 
 // ─── WGSL shaders ─────────────────────────────────────────────────────────────
 
@@ -311,7 +312,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> GBu
  * See-through ("blend") meshes, drawn after lighting onto the lit color: the same surface() and shade() as the
  * deferred path, premultiplied by alpha. Lighting, environment and shadow maps are group 3.
  */
-function buildForwardShader(f: GBufferFeatures, encode: boolean): string {
+function buildForwardShader(f: GBufferFeatures, encode: boolean, sizes: ShadowSizes): string {
     return /* wgsl */ `
 ${buildSurfaceWgsl(f)}
 ${COLOR_WGSL}
@@ -326,12 +327,12 @@ ${LIGHT_STRUCTS_WGSL}
 @group(3) @binding(6) var pointShadowMaps:   texture_depth_2d_array;
 @group(3) @binding(7) var<uniform> pointShadowMatrices: PointShadowMatrices;
 
-${SHADE_WGSL}
+${shadeWgsl(sizes)}
 
 @fragment
 fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4<f32> {
     let s = surface(input, frontFacing);
-    let lit = shade(s.albedo, s.ao, s.normal, s.roughness, s.metallic, input.worldPos, model.flags.x) + s.emissive;
+    let lit = shade(s.albedo, s.ao, s.normal, s.roughness, s.metallic, input.worldPos, model.flags.x, input.clipPos.xy) + s.emissive;
     let c = ${encode ? "linearToSrgb(lit)" : "lit"};
     return vec4<f32>(c * s.alpha, s.alpha); // premultiplied: blend one, one-minus-src-alpha
 }
@@ -352,20 +353,12 @@ const MAX_SPOT = 4;
 
 // ─── Shadow settings ─────────────────────────────────────────────────────────
 
-const SHADOW_MAP_SIZE = 1024;
-const POINT_SHADOW_MAP_SIZE = 512;
-/**
- * Lookups also move toward the light by this many shadow texels: the only depth bias. In world units, scaled
- * like the texel, so a spot or point light (perspective depth) gets the same small bias as the sun; a bias in
- * the map's 0-1 depth grows with distance there and let light under objects resting on a surface.
- */
-const SHADOW_LIGHT_OFFSET = "0.5";
-/** Normal offset, in shadow texels at a grazing light (see shadowLookup). */
-const SHADOW_NORMAL_OFFSET = "1.5";
-/** Directional shadows cover ±DIRECTIONAL_SHADOW_EXTENT world units. */
-const DIRECTIONAL_SHADOW_EXTENT = 12;
-/** World size of one directional shadow texel, as a WGSL literal. */
-const DIRECTIONAL_SHADOW_TEXEL = ((2 * DIRECTIONAL_SHADOW_EXTENT) / SHADOW_MAP_SIZE).toFixed(6);
+/** Shadow map sizes, baked into the shaders. */
+interface ShadowSizes {
+    directional: number;
+    spot: number;
+    point: number;
+}
 
 const POINT_SHADOW_MATRICES_SIZE = MAX_POINT * 6 * 64;
 
@@ -378,39 +371,62 @@ const CUBE_FACE_DIRS: {dir: [number, number, number]; up: [number, number, numbe
     {dir: [0, 0, -1], up: [0, -1, 0]},
 ];
 
-// ─── Lighting uniform layout ─────────────────────────────────────────────────
-//
-// ambientColor:       vec4<f32>                    offset    0   16 bytes
-// cameraPosition:     vec4<f32>                    offset   16   16 bytes
-// counts:             vec4<u32> (dir,pt,spot,pad)  offset   32   16 bytes
-// directionalLights:  array<DirLight, 4>           offset   48  384 bytes  (4 × 96)
-// pointLights:        array<PointLight, 8>          offset  432  384 bytes  (8 × 48)
-// spotLights:         array<SpotLight, 4>           offset  816  512 bytes  (4 × 128)
-// backgroundColor:    vec4<f32>                    offset 1328   16 bytes
-// environmentColor:   vec4<f32>                    offset 1344   16 bytes
-// invViewProjection:  mat4x4<f32>                  offset 1360   64 bytes
-// Total: 1424 bytes
+/** Near plane of the spot and point shadow projections. */
+const SHADOW_NEAR = 0.1;
 
-const LIGHTING_BUFFER_SIZE = 1424;
+// ─── Lighting uniform layout (in f32 slots) ──────────────────────────────────
+//
+// ambientColor        vec4                            0
+// cameraPosition      vec4                            4
+// counts              vec4<u32> (dir, point, spot)    8
+// directionalLights   4 × 92  (368 bytes each)        12
+// pointLights         8 × 20  (80 bytes each)         380
+// spotLights          4 × 40  (160 bytes each)        540
+// backgroundColor     vec4                            700
+// environmentColor    vec4                            704
+// invViewProjection   mat4                            708
+// cameraForward       vec4 (xyz)                      724
+// Total: 728 slots, 2912 bytes
+
+const DIR_BASE = 12;
+const DIR_STRIDE = 92;
+const POINT_BASE = DIR_BASE + MAX_DIRECTIONAL * DIR_STRIDE;
+const POINT_STRIDE = 20;
+const SPOT_BASE = POINT_BASE + MAX_POINT * POINT_STRIDE;
+const SPOT_STRIDE = 40;
+const BACKGROUND_SLOT = SPOT_BASE + MAX_SPOT * SPOT_STRIDE;
+const ENVIRONMENT_SLOT = BACKGROUND_SLOT + 4;
+const INV_VP_SLOT = ENVIRONMENT_SLOT + 4;
+const CAMERA_FORWARD_SLOT = INV_VP_SLOT + 16;
+const LIGHTING_BUFFER_SIZE = (CAMERA_FORWARD_SLOT + 4) * 4;
 
 const LIGHT_STRUCTS_WGSL = /* wgsl */ `
 struct DirectionalLight {
-    direction:        vec4<f32>,      // xyz = direction, w = castShadow (0/1)
-    colorIntensity:   vec4<f32>,      // xyz = color, w = intensity
-    lightSpaceMatrix: mat4x4<f32>,
+    direction:      vec4<f32>,   // xyz = direction, w = castShadow (0/1)
+    colorIntensity: vec4<f32>,   // xyz = color, w = intensity
+    shadow:         vec4<f32>,   // x = first shadow layer, y = cascades, z = tan(half the light's angle), w = samples
+    shadowBias:     vec4<f32>,   // x = normal bias, y = bias (texels), z = blend cascades (0/1), w = max distance
+    splits:         vec4<f32>,   // camera view depth where each cascade ends
+    texels:         vec4<f32>,   // world size of a texel, per cascade
+    depthRanges:    vec4<f32>,   // world distance each cascade's 0..1 depth spans
+    matrices:       array<mat4x4<f32>, ${MAX_CASCADES}>,
 };
 
 struct PointLight {
-    position:       vec4<f32>,        // xyz = world pos, w = range
-    colorIntensity: vec4<f32>,        // xyz = color, w = intensity
-    flags:          vec4<f32>,        // x = castShadow (0/1)
+    position:       vec4<f32>,   // xyz = world pos, w = range
+    colorIntensity: vec4<f32>,   // xyz = color, w = intensity
+    flags:          vec4<f32>,   // x = castShadow (0/1)
+    shadow:         vec4<f32>,   // x = light radius, y = samples, z = near, w = far
+    shadowBias:     vec4<f32>,   // x = normal bias, y = bias (texels)
 };
 
 struct SpotLight {
-    position:         vec4<f32>,      // xyz = world pos, w = range
-    direction:        vec4<f32>,      // xyz = direction, w = castShadow (0/1)
-    colorIntensity:   vec4<f32>,      // xyz = color, w = intensity
-    angles:           vec4<f32>,      // x = cos(innerAngle), y = cos(outerAngle)
+    position:         vec4<f32>, // xyz = world pos, w = range
+    direction:        vec4<f32>, // xyz = direction, w = castShadow (0/1)
+    colorIntensity:   vec4<f32>, // xyz = color, w = intensity
+    angles:           vec4<f32>, // x = cos(innerAngle), y = cos(outerAngle)
+    shadow:           vec4<f32>, // x = light radius, y = samples, z = near, w = far
+    shadowBias:       vec4<f32>, // x = normal bias, y = bias (texels)
     lightSpaceMatrix: mat4x4<f32>,
 };
 
@@ -424,6 +440,7 @@ struct LightingUniforms {
     backgroundColor:    vec4<f32>,
     environmentColor:   vec4<f32>,
     invViewProjection:  mat4x4<f32>,
+    cameraForward:      vec4<f32>,   // xyz = camera forward, w = 1: tint directional shadow cascades (debug)
 };
 
 struct PointShadowMatrices {
@@ -435,7 +452,8 @@ struct PointShadowMatrices {
  * shade(): PBR lighting of one surface point by every light (with shadows), ambient and environment. Expects
  * lighting, environmentMap, envSampler and the shadow maps declared by the including shader.
  */
-const SHADE_WGSL = /* wgsl */ `
+function shadeWgsl(sizes: ShadowSizes): string {
+    return /* wgsl */ `
 const PI: f32 = 3.14159265358979;
 
 fn D_GGX(NdotH: f32, roughness: f32) -> f32 {
@@ -487,37 +505,159 @@ fn brdf_direct(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, albedo: vec3<f32>, roug
     return (diffuse + specular) * NdotL;
 }
 
-// PCF shadow sample — returns 1.0 if lit, 0.0 if fully in shadow. Four bilinear comparisons at ±½ texel: a 3×3
-// texel tent, which also averages a 2×2 pattern exactly (the ordered threshold of see-through casters).
-fn pcfShadow(shadowMap: texture_depth_2d_array, layer: i32, lsMatrix: mat4x4<f32>, worldPos: vec3<f32>) -> f32 {
-    let lsPos = lsMatrix * vec4<f32>(worldPos, 1.0);
-    let ndc   = lsPos.xyz / lsPos.w;
+// ─── Shadows ────────────────────────────────────────────────────────────────
+
+// Interleaved gradient noise: a per-pixel angle that turns the sample pattern, so few samples read as fine grain.
+fn shadowNoise(pixel: vec2<f32>) -> f32 {
+    return 6.28318530 * fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// Where a point is looked up in a shadow map: off the surface along its normal (more at grazing light, where a
+// face would otherwise shadow itself) and toward the light, both in shadow texels of world size 'texel'.
+fn shadowLookup(worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>, texel: f32, bias: vec4<f32>) -> vec3<f32> {
+    let NdotL    = clamp(dot(N, L), 0.0, 1.0);
+    let sinTheta = sqrt(1.0 - NdotL * NdotL);
+    return worldPos + N * (texel * bias.x * sinTheta) + L * (texel * bias.y);
+}
+
+// The lookup point for a filter 'radius' texels wide: a surface tilted to the light changes depth across the
+// filter, so it moves further off the surface (beyond the base normal bias) by the extra radius, at grazing light.
+fn widenLookup(p: vec3<f32>, N: vec3<f32>, L: vec3<f32>, texel: f32, radius: f32) -> vec3<f32> {
+    let NdotL    = clamp(dot(N, L), 0.0, 1.0);
+    let sinTheta = sqrt(1.0 - NdotL * NdotL);
+    return p + N * (texel * (radius - 1.0) * sinTheta);
+}
+
+// Percentage-closer filtering over a disk of 'radius' texels: 'samples' taps on a golden-angle spiral turned by
+// 'rotation'. Under a texel (or 4 samples or fewer): four bilinear taps at ±½ texel, which also average the 2×2
+// pattern see-through casters leave exactly.
+fn pcf(map: texture_depth_2d_array, layer: i32, uv: vec2<f32>, depth: f32, radius: f32, samples: u32, size: f32, rotation: f32) -> f32 {
+    let texelUv = 1.0 / size;
+    if (samples <= 4u || radius <= 1.0) {
+        let h = 0.5 * texelUv;
+        return 0.25 * (
+            textureSampleCompareLevel(map, shadowSampler, uv + vec2<f32>(-h, -h), layer, depth) +
+            textureSampleCompareLevel(map, shadowSampler, uv + vec2<f32>( h, -h), layer, depth) +
+            textureSampleCompareLevel(map, shadowSampler, uv + vec2<f32>(-h,  h), layer, depth) +
+            textureSampleCompareLevel(map, shadowSampler, uv + vec2<f32>( h,  h), layer, depth));
+    }
+    // each tap on a texel corner: its bilinear compare is the mean of a 2×2 block, which is exactly a
+    // see-through caster's alpha (its 2×2 ordered pattern) instead of grain
+    let n = f32(samples);
+    var lit = 0.0;
+    for (var i = 0u; i < samples; i++) {
+        let r = sqrt((f32(i) + 0.5) / n) * radius;
+        let a = f32(i) * 2.39996323 + rotation;
+        let corner = round(uv * size + vec2<f32>(cos(a), sin(a)) * r) * texelUv;
+        lit += textureSampleCompareLevel(map, shadowSampler, corner, layer, depth);
+    }
+    return lit / n;
+}
+
+// The blockers between a point and the light, within 'radius' texels: x = their mean stored depth, y = how many.
+fn findBlockers(map: texture_depth_2d_array, layer: i32, uv: vec2<f32>, depth: f32, radius: f32, samples: u32, size: f32, rotation: f32) -> vec2<f32> {
+    let n = min(samples, 16u);
+    var sum = 0.0;
+    var count = 0.0;
+    let maxCoord = vec2<i32>(i32(size) - 1);
+    for (var i = 0u; i < n; i++) {
+        let r = sqrt((f32(i) + 0.5) / f32(n)) * radius;
+        let a = f32(i) * 2.39996323 + rotation;
+        let coord = clamp(vec2<i32>(floor(uv * size + vec2<f32>(cos(a), sin(a)) * r)), vec2<i32>(0), maxCoord);
+        let d = textureLoad(map, coord, layer, 0);
+        if (d < depth) {
+            sum += d;
+            count += 1.0;
+        }
+    }
+    return vec2<f32>(sum / max(count, 1.0), count);
+}
+
+// One cascade of a directional light. Contact hardening when the light has a size: the penumbra widens with
+// the distance between the receiver and the blockers found up the light.
+fn cascadeShadow(i: u32, c: u32, worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>, rotation: f32) -> f32 {
+    let dl    = lighting.directionalLights[i];
+    let texel = dl.texels[c];
+    let p     = shadowLookup(worldPos, N, L, texel, dl.shadowBias);
+    let ndc   = (dl.matrices[c] * vec4<f32>(p, 1.0)).xyz;
+    let uv    = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+    if (ndc.z > 1.0 || any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { return 1.0; }
+    let layer   = i32(dl.shadow.x) + i32(c);
+    let tanHalf = dl.shadow.z;
+    let samples = u32(dl.shadow.w);
+    let size    = f32(${sizes.directional});
+    if (tanHalf <= 0.0) {
+        return pcf(dirShadowMaps, layer, uv, ndc.z, 1.0, samples, size, rotation);
+    }
+    let range    = dl.depthRanges[c];
+    // a blocker can sit anywhere up the light: search as wide as the farthest one would blur
+    let search   = clamp(tanHalf * ndc.z * range / texel, 1.0, 24.0);
+    let blockers = findBlockers(dirShadowMaps, layer, uv, ndc.z, search, samples, size, rotation);
+    if (blockers.y == 0.0) { return 1.0; }
+    let penumbra = (ndc.z - blockers.x) * range * 2.0 * tanHalf; // world width
+    let radius   = clamp(0.5 * penumbra / texel + 1.0, 1.0, 32.0);
+    // a wide filter reaches across the surface's own slope: move off it by as much
+    let wide = (dl.matrices[c] * vec4<f32>(widenLookup(p, N, L, texel, radius), 1.0)).xyz;
+    return pcf(dirShadowMaps, layer, wide.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5), wide.z, radius, samples, size, rotation);
+}
+
+fn directionalShadow(i: u32, worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>, rotation: f32) -> f32 {
+    let dl        = lighting.directionalLights[i];
+    let count     = u32(dl.shadow.y);
+    let viewDepth = dot(worldPos - lighting.cameraPosition.xyz, lighting.cameraForward.xyz);
+    var c = count;
+    for (var k = 0u; k < count; k++) {
+        if (viewDepth < dl.splits[k]) { c = k; break; }
+    }
+    if (c >= count) { return 1.0; }
+    var lit = cascadeShadow(i, c, worldPos, N, L, rotation);
+    // cross-fade into the next cascade over the last tenth of this one
+    if (dl.shadowBias.z > 0.5 && c + 1u < count) {
+        let begin = select(0.0, dl.splits[max(c, 1u) - 1u], c > 0u);
+        let t = (viewDepth - begin) / (dl.splits[c] - begin);
+        if (t > 0.9) {
+            lit = mix(lit, cascadeShadow(i, c + 1u, worldPos, N, L, rotation), (t - 0.9) * 10.0);
+        }
+    }
+    // and out of shadow over the last tenth of the max distance
+    let maxDistance = dl.shadowBias.w;
+    return mix(lit, 1.0, clamp((viewDepth - 0.9 * maxDistance) / (0.1 * maxDistance), 0.0, 1.0));
+}
+
+// A spot or point light's shadow (perspective). 'texel' is a texel's world size at the receiver.
+fn perspectiveShadow(map: texture_depth_2d_array, layer: i32, lsMatrix: mat4x4<f32>, worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>, texel: f32, shadow: vec4<f32>, bias: vec4<f32>, size: f32, rotation: f32) -> f32 {
+    let p   = shadowLookup(worldPos, N, L, texel, bias);
+    let ls  = lsMatrix * vec4<f32>(p, 1.0);
+    let ndc = ls.xyz / ls.w;
     if (ndc.z <= 0.0 || ndc.z > 1.0) { return 1.0; }
     let uv = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { return 1.0; }
-    let depth = ndc.z;
-    let sz    = 1.0 / f32(${SHADOW_MAP_SIZE});
-    let h     = 0.5 * sz;
-    let lit   = textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-h, -h), layer, depth)
-              + textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>( h, -h), layer, depth)
-              + textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-h,  h), layer, depth)
-              + textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>( h,  h), layer, depth);
-    return lit * 0.25;
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { return 1.0; }
+    let lightRadius = shadow.x;
+    let samples     = u32(shadow.y);
+    if (lightRadius <= 0.0) {
+        return pcf(map, layer, uv, ndc.z, 1.0, samples, size, rotation);
+    }
+    let near     = shadow.z;
+    let far      = shadow.w;
+    let receiver = ls.w; // linear distance along the light's view axis
+    let search   = clamp(lightRadius / texel, 1.0, 24.0);
+    let blockers = findBlockers(map, layer, uv, ndc.z, search, samples, size, rotation);
+    if (blockers.y == 0.0) { return 1.0; }
+    let blocker  = near * far / (far - blockers.x * (far - near));
+    let penumbra = 2.0 * lightRadius * max(receiver - blocker, 0.0) / max(blocker, near);
+    let radius   = clamp(0.5 * penumbra / texel + 1.0, 1.0, 32.0);
+    // a wide filter reaches across the surface's own slope: move off it by as much
+    let wls  = lsMatrix * vec4<f32>(widenLookup(p, N, L, texel, radius), 1.0);
+    let wide = wls.xyz / wls.w;
+    return pcf(map, layer, wide.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5), wide.z, radius, samples, size, rotation);
 }
 
-// Normal offset: where to look a point up in a shadow map. Nudged off the surface along its normal by about a
-// shadow texel (texel: its world size there), more as the light grazes: a face turning edge-on to the light
-// otherwise shadows itself in stair-stepped bands that don't follow its edges.
-fn shadowLookup(worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>, texel: f32) -> vec3<f32> {
-    let sinTheta = sqrt(1.0 - clamp(dot(N, L), 0.0, 1.0) * clamp(dot(N, L), 0.0, 1.0));
-    return worldPos + N * (texel * ${SHADOW_NORMAL_OFFSET} * sinTheta) + L * (texel * ${SHADOW_LIGHT_OFFSET});
-}
-
-fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f32, worldPos: vec3<f32>, receiveShadow: f32) -> vec3<f32> {
+fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f32, worldPos: vec3<f32>, receiveShadow: f32, pixel: vec2<f32>) -> vec3<f32> {
     let roughness = clamp(roughnessIn, 0.05, 1.0);
     let V     = normalize(lighting.cameraPosition.xyz - worldPos);
     let NdotV = max(dot(N, V), 0.001);
     let F0    = mix(vec3<f32>(0.04), albedo, metallic);
+    let rotation = shadowNoise(pixel);
 
     let F_ibl = F_SchlickRoughness(NdotV, F0, roughness);
     let kD    = (1.0 - F_ibl) * (1.0 - metallic);
@@ -530,10 +670,8 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let dl = lighting.directionalLights[i];
         let L  = normalize(-dl.direction.xyz);
         var shadow = 1.0;
-        if (dl.direction.w > 0.5) {
-            let at  = shadowLookup(worldPos, N, L, ${DIRECTIONAL_SHADOW_TEXEL});
-            let raw = pcfShadow(dirShadowMaps, i32(i), dl.lightSpaceMatrix, at);
-            shadow = mix(1.0, raw, receiveShadow);
+        if (dl.direction.w > 0.5 && receiveShadow > 0.0 && dot(N, L) > 0.0) {
+            shadow = mix(1.0, directionalShadow(i, worldPos, N, L, rotation), receiveShadow);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
                   * dl.colorIntensity.rgb * dl.colorIntensity.w * shadow;
@@ -546,7 +684,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let L       = toLight / dist;
         let attn    = clamp(1.0 - dist / pl.position.w, 0.0, 1.0);
         var shadow  = 1.0;
-        if (pl.flags.x > 0.5) {
+        if (pl.flags.x > 0.5 && receiveShadow > 0.0 && attn > 0.0 && dot(N, L) > 0.0) {
             let lf    = worldPos - pl.position.xyz;
             let absLF = abs(lf);
             var faceIdx: i32;
@@ -557,12 +695,11 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
             } else {
                 faceIdx = select(5, 4, lf.z > 0.0);
             }
-            let layer    = i32(i) * 6 + faceIdx;
-            let lsMatrix = pointShadowMatrices.matrices[layer];
-            // a 90° face: a texel spans 2 · distance / size
-            let at       = shadowLookup(worldPos, N, L, 2.0 * dist / f32(${POINT_SHADOW_MAP_SIZE}));
-            let raw      = pcfShadow(pointShadowMaps, layer, lsMatrix, at);
-            shadow       = mix(1.0, raw, receiveShadow);
+            let layer = i32(i) * 6 + faceIdx;
+            // a 90° face: a texel spans 2 · depth / size, the depth being the largest axis
+            let texel = 2.0 * max(absLF.x, max(absLF.y, absLF.z)) / f32(${sizes.point});
+            let raw   = perspectiveShadow(pointShadowMaps, layer, pointShadowMatrices.matrices[layer], worldPos, N, L, texel, pl.shadow, pl.shadowBias, f32(${sizes.point}), rotation);
+            shadow    = mix(1.0, raw, receiveShadow);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
                   * pl.colorIntensity.rgb * (pl.colorIntensity.w * attn * attn * shadow);
@@ -580,21 +717,37 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
             0.0, 1.0
         );
         var shadow = 1.0;
-        if (sl.direction.w > 0.5) {
-            // the cone spans 2 · tan(outer) · distance over the map
+        if (sl.direction.w > 0.5 && receiveShadow > 0.0 && attn * spotAttn > 0.0 && dot(N, L) > 0.0) {
+            // the cone spans 2 · tan(outer) · depth over the map
             let cosOuter = max(sl.angles.y, 0.01);
-            let texel    = 2.0 * dist * sqrt(1.0 - cosOuter * cosOuter) / cosOuter / f32(${SHADOW_MAP_SIZE});
-            let raw = pcfShadow(spotShadowMaps, i32(i), sl.lightSpaceMatrix, shadowLookup(worldPos, N, L, texel));
+            let depth    = dot(-toLight, normalize(sl.direction.xyz));
+            let texel    = 2.0 * depth * sqrt(1.0 - cosOuter * cosOuter) / cosOuter / f32(${sizes.spot});
+            let raw = perspectiveShadow(spotShadowMaps, i32(i), sl.lightSpaceMatrix, worldPos, N, L, texel, sl.shadow, sl.shadowBias, f32(${sizes.spot}), rotation);
             shadow = mix(1.0, raw, receiveShadow);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
                   * sl.colorIntensity.rgb * (sl.colorIntensity.w * attn * attn * spotAttn * shadow);
     }
+    if (lighting.cameraForward.w > 0.5 && lighting.counts.x > 0u && lighting.directionalLights[0].direction.w > 0.5) {
+        // debug: tint by the first directional light's cascade (red, green, blue, yellow; none past the last)
+        let dl = lighting.directionalLights[0];
+        let viewDepth = dot(worldPos - lighting.cameraPosition.xyz, lighting.cameraForward.xyz);
+        var tint = vec3<f32>(1.0);
+        for (var k = u32(dl.shadow.y); k > 0u; k--) {
+            if (viewDepth < dl.splits[k - 1u]) {
+                tint = array<vec3<f32>, 4>(
+                    vec3<f32>(1.0, 0.35, 0.35), vec3<f32>(0.35, 1.0, 0.35),
+                    vec3<f32>(0.35, 0.5, 1.0), vec3<f32>(1.0, 1.0, 0.35))[k - 1u];
+            }
+        }
+        colour *= tint;
+    }
     return colour;
 }
 `;
+}
 
-function buildLightingShader(encode: boolean): string {
+function buildLightingShader(encode: boolean, sizes: ShadowSizes): string {
     return /* wgsl */ `
 ${COLOR_WGSL}
 ${LIGHT_STRUCTS_WGSL}
@@ -636,7 +789,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> QuadInput {
     return out;
 }
 
-${SHADE_WGSL}
+${shadeWgsl(sizes)}
 
 fn sampleBgMap(dir: vec3<f32>) -> vec3<f32> {
     return textureSampleLevel(backgroundMap, envSampler, sampleEquirect(dir), 0.0).rgb;
@@ -667,6 +820,7 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
         clamp(posSample.w, 0.0, 1.0),
         posSample.xyz,
         emissiveSample.w,
+        input.pos.xy,
     );
     return outputColor(colour + emissiveSample.rgb);
 }
@@ -697,6 +851,13 @@ export interface DeferredScenePassOptions {
      * tone map and encode. `"srgb"`: encoded for the screen, when this pass renders straight to the canvas.
      */
     colorSpace?: ColorSpace;
+    /**
+     * Texels per side of each directional cascade and spot light shadow map. Default 1024: sharper costs memory
+     * (4 bytes a texel, per cascade) and shadow-pass fill.
+     */
+    shadowMapSize?: number;
+    /** Texels per side of each of a point light's six shadow maps. Default 512. */
+    pointShadowMapSize?: number;
 }
 
 /**
@@ -715,6 +876,8 @@ export type DeferredSceneOutput = "color" | "albedo" | "normal" | "worldPos" | "
 
 export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     readonly inputSlots: PassInputSlot[] = [];
+    /** Debug: tint the scene by the first directional light's shadow cascade (red, green, blue, yellow). */
+    debugCascades = false;
     readonly outputSlots: PassOutputSlot<DeferredSceneOutput>[];
 
     private readonly scene: Scene;
@@ -773,6 +936,25 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private forwardLightingBindGroup: GPUBindGroup | null = null;
     private forwardEnvView: GPUTextureView | null = null;
 
+    private readonly shadowSizes: ShadowSizes;
+    /** Per directional light (by index): its cascades this frame and its first layer in dirShadowTex. */
+    private readonly dirShadows: {cascades: Cascade[]; count: number; firstLayer: number}[] = [];
+    private dirShadowLayers = 0;
+    /** This frame's shadow casters: draw state and world bounding sphere (for culling per cascade). */
+    private readonly casters: {
+        res: MeshGPUResources;
+        pipeline: GPURenderPipeline;
+        material: GPUBindGroup | null;
+        rank: number;
+        center: vec3;
+        radius: number;
+    }[] = [];
+    private readonly lightViewMatrix = mat4.create();
+    private readonly tmpLight = vec3.create();
+    private readonly lightingData = new ArrayBuffer(LIGHTING_BUFFER_SIZE);
+    private readonly lightingF32 = new Float32Array(this.lightingData);
+    private readonly lightingU32 = new Uint32Array(this.lightingData);
+
     // Per-frame scratch, reused: no allocation per mesh per frame
     private readonly opaqueDraws: {mesh: Mesh; material: PBRMaterial; features: GBufferFeatures; key: string}[] = [];
     private readonly blendDraws: {mesh: Mesh; depth: number}[] = [];
@@ -783,9 +965,16 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     // Cached mesh GPU resources
     private meshCache = new Map<Mesh, MeshGPUResources>();
 
-    constructor({scene, colorFormat = "rgba16float", colorSpace = "linear-srgb"}: DeferredScenePassOptions) {
+    constructor({
+        scene,
+        colorFormat = "rgba16float",
+        colorSpace = "linear-srgb",
+        shadowMapSize = 1024,
+        pointShadowMapSize = 512,
+    }: DeferredScenePassOptions) {
         super();
         this.scene = scene;
+        this.shadowSizes = {directional: shadowMapSize, spot: shadowMapSize, point: pointShadowMapSize};
         this.colorFormat = colorFormat;
         this.outputColorSpace = colorSpace;
         this.outputSlots = [
@@ -833,15 +1022,16 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const pointLights = this.scene.collectPointLights().slice(0, MAX_POINT);
         const spotLights = this.scene.collectSpotLights().slice(0, MAX_SPOT);
 
-        const dirMatrices = dirLights.map((l) => (l.castShadow ? this.computeDirectionalLightMatrix(l) : null));
         const spotMatrices = spotLights.map((l) => (l.castShadow ? this.computeSpotLightMatrix(l) : null));
         const pointMatrices = pointLights.map((l) => (l.castShadow ? this.computePointLightFaceMatrices(l) : null));
 
+        this.ensureMeshResources(meshes);
         this.uploadCameraUniforms(this.scene.activeCamera, ctx.width, ctx.height);
-        this.uploadLightingUniforms(dirLights, pointLights, spotLights, dirMatrices, spotMatrices);
+        this.collectCasters(meshes);
+        this.fitDirectionalShadows(dirLights);
+        this.uploadLightingUniforms(dirLights, pointLights, spotLights, spotMatrices);
         this.uploadPointShadowMatrices(pointLights, pointMatrices);
 
-        this.ensureMeshResources(meshes);
         for (const mesh of meshes) {
             const res = this.meshCache.get(mesh);
             if (res) {
@@ -849,16 +1039,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             }
         }
 
-        this.renderShadowMaps(
-            encoder,
-            meshes,
-            dirLights,
-            pointLights,
-            spotLights,
-            dirMatrices,
-            pointMatrices,
-            spotMatrices,
-        );
+        this.renderShadowMaps(encoder, dirLights, pointLights, spotLights, pointMatrices, spotMatrices);
         this.sortDraws(meshes);
         this.renderGBuffer(encoder, ctx);
         this.renderLighting(encoder, ctx);
@@ -1046,7 +1227,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
         const lightingModule = device.createShaderModule({
             label: "Lighting",
-            code: buildLightingShader(this.outputColorSpace === "srgb"),
+            code: buildLightingShader(this.outputColorSpace === "srgb", this.shadowSizes),
         });
 
         this.lightingPipeline = device.createRenderPipeline({
@@ -1208,7 +1389,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         if (!pipeline) {
             const module = this.device.createShaderModule({
                 label: `Forward[${key}]`,
-                code: buildForwardShader(features, this.outputColorSpace === "srgb"),
+                code: buildForwardShader(features, this.outputColorSpace === "srgb", this.shadowSizes),
             });
             pipeline = this.device.createRenderPipeline({
                 label: `DeferredScene:forward[${key}]`,
@@ -1321,9 +1502,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
             });
 
-        this.dirShadowTex = makeDepthArray(MAX_DIRECTIONAL, SHADOW_MAP_SIZE, "Shadow:directional");
-        this.spotShadowTex = makeDepthArray(MAX_SPOT, SHADOW_MAP_SIZE, "Shadow:spot");
-        this.pointShadowTex = makeDepthArray(MAX_POINT * 6, POINT_SHADOW_MAP_SIZE, "Shadow:point");
+        // directional cascades: one layer to start, grown to what the lights use (see fitDirectionalShadows)
+        this.dirShadowLayers = 1;
+        this.dirShadowTex = makeDepthArray(1, this.shadowSizes.directional, "Shadow:directional");
+        this.spotShadowTex = makeDepthArray(MAX_SPOT, this.shadowSizes.spot, "Shadow:spot");
+        this.pointShadowTex = makeDepthArray(MAX_POINT * 6, this.shadowSizes.point, "Shadow:point");
 
         this.shadowSampler = device.createSampler({
             label: "DeferredScene:shadowSampler",
@@ -1334,9 +1517,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             addressModeV: "clamp-to-edge",
         });
 
-        for (let i = 0; i < MAX_DIRECTIONAL; i++) {
+        for (let i = 0; i < MAX_DIRECTIONAL * MAX_CASCADES; i++) {
             const buf = device.createBuffer({
-                label: `Shadow:dirLight${i}`,
+                label: `Shadow:dirLayer${i}`,
                 size: 64,
                 usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
             });
@@ -1388,7 +1571,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
-        this.shadowBindGroup = device.createBindGroup({
+        this.shadowBindGroup = this.createShadowBindGroup();
+    }
+
+    private createShadowBindGroup(): GPUBindGroup {
+        return this.device.createBindGroup({
             label: "DeferredScene:shadowBindGroup",
             layout: this.shadowSceneBindGroupLayout,
             entries: [
@@ -1403,23 +1590,13 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
     // ─── Private: render steps ───────────────────────────────────────────────
 
-    private renderShadowMaps(
-        encoder: GPUCommandEncoder,
-        meshes: Mesh[],
-        dirLights: DirectionalLight[],
-        pointLights: PointLight[],
-        spotLights: SpotLight[],
-        dirMatrices: (mat4 | null)[],
-        pointMatrices: (mat4[] | null)[],
-        spotMatrices: (mat4 | null)[],
-    ): void {
-        // Casters with their pipeline, opaque (the common, cheap case) first, then grouped by variant.
-        const casters: {
-            res: MeshGPUResources;
-            pipeline: GPURenderPipeline;
-            material: GPUBindGroup | null;
-            rank: number;
-        }[] = [];
+    /**
+     * This frame's shadow casters, opaque (the common, cheap case) first and then grouped by pipeline variant,
+     * with their world bounding spheres.
+     */
+    private collectCasters(meshes: Mesh[]): void {
+        const casters = this.casters;
+        let n = 0;
         const ranks = new Map<GPURenderPipeline, number>([[this.shadowPipeline, 0]]);
         for (const mesh of meshes) {
             const res = this.meshCache.get(mesh);
@@ -1433,27 +1610,117 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 rank = ranks.size;
                 ranks.set(pipeline, rank);
             }
-            casters.push({
+            const caster = (casters[n++] ??= {
                 res,
                 pipeline,
+                material: null,
                 rank,
-                material:
-                    material !== null && material.alphaMode !== "opaque"
-                        ? material.getOrCreateBindGroup(
-                              this.device,
-                              this.materialBindGroupLayout,
-                              this.defaultWhiteView,
-                              this.defaultNormalView,
-                              this.texSampler,
-                          )
-                        : null,
+                center: vec3.create(),
+                radius: 0,
             });
+            caster.res = res;
+            caster.pipeline = pipeline;
+            caster.rank = rank;
+            caster.material =
+                material !== null && material.alphaMode !== "opaque"
+                    ? material.getOrCreateBindGroup(
+                          this.device,
+                          this.materialBindGroupLayout,
+                          this.defaultWhiteView,
+                          this.defaultNormalView,
+                          this.texSampler,
+                      )
+                    : null;
+            const m = mesh.worldMatrix;
+            const bounds = mesh.geometry.boundingSphere;
+            vec3.transformMat4(caster.center, bounds.center as vec3, m);
+            const scale = Math.sqrt(
+                Math.max(
+                    m[0]! * m[0]! + m[1]! * m[1]! + m[2]! * m[2]!,
+                    m[4]! * m[4]! + m[5]! * m[5]! + m[6]! * m[6]!,
+                    m[8]! * m[8]! + m[9]! * m[9]! + m[10]! * m[10]!,
+                ),
+            );
+            caster.radius = bounds.radius * scale;
         }
+        casters.length = n;
         casters.sort((a, b) => a.rank - b.rank);
+    }
 
-        const drawShadowMeshes = (pass: GPURenderPassEncoder, lightBindGroup: GPUBindGroup) => {
+    /** Fits each shadowed directional light's cascades to the camera and gives them layers of dirShadowTex. */
+    private fitDirectionalShadows(dirLights: DirectionalLight[]): void {
+        const camera = this.scene.activeCamera as (Camera & {near?: number; far?: number}) | null;
+        let layer = 0;
+        for (let i = 0; i < dirLights.length; i++) {
+            const light = dirLights[i]!;
+            const state = (this.dirShadows[i] ??= {cascades: [], count: 0, firstLayer: 0});
+            state.count = 0;
+            if (!light.castShadow || camera === null) {
+                continue;
+            }
+            const direction = worldForward(light.worldMatrix, this.tmpLight);
+            let casterStart = Infinity;
+            for (const caster of this.casters) {
+                casterStart = Math.min(casterStart, vec3.dot(caster.center, direction) - caster.radius);
+            }
+            if (casterStart === Infinity) {
+                continue; // nothing casts
+            }
+            state.count = fitCascades(state.cascades, {
+                invViewProjection: this.currentInvVP,
+                near: camera.near ?? 0.1,
+                far: camera.far ?? 1000,
+                lightDirection: direction,
+                cascades: light.shadow.cascades,
+                maxDistance: light.shadow.maxDistance,
+                splitBalance: light.shadow.splitBalance,
+                mapSize: this.shadowSizes.directional,
+                casterStart,
+            });
+            state.firstLayer = layer;
+            layer += state.count;
+        }
+        if (layer > this.dirShadowLayers) {
+            // grow (never shrink: a light toggling its shadow shouldn't reallocate every time)
+            this.dirShadowTex.destroy();
+            this.dirShadowLayers = layer;
+            this.dirShadowTex = this.device.createTexture({
+                label: "Shadow:directional",
+                size: {
+                    width: this.shadowSizes.directional,
+                    height: this.shadowSizes.directional,
+                    depthOrArrayLayers: layer,
+                },
+                format: "depth32float",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+            });
+            this.shadowBindGroup = this.createShadowBindGroup();
+            this.forwardLightingBindGroup = null;
+        }
+    }
+
+    private renderShadowMaps(
+        encoder: GPUCommandEncoder,
+        dirLights: DirectionalLight[],
+        pointLights: PointLight[],
+        spotLights: SpotLight[],
+        pointMatrices: (mat4[] | null)[],
+        spotMatrices: (mat4 | null)[],
+    ): void {
+        const casters = this.casters;
+
+        /** Draws the casters; `keep` culls them (a cascade skips what can't shadow its slice). */
+        const drawShadowMeshes = (
+            pass: GPURenderPassEncoder,
+            lightBindGroup: GPUBindGroup,
+            keep?: (caster: (typeof casters)[number]) => boolean,
+        ) => {
             let bound: GPURenderPipeline | null = null;
-            for (const {res, pipeline, material} of casters) {
+            for (const caster of casters) {
+                if (keep !== undefined && !keep(caster)) {
+                    continue;
+                }
+                const {res, pipeline, material} = caster;
                 if (pipeline !== bound) {
                     pass.setPipeline(pipeline);
                     pass.setBindGroup(0, lightBindGroup);
@@ -1469,24 +1736,43 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             }
         };
 
+        const lightSpace = this.tmpCenter;
         for (let i = 0; i < dirLights.length; i++) {
-            const lsMatrix = dirMatrices[i];
-            if (!lsMatrix) {
+            const state = this.dirShadows[i];
+            if (state === undefined || state.count === 0) {
                 continue;
             }
-            this.device.queue.writeBuffer(this.dirShadowLightBuffers[i]!, 0, lsMatrix as Float32Array);
-            const pass = encoder.beginRenderPass({
-                label: `Shadow:dir${i}`,
-                colorAttachments: [],
-                depthStencilAttachment: {
-                    view: this.dirShadowTex.createView({dimension: "2d", baseArrayLayer: i, arrayLayerCount: 1}),
-                    depthClearValue: 1.0,
-                    depthLoadOp: "clear",
-                    depthStoreOp: "store",
-                },
-            });
-            drawShadowMeshes(pass, this.dirShadowLightBGs[i]!);
-            pass.end();
+            lightView(this.lightViewMatrix, worldForward(dirLights[i]!.worldMatrix, this.tmpLight));
+            for (let c = 0; c < state.count; c++) {
+                const cascade = state.cascades[c]!;
+                const layer = state.firstLayer + c;
+                this.device.queue.writeBuffer(this.dirShadowLightBuffers[layer]!, 0, cascade.matrix as Float32Array);
+                const pass = encoder.beginRenderPass({
+                    label: `Shadow:dir${i}c${c}`,
+                    colorAttachments: [],
+                    depthStencilAttachment: {
+                        view: this.dirShadowTex.createView({
+                            dimension: "2d",
+                            baseArrayLayer: layer,
+                            arrayLayerCount: 1,
+                        }),
+                        depthClearValue: 1.0,
+                        depthLoadOp: "clear",
+                        depthStoreOp: "store",
+                    },
+                });
+                // only casters whose bounds overlap the cascade's square, seen from the light
+                drawShadowMeshes(pass, this.dirShadowLightBGs[layer]!, (caster) => {
+                    vec3.transformMat4(lightSpace, caster.center, this.lightViewMatrix);
+                    const reach = cascade.radius + caster.radius;
+                    return (
+                        Math.abs(lightSpace[0] - cascade.center[0]) <= reach &&
+                        Math.abs(lightSpace[1] - cascade.center[1]) <= reach &&
+                        -lightSpace[2] - caster.radius <= -cascade.center[2] + cascade.radius
+                    );
+                });
+                pass.end();
+            }
         }
 
         for (let i = 0; i < pointLights.length; i++) {
@@ -1722,12 +2008,12 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         dirLights: DirectionalLight[],
         pointLights: PointLight[],
         spotLights: SpotLight[],
-        dirMatrices: (mat4 | null)[],
         spotMatrices: (mat4 | null)[],
     ): void {
-        const data = new ArrayBuffer(LIGHTING_BUFFER_SIZE);
-        const f32 = new Float32Array(data);
-        const u32 = new Uint32Array(data);
+        const data = this.lightingData;
+        const f32 = this.lightingF32;
+        const u32 = this.lightingU32;
+        f32.fill(0);
 
         const ambient = this.scene.ambientColor;
         f32[0] = srgbToLinear(ambient[0]);
@@ -1736,7 +2022,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         f32[3] = 1.0;
 
         const cam = this.scene.activeCamera;
-        const cp = cam ? mat4.getTranslation(vec3.create(), cam.worldMatrix) : vec3.create();
+        const cp = cam ? mat4.getTranslation(this.tmpLight, cam.worldMatrix) : vec3.set(this.tmpLight, 0, 0, 0);
         f32[4] = cp[0];
         f32[5] = cp[1];
         f32[6] = cp[2];
@@ -1745,28 +2031,44 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         u32[8] = dirLights.length;
         u32[9] = pointLights.length;
         u32[10] = spotLights.length;
-        u32[11] = 0;
 
         for (let i = 0; i < dirLights.length; i++) {
-            const base = 12 + i * 24;
+            const base = DIR_BASE + i * DIR_STRIDE;
             const l = dirLights[i]!;
-            const lm = dirMatrices[i];
+            const state = this.dirShadows[i];
+            const shadowed = l.castShadow && state !== undefined && state.count > 0;
             const dir = worldForward(l.worldMatrix, tmpDir);
             f32[base + 0] = dir[0];
             f32[base + 1] = dir[1];
             f32[base + 2] = dir[2];
-            f32[base + 3] = l.castShadow ? 1.0 : 0.0;
+            f32[base + 3] = shadowed ? 1.0 : 0.0;
             f32[base + 4] = srgbToLinear(l.color[0]);
             f32[base + 5] = srgbToLinear(l.color[1]);
             f32[base + 6] = srgbToLinear(l.color[2]);
             f32[base + 7] = l.intensity;
-            if (lm) {
-                f32.set(lm, base + 8);
+            if (!shadowed) {
+                continue;
+            }
+            const sh = l.shadow;
+            f32[base + 8] = state.firstLayer;
+            f32[base + 9] = state.count;
+            f32[base + 10] = Math.tan(((sh.softness / 2) * Math.PI) / 180); // angular diameter in degrees
+            f32[base + 11] = Math.max(1, Math.round(sh.samples));
+            f32[base + 12] = sh.normalBias;
+            f32[base + 13] = sh.bias;
+            f32[base + 14] = sh.blendCascades ? 1 : 0;
+            f32[base + 15] = state.cascades[state.count - 1]!.far;
+            for (let c = 0; c < state.count; c++) {
+                const cascade = state.cascades[c]!;
+                f32[base + 16 + c] = cascade.far;
+                f32[base + 20 + c] = cascade.texel;
+                f32[base + 24 + c] = cascade.depthRange;
+                f32.set(cascade.matrix, base + 28 + c * 16);
             }
         }
 
         for (let i = 0; i < pointLights.length; i++) {
-            const base = 108 + i * 12;
+            const base = POINT_BASE + i * POINT_STRIDE;
             const l = pointLights[i]!;
             const wp = l.worldMatrix;
             f32[base + 0] = wp[12]!;
@@ -1778,10 +2080,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 6] = srgbToLinear(l.color[2]);
             f32[base + 7] = l.intensity;
             f32[base + 8] = l.castShadow ? 1.0 : 0.0;
+            this.packPerspectiveShadow(f32, base + 12, l);
         }
 
         for (let i = 0; i < spotLights.length; i++) {
-            const base = 204 + i * 32;
+            const base = SPOT_BASE + i * SPOT_STRIDE;
             const l = spotLights[i]!;
             const lm = spotMatrices[i];
             const wp = l.worldMatrix;
@@ -1800,50 +2103,52 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 11] = l.intensity;
             f32[base + 12] = Math.cos(l.innerAngle);
             f32[base + 13] = Math.cos(l.outerAngle);
+            this.packPerspectiveShadow(f32, base + 16, l);
             if (lm) {
-                f32.set(lm, base + 16);
+                f32.set(lm, base + 24);
             }
         }
 
         const bg = this.scene.backgroundColor;
-        f32[332] = srgbToLinear(bg[0]);
-        f32[333] = srgbToLinear(bg[1]);
-        f32[334] = srgbToLinear(bg[2]);
-        f32[335] = 1.0;
+        f32[BACKGROUND_SLOT] = srgbToLinear(bg[0]);
+        f32[BACKGROUND_SLOT + 1] = srgbToLinear(bg[1]);
+        f32[BACKGROUND_SLOT + 2] = srgbToLinear(bg[2]);
+        f32[BACKGROUND_SLOT + 3] = 1.0;
 
         // Reflections sample the environment map times environmentColor. Without a map the sampled texel is a white
         // placeholder: reflect the ambient color instead (a uniform environment), not a white sky, which would rim
         // every object with a light outline at grazing angles.
         const env = this.scene.environmentColor;
         const sky = this.scene.environmentMap === null ? this.scene.ambientColor : null;
-        f32[336] = srgbToLinear(env[0]) * srgbToLinear(sky?.[0] ?? 1);
-        f32[337] = srgbToLinear(env[1]) * srgbToLinear(sky?.[1] ?? 1);
-        f32[338] = srgbToLinear(env[2]) * srgbToLinear(sky?.[2] ?? 1);
-        f32[339] = 1.0;
+        f32[ENVIRONMENT_SLOT] = srgbToLinear(env[0]) * srgbToLinear(sky?.[0] ?? 1);
+        f32[ENVIRONMENT_SLOT + 1] = srgbToLinear(env[1]) * srgbToLinear(sky?.[1] ?? 1);
+        f32[ENVIRONMENT_SLOT + 2] = srgbToLinear(env[2]) * srgbToLinear(sky?.[2] ?? 1);
+        f32[ENVIRONMENT_SLOT + 3] = 1.0;
 
-        f32.set(this.currentInvVP, 340);
+        f32.set(this.currentInvVP, INV_VP_SLOT);
+        if (cam) {
+            const forward = worldForward(cam.worldMatrix, tmpDir);
+            f32[CAMERA_FORWARD_SLOT] = forward[0];
+            f32[CAMERA_FORWARD_SLOT + 1] = forward[1];
+            f32[CAMERA_FORWARD_SLOT + 2] = forward[2];
+            f32[CAMERA_FORWARD_SLOT + 3] = this.debugCascades ? 1 : 0;
+        }
 
         this.device.queue.writeBuffer(this.lightingBuffer, 0, data);
     }
 
-    // ─── Private: shadow matrix helpers ─────────────────────────────────────
-
-    private computeDirectionalLightMatrix(light: DirectionalLight): mat4 {
-        const dir = worldForward(light.worldMatrix, vec3.create());
-        const up = Math.abs(dir[1]) > 0.9 ? vec3.fromValues(1, 0, 0) : vec3.fromValues(0, 1, 0);
-        const eye = vec3.scale(vec3.create(), dir, -20);
-
-        const view = mat4.create();
-        mat4.lookAt(view, eye, [0, 0, 0], up);
-
-        const proj = mat4.create();
-        const e = DIRECTIONAL_SHADOW_EXTENT;
-        mat4.orthoZO(proj, -e, e, -e, e, 0.1, 50);
-
-        const lsMatrix = mat4.create();
-        mat4.multiply(lsMatrix, proj, view);
-        return lsMatrix;
+    /** A spot or point light's shadow settings: shadow (radius, samples, near, far) then shadowBias. */
+    private packPerspectiveShadow(f32: Float32Array, at: number, light: PointLight | SpotLight): void {
+        const sh = light.shadow;
+        f32[at + 0] = sh.softness;
+        f32[at + 1] = Math.max(1, Math.round(sh.samples));
+        f32[at + 2] = SHADOW_NEAR;
+        f32[at + 3] = light.range;
+        f32[at + 4] = sh.normalBias;
+        f32[at + 5] = sh.bias;
     }
+
+    // ─── Private: shadow matrix helpers ─────────────────────────────────────
 
     private computeSpotLightMatrix(light: SpotLight): mat4 {
         const wp = light.worldMatrix;
@@ -1856,7 +2161,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         mat4.lookAt(view, eye, center, up);
 
         const proj = mat4.create();
-        mat4.perspectiveZO(proj, light.outerAngle * 2, 1.0, 0.1, light.range);
+        mat4.perspectiveZO(proj, light.outerAngle * 2, 1.0, SHADOW_NEAR, light.range);
 
         const lsMatrix = mat4.create();
         mat4.multiply(lsMatrix, proj, view);
@@ -1872,7 +2177,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             const view = mat4.create();
             mat4.lookAt(view, eye, center, vec3.fromValues(up[0], up[1], up[2]));
             const proj = mat4.create();
-            mat4.perspectiveZO(proj, Math.PI / 2, 1.0, 0.1, light.range);
+            mat4.perspectiveZO(proj, Math.PI / 2, 1.0, SHADOW_NEAR, light.range);
             const vp = mat4.create();
             mat4.multiply(vp, proj, view);
             return vp;
