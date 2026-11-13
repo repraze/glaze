@@ -354,8 +354,12 @@ const MAX_SPOT = 4;
 
 const SHADOW_MAP_SIZE = 1024;
 const POINT_SHADOW_MAP_SIZE = 512;
-/** Depth bias in the shadow map's 0-1 depth (back faces are stored, so it only has to cover precision). */
-const SHADOW_BIAS = 0.0005;
+/**
+ * Lookups also move toward the light by this many shadow texels: the only depth bias. In world units, scaled
+ * like the texel, so a spot or point light (perspective depth) gets the same small bias as the sun; a bias in
+ * the map's 0-1 depth grows with distance there and let light under objects resting on a surface.
+ */
+const SHADOW_LIGHT_OFFSET = "0.5";
 /** Normal offset, in shadow texels at a grazing light (see shadowLookup). */
 const SHADOW_NORMAL_OFFSET = "1.5";
 /** Directional shadows cover ±DIRECTIONAL_SHADOW_EXTENT world units. */
@@ -491,7 +495,7 @@ fn pcfShadow(shadowMap: texture_depth_2d_array, layer: i32, lsMatrix: mat4x4<f32
     if (ndc.z <= 0.0 || ndc.z > 1.0) { return 1.0; }
     let uv = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { return 1.0; }
-    let depth = ndc.z - ${SHADOW_BIAS};
+    let depth = ndc.z;
     let sz    = 1.0 / f32(${SHADOW_MAP_SIZE});
     let h     = 0.5 * sz;
     let lit   = textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-h, -h), layer, depth)
@@ -506,7 +510,7 @@ fn pcfShadow(shadowMap: texture_depth_2d_array, layer: i32, lsMatrix: mat4x4<f32
 // otherwise shadows itself in stair-stepped bands that don't follow its edges.
 fn shadowLookup(worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>, texel: f32) -> vec3<f32> {
     let sinTheta = sqrt(1.0 - clamp(dot(N, L), 0.0, 1.0) * clamp(dot(N, L), 0.0, 1.0));
-    return worldPos + N * (texel * ${SHADOW_NORMAL_OFFSET} * sinTheta);
+    return worldPos + N * (texel * ${SHADOW_NORMAL_OFFSET} * sinTheta) + L * (texel * ${SHADOW_LIGHT_OFFSET});
 }
 
 fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f32, worldPos: vec3<f32>, receiveShadow: f32) -> vec3<f32> {
