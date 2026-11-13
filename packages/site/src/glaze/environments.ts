@@ -97,3 +97,19 @@ const CITY_STOPS: [number, Rgb][] = [
 export function makeEnvCity(w: number, h: number): Uint8Array {
     return makeEnvPixels(w, h, (t) => gradient(CITY_STOPS, t));
 }
+
+// ─── studio ───────────────────────────────────────────────────────────────────
+// Warm photo studio: a soft cream softbox overhead, warm walls, a dim wooden floor. Flattering on food.
+
+const STUDIO_STOPS: [number, Rgb][] = [
+    [0.0, [0.12, 0.08, 0.05]], // floor: dark warm wood
+    [0.45, [0.3, 0.22, 0.16]], // floor near the walls
+    [0.52, [0.55, 0.46, 0.38]], // warm walls
+    [0.8, [0.72, 0.64, 0.55]], // upper walls
+    [0.9, [1.0, 0.94, 0.84]], // the softbox
+    [1.0, [1.0, 0.96, 0.9]],
+];
+
+export function makeEnvStudio(w: number, h: number): Uint8Array {
+    return makeEnvPixels(w, h, (t) => gradient(STUDIO_STOPS, t));
+}

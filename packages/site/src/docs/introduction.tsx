@@ -1,5 +1,6 @@
 import {
     BlitPass,
+    colorRgb,
     DeferredScenePass,
     DirectionalLight,
     type Entity,
@@ -9,7 +10,9 @@ import {
     PointerInput,
     RenderGraph,
     Scene,
+    setColorRgb,
     SpotLight,
+    type ToneMapping,
 } from "@repraze/glaze";
 import {Badge} from "@repraze/kernelkit/components/badge";
 import {
@@ -120,6 +123,17 @@ const stop = renderer.startAnimation(graph);`}
     );
 }
 
+/** The donut's lighting, tuned by eye. */
+const LOOK = {
+    key: "#ffeedb",
+    keyIntensity: 5.5,
+    fill: "#ffd2a8",
+    fillIntensity: 0.35,
+    env: 0.35,
+    ambient: "#3b2f27",
+    toneMapping: "none" as ToneMapping,
+};
+
 const DONUT_URL = `${import.meta.env.BASE_URL}models/donut/donut.glb`;
 
 const PARTS = ["Icing", "Sprinkles", "Doily"] as const;
@@ -172,9 +186,10 @@ export function Glance() {
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
                     palette.scene(scene);
-                    // reflections for the glossy icing (the sky isn't shown: the page's background stays)
-                    scene.environmentMap = makeEnvironments(renderer.device).get("sky") ?? null;
-                    vec3.set(scene.environmentColor, 0.55, 0.55, 0.6);
+                    // a warm studio for reflections (not shown: the page's background stays). Food reads cold under
+                    // blue light: every light here is warm, whatever the page's accent.
+                    scene.environmentMap = makeEnvironments(renderer.device).get("studio") ?? null;
+                    vec3.set(scene.environmentColor, LOOK.env, LOOK.env, LOOK.env);
 
                     const camera = new PerspectiveCamera({fov: Math.PI / 4, near: 0.05, far: 50});
                     scene.add(camera);
@@ -182,22 +197,21 @@ export function Glance() {
                     orbitControls(camera, {distance: 3.6, elevation: 38, target: [0, 0.2, 0], spin: 9});
 
                     // a spot light for crisp shadows: sprinkles on the icing, the donut on the lace
-                    const key = palette.light(
-                        new SpotLight({
-                            intensity: 14,
-                            range: 14,
-                            outerAngle: Math.PI / 7,
-                            innerAngle: Math.PI / 12,
-                            castShadow: true,
-                        }),
-                        (c) => c.key,
-                    );
+                    const key = new SpotLight({
+                        color: colorRgb(LOOK.key),
+                        intensity: LOOK.keyIntensity,
+                        range: 14,
+                        outerAngle: Math.PI / 7,
+                        innerAngle: Math.PI / 12,
+                        castShadow: true,
+                    });
                     vec3.set(key.position, 2.2, 4.2, 1.6);
                     key.lookAt([0, 0, 0]);
-                    const fill = palette.light(
-                        new DirectionalLight({direction: [0.7, -0.4, -0.6], intensity: 0.8}),
-                        (c) => c.fill,
-                    );
+                    const fill = new DirectionalLight({
+                        color: colorRgb(LOOK.fill),
+                        direction: [0.7, -0.4, -0.6],
+                        intensity: LOOK.fillIntensity,
+                    });
                     scene.add(key).add(fill);
 
                     const model = await loadGltf(renderer.device, DONUT_URL);
@@ -236,10 +250,11 @@ export function Glance() {
 
                     const graph = new RenderGraph();
                     const {color} = graph.addPass(new DeferredScenePass({scene}));
-                    graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas"});
+                    graph.addPass(new BlitPass({toneMapping: LOOK.toneMapping}), {color}, {canvasSlot: "canvas"});
 
                     return ({delta}) => {
-                        palette.apply();
+                        palette.apply(); // the page's background…
+                        setColorRgb(scene.ambientColor, LOOK.ambient); // …but the same warm light in either theme
                         for (const name of PARTS) {
                             model.root.find(name)!.enabled = live.current[name];
                         }

@@ -13,7 +13,7 @@ import {
 import {ACCENTS} from "@repraze/termicolor";
 import {vec3} from "gl-matrix";
 
-import {makeEnvCity, makeEnvPlane, makeEnvSky} from "./environments";
+import {makeEnvCity, makeEnvPlane, makeEnvSky, makeEnvStudio} from "./environments";
 import {
     makeBrickAlbedo,
     makeBrickHeight,
@@ -169,16 +169,17 @@ export function makeTextureSets(device: GPUDevice, size = 256): Map<TextureSetId
     ]);
 }
 
-export type EnvironmentId = "none" | "sky" | "plane" | "city";
+export type EnvironmentId = "none" | "sky" | "plane" | "city" | "studio";
 
 export const ENVIRONMENTS: {value: EnvironmentId; label: string}[] = [
     {value: "none", label: "None"},
     {value: "sky", label: "Sky"},
     {value: "plane", label: "Field"},
     {value: "city", label: "City"},
+    {value: "studio", label: "Studio"},
 ];
 
-/** The lab's three equirectangular gradients (256×128), for `scene.environmentMap` / `backgroundMap`. */
+/** The lab's equirectangular gradients (256×128), plus a warm studio, for `scene.environmentMap` / `backgroundMap`. */
 export function makeEnvironments(device: GPUDevice): Map<EnvironmentId, Texture> {
     const w = 256;
     const h = 128;
@@ -187,6 +188,7 @@ export function makeEnvironments(device: GPUDevice): Map<EnvironmentId, Texture>
         ["sky", up(makeEnvSky(w, h))],
         ["plane", up(makeEnvPlane(w, h))],
         ["city", up(makeEnvCity(w, h))],
+        ["studio", up(makeEnvStudio(w, h))],
     ]);
 }
 
