@@ -32,10 +32,61 @@ fn vs_shadow(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
 `;
 }
 
+/**
+ * Shadow casters with alpha: the albedo alpha decides which texels block light. "mask" cuts like the G-buffer;
+ * "blend" keeps a share of shadow texels equal to alpha (2×2 ordered; the PCF reads it back as a partial shadow).
+ */
+function buildAlphaShadowShader(alpha: "mask" | "blend"): string {
+    return /* wgsl */ `
+struct ShadowLightUniforms {
+    lightSpaceMatrix: mat4x4<f32>,
+};
+
+struct ShadowModelUniforms {
+    model: mat4x4<f32>,
+};
+
+${MATERIAL_UNIFORMS_WGSL}
+
+@group(0) @binding(0) var<uniform> light: ShadowLightUniforms;
+@group(1) @binding(0) var<uniform> model: ShadowModelUniforms;
+@group(2) @binding(0) var<uniform> mat: MaterialUniforms;
+@group(2) @binding(1) var albedoMap: texture_2d<f32>;
+@group(2) @binding(2) var matSampler: sampler;
+
+struct ShadowVarying {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_shadow(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>) -> ShadowVarying {
+    var out: ShadowVarying;
+    out.pos = light.lightSpaceMatrix * model.model * vec4<f32>(position, 1.0);
+    out.uv = uv;
+    return out;
+}
+
+@fragment
+fn fs_shadow(in: ShadowVarying) {
+    let alpha = textureSample(albedoMap, matSampler, in.uv).a * mat.albedo.a;
+${
+    alpha === "mask"
+        ? `    if (alpha < mat.alphaCutoff) { discard; }`
+        : `    // 2×2 ordered threshold per shadow texel: the PCF's four ½-texel taps average it back to an even partial
+    // shadow (noise, or any coarser pattern, would show through as dots on the receiver)
+    let p = vec2<u32>(in.pos.xy) & vec2<u32>(1u);
+    let threshold = (f32((p.x * 2u) ^ (p.y * 3u)) + 0.5) / 4.0; // Bayer 2×2: [[0, 2], [3, 1]]
+    if (alpha <= threshold) { discard; }`
+}
+}
+`;
+}
+
 export interface GBufferFeatures {
     parallaxMapping: boolean; // heightMap is assigned
     normalMapping: boolean; // normalMap is assigned
-    /** "mask" cuts below alphaCutoff; "blend" dithers by alpha. */
+    /** "mask" cuts below alphaCutoff. ("blend" materials are drawn by the transparent pass, not the G-buffer.) */
     alpha?: "opaque" | "mask" | "blend";
     /** No back-face culling; back faces flip their normal. */
     doubleSided?: boolean;
@@ -59,7 +110,24 @@ function featureKey(f: GBufferFeatures): string {
     );
 }
 
-function buildGBufferShader(f: GBufferFeatures): string {
+const MATERIAL_UNIFORMS_WGSL = /* wgsl */ `
+struct MaterialUniforms {
+    albedo:            vec4<f32>,
+    roughness:         f32,
+    metallic:          f32,
+    heightScale:       f32,
+    normalScale:       f32,
+    emissive:          vec4<f32>,
+    occlusionStrength: f32,
+    alphaCutoff:       f32,
+};
+`;
+
+/**
+ * Everything a mesh pass shares: camera, model and material bindings (groups 0-2), the vertex stage, and
+ * surface(), which reads the material at a fragment (maps, parallax, normal mapping, alpha mask).
+ */
+function buildSurfaceWgsl(f: GBufferFeatures): string {
     const needsTbn = f.parallaxMapping || f.normalMapping;
     return /* wgsl */ `
 struct CameraUniforms {
@@ -75,16 +143,7 @@ struct ModelUniforms {
     flags:        vec4<f32>,   // x = receiveShadow
 };
 
-struct MaterialUniforms {
-    albedo:            vec4<f32>,
-    roughness:         f32,
-    metallic:          f32,
-    heightScale:       f32,
-    normalScale:       f32,
-    emissive:          vec4<f32>,
-    occlusionStrength: f32,
-    alphaCutoff:       f32,
-};
+${MATERIAL_UNIFORMS_WGSL}
 
 @group(0) @binding(0) var<uniform> camera:     CameraUniforms;
 @group(1) @binding(0) var<uniform> model:      ModelUniforms;
@@ -152,15 +211,17 @@ fn parallaxOcclusionMapping(uv: vec2<f32>, viewDirT: vec3<f32>, scale: f32) -> v
         : ""
 }
 
-struct GBufferOutput {
-    @location(0) albedo:   vec4<f32>,
-    @location(1) normal:   vec4<f32>,
-    @location(2) worldPos: vec4<f32>,
-    @location(3) emissive: vec4<f32>,
+struct Surface {
+    albedo:    vec3<f32>,
+    alpha:     f32,
+    normal:    vec3<f32>,
+    roughness: f32,
+    metallic:  f32,
+    ao:        f32,
+    emissive:  vec3<f32>,
 };
 
-@fragment
-fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> GBufferOutput {
+fn surface(input: VertexOutput, frontFacing: bool) -> Surface {
 ${
     f.doubleSided
         ? `
@@ -203,35 +264,76 @@ ${
 `
 }
     let texAlbedo4 = textureSample(albedoMap, matSampler, uv);
-    let texAlbedo  = texAlbedo4.rgb;
-    let albedo     = texAlbedo * mat.albedo.rgb;
-${
-    f.alpha === "mask"
-        ? `
-    if (texAlbedo4.a * mat.albedo.a < mat.alphaCutoff) { discard; }`
-        : f.alpha === "blend"
-          ? `
-    // screen-door transparency: keep the pixel with probability alpha (interleaved gradient noise threshold)
-    let ign = fract(52.9829189 * fract(dot(input.clipPos.xy, vec2<f32>(0.06711056, 0.00583715))));
-    if (texAlbedo4.a * mat.albedo.a <= ign) { discard; }`
-          : ""
-}
+    let alpha      = texAlbedo4.a * mat.albedo.a;
+${f.alpha === "mask" ? `    if (alpha < mat.alphaCutoff) { discard; }` : ""}
 
     let mr        = textureSample(metallicRoughnessMap, matSampler, uv);
     let occlusion = textureSample(occlusionMap, matSampler, uv).r;
-    let ao        = 1.0 + mat.occlusionStrength * (occlusion - 1.0);
-    let roughness = clamp(mr.g * mat.roughness, 0.0, 1.0);
-    let metallic  = clamp(mr.b * mat.metallic,  0.0, 1.0);
 
-    let texEmissive = textureSample(emissiveMap, matSampler, uv).rgb;
-    let emissive    = texEmissive * mat.emissive.rgb;
+    var s: Surface;
+    s.albedo    = texAlbedo4.rgb * mat.albedo.rgb;
+    s.alpha     = alpha;
+    s.normal    = shadingNormal;
+    s.roughness = clamp(mr.g * mat.roughness, 0.0, 1.0);
+    s.metallic  = clamp(mr.b * mat.metallic,  0.0, 1.0);
+    s.ao        = 1.0 + mat.occlusionStrength * (occlusion - 1.0);
+    s.emissive  = textureSample(emissiveMap, matSampler, uv).rgb * mat.emissive.rgb;
+    return s;
+}
+`;
+}
 
+function buildGBufferShader(f: GBufferFeatures): string {
+    return /* wgsl */ `
+${buildSurfaceWgsl(f)}
+
+struct GBufferOutput {
+    @location(0) albedo:   vec4<f32>,
+    @location(1) normal:   vec4<f32>,
+    @location(2) worldPos: vec4<f32>,
+    @location(3) emissive: vec4<f32>,
+};
+
+@fragment
+fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> GBufferOutput {
+    let s = surface(input, frontFacing);
     var out: GBufferOutput;
-    out.albedo   = vec4<f32>(albedo, ao);
-    out.normal   = vec4<f32>(shadingNormal, roughness);
-    out.worldPos = vec4<f32>(input.worldPos, metallic);
-    out.emissive = vec4<f32>(emissive, model.flags.x);
+    out.albedo   = vec4<f32>(s.albedo, s.ao);
+    out.normal   = vec4<f32>(s.normal, s.roughness);
+    out.worldPos = vec4<f32>(input.worldPos, s.metallic);
+    out.emissive = vec4<f32>(s.emissive, model.flags.x);
     return out;
+}
+`;
+}
+
+/**
+ * See-through ("blend") meshes, drawn after lighting onto the lit color: the same surface() and shade() as the
+ * deferred path, premultiplied by alpha. Lighting, environment and shadow maps are group 3.
+ */
+function buildForwardShader(f: GBufferFeatures, encode: boolean): string {
+    return /* wgsl */ `
+${buildSurfaceWgsl(f)}
+${COLOR_WGSL}
+${LIGHT_STRUCTS_WGSL}
+
+@group(3) @binding(0) var<uniform> lighting: LightingUniforms;
+@group(3) @binding(1) var environmentMap:    texture_2d<f32>;
+@group(3) @binding(2) var envSampler:        sampler;
+@group(3) @binding(3) var dirShadowMaps:     texture_depth_2d_array;
+@group(3) @binding(4) var spotShadowMaps:    texture_depth_2d_array;
+@group(3) @binding(5) var shadowSampler:     sampler_comparison;
+@group(3) @binding(6) var pointShadowMaps:   texture_depth_2d_array;
+@group(3) @binding(7) var<uniform> pointShadowMatrices: PointShadowMatrices;
+
+${SHADE_WGSL}
+
+@fragment
+fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4<f32> {
+    let s = surface(input, frontFacing);
+    let lit = shade(s.albedo, s.ao, s.normal, s.roughness, s.metallic, input.worldPos, model.flags.x) + s.emissive;
+    let c = ${encode ? "linearToSrgb(lit)" : "lit"};
+    return vec4<f32>(c * s.alpha, s.alpha); // premultiplied: blend one, one-minus-src-alpha
 }
 `;
 }
@@ -280,15 +382,7 @@ const CUBE_FACE_DIRS: {dir: [number, number, number]; up: [number, number, numbe
 
 const LIGHTING_BUFFER_SIZE = 1424;
 
-function buildLightingShader(encode: boolean): string {
-    return /* wgsl */ `
-${COLOR_WGSL}
-
-// lit in linear light; encoded here only when this pass writes straight to the screen
-fn outputColor(c: vec3<f32>) -> vec4<f32> {
-    return vec4<f32>(${encode ? "linearToSrgb(c)" : "c"}, 1.0);
-}
-
+const LIGHT_STRUCTS_WGSL = /* wgsl */ `
 struct DirectionalLight {
     direction:        vec4<f32>,      // xyz = direction, w = castShadow (0/1)
     colorIntensity:   vec4<f32>,      // xyz = color, w = intensity
@@ -321,42 +415,16 @@ struct LightingUniforms {
     invViewProjection:  mat4x4<f32>,
 };
 
-@group(0) @binding(0) var albedoTex:         texture_2d<f32>;
-@group(0) @binding(1) var normalTex:         texture_2d<f32>;
-@group(0) @binding(2) var posTex:            texture_2d<f32>;
-@group(0) @binding(3) var<uniform> lighting: LightingUniforms;
-@group(0) @binding(4) var emissiveTex:       texture_2d<f32>;
-@group(0) @binding(5) var environmentMap:    texture_2d<f32>;
-@group(0) @binding(6) var envSampler:        sampler;
-@group(0) @binding(7) var backgroundMap:     texture_2d<f32>;
-
-@group(1) @binding(0) var dirShadowMaps:   texture_depth_2d_array;
-@group(1) @binding(1) var spotShadowMaps:  texture_depth_2d_array;
-@group(1) @binding(2) var shadowSampler:   sampler_comparison;
-@group(1) @binding(3) var pointShadowMaps: texture_depth_2d_array;
-
 struct PointShadowMatrices {
     matrices: array<mat4x4<f32>, ${MAX_POINT * 6}>,
 };
-@group(1) @binding(4) var<uniform> pointShadowMatrices: PointShadowMatrices;
+`;
 
-struct QuadInput {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> QuadInput {
-    // Fullscreen triangle from vertex_index (arithmetic — NOT array indexing).
-    // Indexing a var array by vertex_index miscompiles to zero on some mobile GPU
-    // drivers (Adreno/Mali), collapsing the triangle to nothing → black output.
-    let t = vec2<f32>(f32((vi << 1u) & 2u), f32(vi & 2u));
-    var out: QuadInput;
-    out.pos = vec4<f32>(t * 2.0 - 1.0, 0.0, 1.0);
-    out.uv  = vec2<f32>(t.x, 1.0 - t.y);
-    return out;
-}
-
+/**
+ * shade(): PBR lighting of one surface point by every light (with shadows), ambient and environment. Expects
+ * lighting, environmentMap, envSampler and the shadow maps declared by the including shader.
+ */
+const SHADE_WGSL = /* wgsl */ `
 const PI: f32 = 3.14159265358979;
 
 fn D_GGX(NdotH: f32, roughness: f32) -> f32 {
@@ -395,10 +463,6 @@ fn sampleEnvMap(dir: vec3<f32>) -> vec3<f32> {
     return textureSampleLevel(environmentMap, envSampler, sampleEquirect(dir), 0.0).rgb;
 }
 
-fn sampleBgMap(dir: vec3<f32>) -> vec3<f32> {
-    return textureSampleLevel(backgroundMap, envSampler, sampleEquirect(dir), 0.0).rgb;
-}
-
 fn brdf_direct(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, albedo: vec3<f32>, roughness: f32, metallic: f32, F0: vec3<f32>, NdotV: f32) -> vec3<f32> {
     let H     = normalize(V + L);
     let NdotL = max(dot(N, L), 0.0);
@@ -412,7 +476,8 @@ fn brdf_direct(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, albedo: vec3<f32>, roug
     return (diffuse + specular) * NdotL;
 }
 
-// 3×3 PCF shadow sample — returns 1.0 if lit, 0.0 if fully in shadow.
+// PCF shadow sample — returns 1.0 if lit, 0.0 if fully in shadow. Four bilinear comparisons at ±½ texel: a 3×3
+// texel tent, which also averages a 2×2 pattern exactly (the ordered threshold of see-through casters).
 fn pcfShadow(shadowMap: texture_depth_2d_array, layer: i32, lsMatrix: mat4x4<f32>, worldPos: vec3<f32>) -> f32 {
     let lsPos = lsMatrix * vec4<f32>(worldPos, 1.0);
     let ndc   = lsPos.xyz / lsPos.w;
@@ -421,45 +486,16 @@ fn pcfShadow(shadowMap: texture_depth_2d_array, layer: i32, lsMatrix: mat4x4<f32
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { return 1.0; }
     let depth = ndc.z - ${SHADOW_BIAS};
     let sz    = 1.0 / f32(${SHADOW_MAP_SIZE});
-    var lit   = 0.0;
-    for (var ox = -1; ox <= 1; ox++) {
-        for (var oy = -1; oy <= 1; oy++) {
-            let o = vec2<f32>(f32(ox), f32(oy)) * sz;
-            lit += textureSampleCompareLevel(shadowMap, shadowSampler, uv + o, layer, depth);
-        }
-    }
-    return lit / 9.0;
+    let h     = 0.5 * sz;
+    let lit   = textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-h, -h), layer, depth)
+              + textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>( h, -h), layer, depth)
+              + textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-h,  h), layer, depth)
+              + textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>( h,  h), layer, depth);
+    return lit * 0.25;
 }
 
-@fragment
-fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
-    let coord   = vec2<i32>(i32(input.pos.x), i32(input.pos.y));
-    let albedo4 = textureLoad(albedoTex, coord, 0);
-    if (albedo4.a < 0.01) {
-        let dims = vec2<f32>(textureDimensions(albedoTex));
-        let ndc  = vec2<f32>(
-            input.pos.x / dims.x * 2.0 - 1.0,
-            1.0 - input.pos.y / dims.y * 2.0,
-        );
-        let wp4 = lighting.invViewProjection * vec4<f32>(ndc, 1.0, 1.0);
-        let ray = normalize(wp4.xyz / wp4.w - lighting.cameraPosition.xyz);
-        return outputColor(sampleBgMap(ray) * lighting.backgroundColor.rgb);
-    }
-    let albedo       = albedo4.rgb;
-    let ao           = albedo4.a;
-
-    let normalSample = textureLoad(normalTex, coord, 0);
-    let N            = normalize(normalSample.xyz);
-    let roughness    = clamp(normalSample.w, 0.05, 1.0);
-
-    let posSample    = textureLoad(posTex, coord, 0);
-    let worldPos     = posSample.xyz;
-    let metallic     = clamp(posSample.w, 0.0, 1.0);
-
-    let emissiveSample = textureLoad(emissiveTex, coord, 0);
-    let emissive       = emissiveSample.rgb;
-    let receiveShadow  = emissiveSample.w;
-
+fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f32, worldPos: vec3<f32>, receiveShadow: f32) -> vec3<f32> {
+    let roughness = clamp(roughnessIn, 0.05, 1.0);
     let V     = normalize(lighting.cameraPosition.xyz - worldPos);
     let NdotV = max(dot(N, V), 0.001);
     let F0    = mix(vec3<f32>(0.04), albedo, metallic);
@@ -529,9 +565,85 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
                   * sl.colorIntensity.rgb * (sl.colorIntensity.w * attn * attn * spotAttn * shadow);
     }
+    return colour;
+}
+`;
 
-    colour += emissive;
-    return outputColor(colour);
+function buildLightingShader(encode: boolean): string {
+    return /* wgsl */ `
+${COLOR_WGSL}
+${LIGHT_STRUCTS_WGSL}
+
+// lit in linear light; encoded here only when this pass writes straight to the screen
+fn outputColor(c: vec3<f32>) -> vec4<f32> {
+    return vec4<f32>(${encode ? "linearToSrgb(c)" : "c"}, 1.0);
+}
+
+@group(0) @binding(0) var albedoTex:         texture_2d<f32>;
+@group(0) @binding(1) var normalTex:         texture_2d<f32>;
+@group(0) @binding(2) var posTex:            texture_2d<f32>;
+@group(0) @binding(3) var<uniform> lighting: LightingUniforms;
+@group(0) @binding(4) var emissiveTex:       texture_2d<f32>;
+@group(0) @binding(5) var environmentMap:    texture_2d<f32>;
+@group(0) @binding(6) var envSampler:        sampler;
+@group(0) @binding(7) var backgroundMap:     texture_2d<f32>;
+
+@group(1) @binding(0) var dirShadowMaps:   texture_depth_2d_array;
+@group(1) @binding(1) var spotShadowMaps:  texture_depth_2d_array;
+@group(1) @binding(2) var shadowSampler:   sampler_comparison;
+@group(1) @binding(3) var pointShadowMaps: texture_depth_2d_array;
+@group(1) @binding(4) var<uniform> pointShadowMatrices: PointShadowMatrices;
+
+struct QuadInput {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> QuadInput {
+    // Fullscreen triangle from vertex_index (arithmetic — NOT array indexing).
+    // Indexing a var array by vertex_index miscompiles to zero on some mobile GPU
+    // drivers (Adreno/Mali), collapsing the triangle to nothing → black output.
+    let t = vec2<f32>(f32((vi << 1u) & 2u), f32(vi & 2u));
+    var out: QuadInput;
+    out.pos = vec4<f32>(t * 2.0 - 1.0, 0.0, 1.0);
+    out.uv  = vec2<f32>(t.x, 1.0 - t.y);
+    return out;
+}
+
+${SHADE_WGSL}
+
+fn sampleBgMap(dir: vec3<f32>) -> vec3<f32> {
+    return textureSampleLevel(backgroundMap, envSampler, sampleEquirect(dir), 0.0).rgb;
+}
+
+@fragment
+fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
+    let coord   = vec2<i32>(i32(input.pos.x), i32(input.pos.y));
+    let albedo4 = textureLoad(albedoTex, coord, 0);
+    if (albedo4.a < 0.01) {
+        let dims = vec2<f32>(textureDimensions(albedoTex));
+        let ndc  = vec2<f32>(
+            input.pos.x / dims.x * 2.0 - 1.0,
+            1.0 - input.pos.y / dims.y * 2.0,
+        );
+        let wp4 = lighting.invViewProjection * vec4<f32>(ndc, 1.0, 1.0);
+        let ray = normalize(wp4.xyz / wp4.w - lighting.cameraPosition.xyz);
+        return outputColor(sampleBgMap(ray) * lighting.backgroundColor.rgb);
+    }
+    let normalSample   = textureLoad(normalTex, coord, 0);
+    let posSample      = textureLoad(posTex, coord, 0);
+    let emissiveSample = textureLoad(emissiveTex, coord, 0);
+    let colour = shade(
+        albedo4.rgb,
+        albedo4.a,
+        normalize(normalSample.xyz),
+        normalSample.w,
+        clamp(posSample.w, 0.0, 1.0),
+        posSample.xyz,
+        emissiveSample.w,
+    );
+    return outputColor(colour + emissiveSample.rgb);
 }
 `;
 }
@@ -612,8 +724,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private defaultNormalView!: GPUTextureView;
     private texSampler!: GPUSampler;
 
-    // Shadow pass
+    // Shadow pass: opaque casters write depth only; alpha casters (mask / blend) get a variant reading albedo alpha
     private shadowPipeline!: GPURenderPipeline;
+    private readonly shadowPipelines = new Map<string, GPURenderPipeline>();
     private shadowLightBindGroupLayout!: GPUBindGroupLayout;
     private dirShadowTex!: GPUTexture;
     private spotShadowTex!: GPUTexture;
@@ -627,6 +740,20 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private pointShadowFaceBGs: GPUBindGroup[] = [];
     private pointShadowMatricesBuffer!: GPUBuffer;
     private shadowBindGroup: GPUBindGroup | null = null;
+
+    // Transparent ("blend") pass: forward-shaded, sorted back to front
+    private forwardPipelineCache = new Map<string, GPURenderPipeline>();
+    private forwardPipelineLayout!: GPUPipelineLayout;
+    private forwardLightingLayout!: GPUBindGroupLayout;
+    private forwardLightingBindGroup: GPUBindGroup | null = null;
+    private forwardEnvView: GPUTextureView | null = null;
+
+    // Per-frame scratch, reused: no allocation per mesh per frame
+    private readonly opaqueDraws: {mesh: Mesh; material: PBRMaterial; features: GBufferFeatures; key: string}[] = [];
+    private readonly blendDraws: {mesh: Mesh; depth: number}[] = [];
+    private readonly modelData = new Float32Array(36);
+    private readonly normalMatrix = mat4.create();
+    private readonly tmpCenter = vec3.create();
 
     // Cached mesh GPU resources
     private meshCache = new Map<Mesh, MeshGPUResources>();
@@ -707,12 +834,48 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             pointMatrices,
             spotMatrices,
         );
-        this.renderGBuffer(encoder, meshes, ctx);
+        this.sortDraws(meshes);
+        this.renderGBuffer(encoder, ctx);
         this.renderLighting(encoder, ctx);
+        if (this.blendDraws.length > 0) {
+            this.renderTransparent(encoder, ctx);
+        }
+    }
+
+    /**
+     * Opaque and masked meshes go to the G-buffer, grouped by pipeline so each variant is bound once. See-through
+     * ("blend") meshes are drawn after lighting, farthest first, by the distance to their bounds' center.
+     */
+    private sortDraws(meshes: Mesh[]): void {
+        const opaque = this.opaqueDraws;
+        const blend = this.blendDraws;
+        opaque.length = 0;
+        blend.length = 0;
+        const camera = this.scene.activeCamera;
+        const eye = camera ? mat4.getTranslation(vec3.create(), camera.worldMatrix) : vec3.create();
+        for (const mesh of meshes) {
+            if (!(mesh.material instanceof PBRMaterial)) {
+                continue;
+            }
+            if (mesh.material.alphaMode === "blend") {
+                const bounds = mesh.geometry.boundingSphere;
+                const center = vec3.transformMat4(this.tmpCenter, bounds.center as vec3, mesh.worldMatrix);
+                blend.push({mesh, depth: vec3.squaredDistance(center, eye)});
+            } else {
+                const features = getGBufferFeatures(mesh.material);
+                opaque.push({mesh, material: mesh.material, features, key: featureKey(features)});
+            }
+        }
+        opaque.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+        blend.sort((a, b) => b.depth - a.depth);
     }
 
     destroy(): void {
         this.gbufferPipelineCache.clear();
+        this.forwardPipelineCache.clear();
+        this.shadowPipelines.clear();
+        this.forwardLightingBindGroup = null;
+        this.forwardEnvView = null;
         this.defaultWhiteTex?.destroy();
         this.defaultNormalTex?.destroy();
         this.cameraBuffer?.destroy();
@@ -873,6 +1036,29 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             primitive: {topology: "triangle-list"},
         });
 
+        const depthArray = {sampleType: "depth", viewDimension: "2d-array"} as const;
+        this.forwardLightingLayout = device.createBindGroupLayout({
+            label: "DeferredScene:forwardLightingLayout",
+            entries: [
+                {binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}},
+                {binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
+                {binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {type: "filtering"}},
+                {binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: depthArray},
+                {binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: depthArray},
+                {binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: {type: "comparison"}},
+                {binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: depthArray},
+                {binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}},
+            ],
+        });
+        this.forwardPipelineLayout = device.createPipelineLayout({
+            bindGroupLayouts: [
+                this.cameraBindGroupLayout,
+                this.modelBindGroupLayout,
+                this.materialBindGroupLayout,
+                this.forwardLightingLayout,
+            ],
+        });
+
         this.cameraBindGroup = device.createBindGroup({
             label: "DeferredScene:camera",
             layout: this.cameraBindGroupLayout,
@@ -918,6 +1104,124 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             },
             primitive: {topology: "triangle-list", cullMode: "back"},
         });
+    }
+
+    /** The shadow pipeline for a material: depth only when opaque, alpha-tested for mask / blend. */
+    private shadowPipelineFor(material: PBRMaterial | null): GPURenderPipeline {
+        const alpha = material?.alphaMode ?? "opaque";
+        const doubleSided = material?.doubleSided ?? false;
+        if (alpha === "opaque" && !doubleSided) {
+            return this.shadowPipeline;
+        }
+        const key = alpha + (doubleSided ? "2" : "");
+        let pipeline = this.shadowPipelines.get(key);
+        if (pipeline === undefined) {
+            const depthStencil: GPUDepthStencilState = {
+                format: "depth32float",
+                depthWriteEnabled: true,
+                depthCompare: "less",
+                depthBias: 2,
+                depthBiasSlopeScale: 1.5,
+            };
+            const primitive: GPUPrimitiveState = {topology: "triangle-list", cullMode: doubleSided ? "none" : "back"};
+            if (alpha === "opaque") {
+                const module = this.device.createShaderModule({label: "Shadow", code: buildShadowShader()});
+                pipeline = this.device.createRenderPipeline({
+                    label: `DeferredScene:shadow[${key}]`,
+                    layout: this.device.createPipelineLayout({
+                        bindGroupLayouts: [this.shadowLightBindGroupLayout, this.modelBindGroupLayout],
+                    }),
+                    vertex: {
+                        module,
+                        entryPoint: "vs_shadow",
+                        buffers: [{arrayStride: 48, attributes: [{shaderLocation: 0, offset: 0, format: "float32x3"}]}],
+                    },
+                    depthStencil,
+                    primitive,
+                });
+            } else {
+                const module = this.device.createShaderModule({
+                    label: `Shadow[${alpha}]`,
+                    code: buildAlphaShadowShader(alpha),
+                });
+                pipeline = this.device.createRenderPipeline({
+                    label: `DeferredScene:shadow[${key}]`,
+                    layout: this.device.createPipelineLayout({
+                        bindGroupLayouts: [
+                            this.shadowLightBindGroupLayout,
+                            this.modelBindGroupLayout,
+                            this.materialBindGroupLayout,
+                        ],
+                    }),
+                    vertex: {
+                        module,
+                        entryPoint: "vs_shadow",
+                        buffers: [
+                            {
+                                arrayStride: 48,
+                                attributes: [
+                                    {shaderLocation: 0, offset: 0, format: "float32x3"},
+                                    {shaderLocation: 2, offset: 24, format: "float32x2"},
+                                ],
+                            },
+                        ],
+                    },
+                    fragment: {module, entryPoint: "fs_shadow", targets: []},
+                    depthStencil,
+                    primitive,
+                });
+            }
+            this.shadowPipelines.set(key, pipeline);
+        }
+        return pipeline;
+    }
+
+    private getOrCreateForwardPipeline(features: GBufferFeatures, cullMode: GPUCullMode): GPURenderPipeline {
+        const key = `${featureKey(features)}:${cullMode}`;
+        let pipeline = this.forwardPipelineCache.get(key);
+        if (!pipeline) {
+            const module = this.device.createShaderModule({
+                label: `Forward[${key}]`,
+                code: buildForwardShader(features, this.outputColorSpace === "srgb"),
+            });
+            pipeline = this.device.createRenderPipeline({
+                label: `DeferredScene:forward[${key}]`,
+                layout: this.forwardPipelineLayout,
+                vertex: {
+                    module,
+                    entryPoint: "vs_main",
+                    buffers: [
+                        {
+                            arrayStride: 48,
+                            attributes: [
+                                {shaderLocation: 0, offset: 0, format: "float32x3"},
+                                {shaderLocation: 1, offset: 12, format: "float32x3"},
+                                {shaderLocation: 2, offset: 24, format: "float32x2"},
+                                {shaderLocation: 3, offset: 32, format: "float32x4"},
+                            ],
+                        },
+                    ],
+                },
+                fragment: {
+                    module,
+                    entryPoint: "fs_main",
+                    targets: [
+                        {
+                            format: this.colorFormat,
+                            blend: {
+                                color: {srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add"},
+                                alpha: {srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add"},
+                            },
+                        },
+                    ],
+                },
+                primitive: {topology: "triangle-list", cullMode},
+                // tested against the opaque scene, but not written: see-through surfaces don't hide each other
+                depthStencil: {format: "depth24plus", depthWriteEnabled: false, depthCompare: "less"},
+            });
+            this.forwardPipelineCache.set(key, pipeline);
+        }
+        return pipeline;
     }
 
     private getOrCreateGBufferPipeline(features: GBufferFeatures): GPURenderPipeline {
@@ -1083,15 +1387,56 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         pointMatrices: (mat4[] | null)[],
         spotMatrices: (mat4 | null)[],
     ): void {
-        const shadowMeshes = meshes.filter((m) => m.castShadow);
+        // Casters with their pipeline, opaque (the common, cheap case) first, then grouped by variant.
+        const casters: {
+            res: MeshGPUResources;
+            pipeline: GPURenderPipeline;
+            material: GPUBindGroup | null;
+            rank: number;
+        }[] = [];
+        const ranks = new Map<GPURenderPipeline, number>([[this.shadowPipeline, 0]]);
+        for (const mesh of meshes) {
+            const res = this.meshCache.get(mesh);
+            if (!mesh.castShadow || !res) {
+                continue;
+            }
+            const material = mesh.material instanceof PBRMaterial ? mesh.material : null;
+            const pipeline = this.shadowPipelineFor(material);
+            let rank = ranks.get(pipeline);
+            if (rank === undefined) {
+                rank = ranks.size;
+                ranks.set(pipeline, rank);
+            }
+            casters.push({
+                res,
+                pipeline,
+                rank,
+                material:
+                    material !== null && material.alphaMode !== "opaque"
+                        ? material.getOrCreateBindGroup(
+                              this.device,
+                              this.materialBindGroupLayout,
+                              this.defaultWhiteView,
+                              this.defaultNormalView,
+                              this.texSampler,
+                          )
+                        : null,
+            });
+        }
+        casters.sort((a, b) => a.rank - b.rank);
 
-        const drawShadowMeshes = (pass: GPURenderPassEncoder) => {
-            for (const mesh of shadowMeshes) {
-                const res = this.meshCache.get(mesh);
-                if (!res) {
-                    continue;
+        const drawShadowMeshes = (pass: GPURenderPassEncoder, lightBindGroup: GPUBindGroup) => {
+            let bound: GPURenderPipeline | null = null;
+            for (const {res, pipeline, material} of casters) {
+                if (pipeline !== bound) {
+                    pass.setPipeline(pipeline);
+                    pass.setBindGroup(0, lightBindGroup);
+                    bound = pipeline;
                 }
                 pass.setBindGroup(1, res.modelBindGroup);
+                if (material !== null) {
+                    pass.setBindGroup(2, material);
+                }
                 pass.setVertexBuffer(0, res.vertexBuffer);
                 pass.setIndexBuffer(res.indexBuffer, "uint32");
                 pass.drawIndexed(res.indexCount);
@@ -1114,9 +1459,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     depthStoreOp: "store",
                 },
             });
-            pass.setPipeline(this.shadowPipeline);
-            pass.setBindGroup(0, this.dirShadowLightBGs[i]!);
-            drawShadowMeshes(pass);
+            drawShadowMeshes(pass, this.dirShadowLightBGs[i]!);
             pass.end();
         }
 
@@ -1142,9 +1485,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                         depthStoreOp: "store",
                     },
                 });
-                pass.setPipeline(this.shadowPipeline);
-                pass.setBindGroup(0, this.pointShadowFaceBGs[slot]!);
-                drawShadowMeshes(pass);
+                drawShadowMeshes(pass, this.pointShadowFaceBGs[slot]!);
                 pass.end();
             }
         }
@@ -1165,14 +1506,12 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     depthStoreOp: "store",
                 },
             });
-            pass.setPipeline(this.shadowPipeline);
-            pass.setBindGroup(0, this.spotShadowLightBGs[i]!);
-            drawShadowMeshes(pass);
+            drawShadowMeshes(pass, this.spotShadowLightBGs[i]!);
             pass.end();
         }
     }
 
-    private renderGBuffer(encoder: GPUCommandEncoder, meshes: Mesh[], ctx: PassRenderContext): void {
+    private renderGBuffer(encoder: GPUCommandEncoder, ctx: PassRenderContext): void {
         const {outputs} = ctx;
         const pass = encoder.beginRenderPass({
             label: "GBuffer",
@@ -1193,24 +1532,17 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         pass.setBindGroup(0, this.cameraBindGroup);
 
         let activePipelineKey: string | null = null;
-        for (const mesh of meshes) {
+        for (const {mesh, material, features, key} of this.opaqueDraws) {
             const res = this.meshCache.get(mesh);
             if (!res) {
                 continue;
             }
-
-            if (!(mesh.material instanceof PBRMaterial)) {
-                continue;
-            }
-
-            const features = getGBufferFeatures(mesh.material);
-            const key = featureKey(features);
             if (key !== activePipelineKey) {
                 pass.setPipeline(this.getOrCreateGBufferPipeline(features));
                 activePipelineKey = key;
             }
 
-            const matBg = mesh.material.getOrCreateBindGroup(
+            const matBg = material.getOrCreateBindGroup(
                 this.device,
                 this.materialBindGroupLayout,
                 this.defaultWhiteView,
@@ -1261,6 +1593,69 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         pass.end();
     }
 
+    /** See-through meshes over the lit scene, farthest first; double-sided ones back faces, then front faces. */
+    private renderTransparent(encoder: GPUCommandEncoder, ctx: PassRenderContext): void {
+        const {outputs} = ctx;
+        const envView = this.scene.environmentMap?.srgbView ?? this.defaultWhiteView;
+        if (this.forwardLightingBindGroup === null || envView !== this.forwardEnvView) {
+            this.forwardEnvView = envView;
+            this.forwardLightingBindGroup = this.device.createBindGroup({
+                label: "DeferredScene:forwardLighting",
+                layout: this.forwardLightingLayout,
+                entries: [
+                    {binding: 0, resource: {buffer: this.lightingBuffer}},
+                    {binding: 1, resource: envView},
+                    {binding: 2, resource: this.texSampler},
+                    {binding: 3, resource: this.dirShadowTex.createView({dimension: "2d-array"})},
+                    {binding: 4, resource: this.spotShadowTex.createView({dimension: "2d-array"})},
+                    {binding: 5, resource: this.shadowSampler},
+                    {binding: 6, resource: this.pointShadowTex.createView({dimension: "2d-array"})},
+                    {binding: 7, resource: {buffer: this.pointShadowMatricesBuffer}},
+                ],
+            });
+        }
+
+        const pass = encoder.beginRenderPass({
+            label: "Transparent",
+            colorAttachments: [{view: outputs["color"]!, loadOp: "load", storeOp: "store"}],
+            depthStencilAttachment: {view: outputs["depth"]!, depthLoadOp: "load", depthStoreOp: "store"},
+        });
+        pass.setBindGroup(0, this.cameraBindGroup);
+        pass.setBindGroup(3, this.forwardLightingBindGroup);
+
+        let bound: GPURenderPipeline | null = null;
+        for (const {mesh} of this.blendDraws) {
+            const res = this.meshCache.get(mesh);
+            const material = mesh.material as PBRMaterial;
+            if (!res) {
+                continue;
+            }
+            const features = getGBufferFeatures(material);
+            pass.setBindGroup(1, res.modelBindGroup);
+            pass.setBindGroup(
+                2,
+                material.getOrCreateBindGroup(
+                    this.device,
+                    this.materialBindGroupLayout,
+                    this.defaultWhiteView,
+                    this.defaultNormalView,
+                    this.texSampler,
+                ),
+            );
+            pass.setVertexBuffer(0, res.vertexBuffer);
+            pass.setIndexBuffer(res.indexBuffer, "uint32");
+            for (const cullMode of material.doubleSided ? (["front", "back"] as const) : (["back"] as const)) {
+                const pipeline = this.getOrCreateForwardPipeline(features, cullMode);
+                if (pipeline !== bound) {
+                    pass.setPipeline(pipeline);
+                    bound = pipeline;
+                }
+                pass.drawIndexed(res.indexCount);
+            }
+        }
+        pass.end();
+    }
+
     // ─── Private: uniform uploads ────────────────────────────────────────────
 
     private uploadCameraUniforms(camera: Camera | null, width: number, height: number): void {
@@ -1286,11 +1681,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
     private uploadModelUniforms(mesh: Mesh, buffer: GPUBuffer): void {
         const model = mesh.worldMatrix;
-        const normalMatrix = mat4.create();
+        const normalMatrix = this.normalMatrix;
         mat4.invert(normalMatrix, model);
         mat4.transpose(normalMatrix, normalMatrix);
 
-        const data = new Float32Array(36);
+        const data = this.modelData;
         data.set(model, 0);
         data.set(normalMatrix, 16);
         data[32] = mesh.receiveShadow ? 1.0 : 0.0;

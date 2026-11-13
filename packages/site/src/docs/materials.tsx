@@ -1,5 +1,8 @@
 import {
+    type AlphaMode,
     BlitPass,
+    createIcosphere,
+    createPlane,
     createSphere,
     DeferredScenePass,
     DirectionalLight,
@@ -9,11 +12,19 @@ import {
     RenderGraph,
     Scene,
     setColorRgb,
+    Texture,
 } from "@repraze/glaze";
 import {vec3} from "gl-matrix";
 import {useState} from "react";
 
-import {ControlGroup, ControlSelect, ControlSlider, DemoStage} from "@/glaze/demo-stage";
+import {
+    ControlGroup,
+    ControlSegmented,
+    ControlSelect,
+    ControlSlider,
+    ControlSwitch,
+    DemoStage,
+} from "@/glaze/demo-stage";
 import {GlazeCanvas, useLatest} from "@/glaze/glaze-canvas";
 import {
     type EnvironmentId,
@@ -49,6 +60,13 @@ export const doc = defineDoc({
             description:
                 "Ported from the lab: metallic rises left to right, roughness top to bottom, under one key light and an environment map.",
             component: PbrGrid,
+            layout: "full",
+        },
+        {
+            title: "Transparency",
+            description:
+                "A lace panel cut by an alpha mask, glass panes and a glass ball blended over the scene, all casting shadows: the lace its cut-out shape, the glass a shadow as dense as its alpha. Overlapping panes are sorted back to front each frame; orbit around them.",
+            component: Transparency,
             layout: "full",
         },
     ],
@@ -454,6 +472,138 @@ export function PbrGrid() {
                         scene.backgroundMap = env;
                         vec3.set(scene.environmentColor, cfg.envIntensity, cfg.envIntensity, cfg.envIntensity);
                         key.intensity = cfg.keyIntensity;
+                        return graph;
+                    };
+                }}
+            />
+        </DemoStage>
+    );
+}
+
+const GLASS_MODES: {value: AlphaMode; label: string}[] = [
+    {value: "blend", label: "Blend"},
+    {value: "opaque", label: "Opaque"},
+];
+
+/** Lace: a disc of holes (alpha 0) in a grid, white elsewhere. */
+function makeLace(size = 128): Uint8Array {
+    const data = new Uint8Array(size * size * 4).fill(255);
+    const cell = size / 8;
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            const cx = ((x % cell) + 0.5) / cell - 0.5;
+            const cy = ((y % cell) + 0.5) / cell - 0.5;
+            if (Math.hypot(cx, cy) < 0.36) {
+                data[(y * size + x) * 4 + 3] = 0;
+            }
+        }
+    }
+    return data;
+}
+
+export function Transparency() {
+    const colors = useSceneColors();
+    const [opacity, setOpacity] = useState(0.35);
+    const [glassMode, setGlassMode] = useState<AlphaMode>("blend");
+    const [shadows, setShadows] = useState(true);
+    const live = useLatest({opacity, glassMode, shadows});
+    return (
+        <DemoStage
+            controls={
+                <>
+                    <ControlSegmented label="Glass" value={glassMode} options={GLASS_MODES} onChange={setGlassMode} />
+                    <ControlSlider
+                        label="Glass opacity"
+                        value={opacity}
+                        onChange={setOpacity}
+                        min={0}
+                        max={1}
+                        step={0.05}
+                    />
+                    <ControlSwitch label="Shadows" checked={shadows} onChange={setShadows} />
+                </>
+            }
+        >
+            <GlazeCanvas
+                label="A lace panel, three overlapping colored glass panes and a glass ball around an opaque sphere, casting shadows on a floor"
+                setup={({renderer, orbitControls}) => {
+                    const scene = new Scene();
+                    const palette = paletteBinder(colors);
+                    palette.scene(scene);
+                    const camera = new PerspectiveCamera({fov: Math.PI / 4});
+                    orbitControls(camera, {distance: 9, elevation: 22, azimuth: 18, target: [0, 0.8, 0], spin: 7});
+                    scene.add(camera);
+                    scene.activeCamera = camera;
+                    const key = palette.light(
+                        new DirectionalLight({direction: [0.5, -1, -0.6], intensity: 3.5, castShadow: true}),
+                        (c) => c.key,
+                    );
+                    scene.add(key);
+                    scene.add(
+                        new Mesh(
+                            createPlane({width: 16, height: 16}),
+                            palette.material(new PBRMaterial({roughness: 0.9}), (c) => c.floor),
+                        ),
+                    );
+
+                    const ball = new Mesh(
+                        createIcosphere({radius: 0.7, subdivisions: 3}),
+                        palette.material(new PBRMaterial({roughness: 0.35}), (c) => c.accent),
+                    );
+                    vec3.set(ball.position, 0, 0.7, -0.6);
+                    scene.add(ball);
+
+                    // the mask: lace, cut where its texture's alpha is below alphaCutoff, both sides visible
+                    const lace = new PBRMaterial({alphaMode: "mask", doubleSided: true, roughness: 0.7});
+                    lace.albedoMap = Texture.fromPixels(renderer.device, makeLace(), 128, 128);
+                    palette.material(lace, (c) => c.neutral);
+                    const lacePanel = new Mesh(createPlane({width: 1.8, height: 1.8}), lace);
+                    lacePanel.setEuler(Math.PI / 2, Math.PI / 2, 0);
+                    vec3.set(lacePanel.position, -2.4, 0.95, -0.4);
+                    scene.add(lacePanel);
+
+                    // the blend: three overlapping panes and a ball of tinted glass
+                    const glass: PBRMaterial[] = [];
+                    const pane = createPlane({width: 1.2, height: 1.6});
+                    const tints: ((c: SceneColors) => string)[] = [
+                        (c) => c.hues.cyan,
+                        (c) => c.hues.purple,
+                        (c) => c.hues.green,
+                    ];
+                    tints.forEach((pick, i) => {
+                        const material = palette.material(new PBRMaterial({roughness: 0.08, doubleSided: true}), pick);
+                        glass.push(material);
+                        const mesh = new Mesh(pane, material);
+                        mesh.setEuler(Math.PI / 2, 0, 0);
+                        vec3.set(mesh.position, (i - 1) * 0.75, 0.82, 0.6 + i * 0.45);
+                        scene.add(mesh);
+                    });
+                    const bubbleMaterial = palette.material(new PBRMaterial({roughness: 0.05}), (c) => c.hues.blue);
+                    glass.push(bubbleMaterial);
+                    const bubble = new Mesh(
+                        createSphere({radius: 0.65, widthSegments: 48, heightSegments: 24}),
+                        bubbleMaterial,
+                    );
+                    vec3.set(bubble.position, 2.3, 0.65, 0);
+                    scene.add(bubble);
+
+                    const graph = new RenderGraph();
+                    const {color} = graph.addPass(new DeferredScenePass({scene}));
+                    graph.addPass(new BlitPass({toneMapping: "agx"}), {color}, {canvasSlot: "canvas"});
+                    let shown = "";
+                    return () => {
+                        palette.apply();
+                        const cfg = live.current;
+                        key.castShadow = cfg.shadows;
+                        const state = `${cfg.glassMode}:${cfg.opacity}`;
+                        if (state !== shown) {
+                            shown = state; // upload only on change
+                            for (const material of glass) {
+                                material.alphaMode = cfg.glassMode;
+                                material.opacity = cfg.opacity;
+                                material.markDirty();
+                            }
+                        }
                         return graph;
                     };
                 }}

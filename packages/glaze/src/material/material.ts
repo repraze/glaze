@@ -39,8 +39,13 @@ export interface PBRMaterialOptions {
  * How a material's alpha (albedo map alpha × opacity) is used, after glTF's alphaMode:
  * - "opaque": ignored.
  * - "mask": a cutout: below alphaCutoff the surface is absent (leaves, lace, fences).
- * - "blend": see-through. The deferred pass dithers it (each pixel kept with probability alpha), a stable
- *   screen-door transparency that needs no sorting and still writes depth and shadows-free G-buffer data.
+ * - "blend": see-through (glass, fades, ghosts). Drawn after the lit scene, farthest mesh first, with the same
+ *   lights, shadows and environment; it doesn't write depth, so see-through surfaces never hide each other.
+ *   Sorting is per mesh, by its bounds' center: split a mesh that wraps around another. Double-sided ones draw
+ *   their back faces, then their front faces.
+ *
+ * Shadows follow alpha too: "mask" casts the cut-out shape, "blend" a partial shadow as dense as its alpha.
+ * Opaque casters keep the cheapest shadow pass (depth only).
  */
 export type AlphaMode = "opaque" | "mask" | "blend";
 
