@@ -152,7 +152,7 @@ export function Glance() {
                         setColorRgb(key.color, c.key);
                         setColorRgb(fill.color, c.fill);
                         tint(glaze, c.accent);
-                        vec3.set(donut.rotation, 0.9 + Math.sin(time * 0.6) * 0.2, time * 0.5, 0);
+                        donut.setEuler(0.9 + Math.sin(time * 0.6) * 0.2, time * 0.5, 0);
                         return graph;
                     };
                 }}

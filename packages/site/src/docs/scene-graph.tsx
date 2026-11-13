@@ -26,7 +26,7 @@ export const doc = defineDoc({
     title: "Scene graph",
     category: "Scene",
     description:
-        "A Scene is a tree of entities. Every Entity has a position, an Euler rotation and a scale; children inherit their parent's world transform. Meshes, cameras and lights are entities, so a light can ride on a moving mesh.",
+        "A Scene is a tree of entities. Every Entity has a position, a rotation quaternion and a scale; children inherit their parent's world transform. Meshes, cameras and lights are entities, so a light can ride on a moving mesh.",
     engineFile: "scene/scene.ts",
     order: 0,
     demos: [
@@ -83,7 +83,12 @@ export const doc = defineDoc({
             component: "Entity",
             rows: [
                 {name: "position", type: "vec3", default: "[0, 0, 0]"},
-                {name: "rotation", type: "vec3", default: "[0, 0, 0]", description: "Euler angles in radians."},
+                {
+                    name: "quaternion",
+                    type: "quat",
+                    default: "[0, 0, 0, 1]",
+                    description: "Local rotation. Set from angles with setEuler.",
+                },
                 {name: "scale", type: "vec3", default: "[1, 1, 1]"},
                 {
                     name: "enabled",
@@ -93,6 +98,14 @@ export const doc = defineDoc({
                 },
                 {name: "children / parent", type: "Entity[] / Entity | null"},
                 {name: "add(child) / remove(child)", type: "this"},
+                {name: "setEuler(x, y, z)", type: "this", description: "Rotation from Euler angles in radians."},
+                {name: "rotateX / rotateY / rotateZ(rad)", type: "this", description: "Rotate about a local axis."},
+                {name: "lookAt(target, up?)", type: "this", description: "Point −Z at a world-space target."},
+                {
+                    name: "getWorldPosition / Quaternion / Scale / Direction()",
+                    type: "vec3 | quat",
+                    description: "Computed now from the parent chain.",
+                },
                 {name: "worldMatrix", type: "mat4", description: "Updated each frame by the scene pass."},
             ],
         },
@@ -131,7 +144,7 @@ pivot.add(moon);
 scene.add(pivot);
 
 // per frame
-pivot.rotation[1] = time;              // the moon orbits
+pivot.setEuler(0, time, 0);              // the moon orbits
 moon.position[1] = oscillate(time) * 0.2;`}
             />
         </section>
@@ -189,7 +202,7 @@ export function Hierarchy() {
                         createTorus({radius: 0.65, tube: 0.04, radialSegments: 8, tubularSegments: 64}),
                         palette.material(new PBRMaterial({roughness: 0.3}), (c) => c.hues.purple),
                     );
-                    vec3.set(ring.rotation, Math.PI / 2.4, 0, 0);
+                    ring.setEuler(Math.PI / 2.4, 0, 0);
                     planet.add(ring);
 
                     // moon pivot rotates around the planet
@@ -209,9 +222,9 @@ export function Hierarchy() {
                     return ({delta}) => {
                         palette.apply();
                         t += delta * live.current.speed;
-                        sun.rotation[1] = t * 0.2;
-                        planetPivot.rotation[1] = t * 0.5;
-                        moonPivot.rotation[1] = t * 2;
+                        sun.setEuler(0, t * 0.2, 0);
+                        planetPivot.setEuler(0, t * 0.5, 0);
+                        moonPivot.setEuler(0, t * 2, 0);
                         moonPivot.enabled = live.current.moons;
                         return graph;
                     };

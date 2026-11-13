@@ -52,7 +52,7 @@ const {color} = graph.addPass(new DeferredScenePass({scene}));
 graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas"});
 
 const stop = renderer.startAnimation(() => {
-    donut.rotation[1] = performance.now() / 1000;
+    donut.setEuler(0, performance.now() / 1000, 0);
     return graph;
 });
 // later: stop(); renderer.destroy();
@@ -161,11 +161,16 @@ Set `colorFormat: renderer.format` and `canvasSlot: "color"` to render straight 
 
 ```
 Scene (root, activeCamera, backgroundColor, ambientColor, environmentMap, backgroundMap, environmentColor)
- └─ Entity (position, rotation [Euler XYZ radians], scale, enabled, children)
+ └─ Entity (position, quaternion, scale, enabled, children)
       ├─ Mesh      geometry + material, castShadow, receiveShadow
       ├─ Camera    PerspectiveCamera {fov, near, far} | OrthographicCamera {left, right, top, bottom, near, far}
       └─ Light     DirectionalLight {direction} | PointLight {range} | SpotLight {direction, innerAngle, outerAngle, range}
 ```
+
+Entities look down their local −Z with +Y up. `quaternion` is the rotation; `setEuler(x, y, z)` (radians) and
+`rotateX / rotateY / rotateZ(rad)` set it from angles, `lookAt(target, up?)` points −Z at a world-space target
+(parent rotation included), and `getWorldPosition / getWorldQuaternion / getWorldScale / getWorldDirection()` read
+the world transform fresh from the parent chain.
 
 Lights take `{color, intensity, castShadow}`. Children inherit their parent's transform; world matrices are
 updated by the scene pass each frame. Cameras must be in the tree.

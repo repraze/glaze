@@ -267,7 +267,7 @@ export function Inspector() {
                             mesh = new Mesh(makeShape(kind), material);
                             scene.add(mesh);
                         }
-                        mesh!.rotation[1] = time * 0.5;
+                        mesh!.setEuler(0, time * 0.5, 0);
 
                         const preset = PRESETS[cfg.preset];
                         const c = colors.current;

@@ -232,7 +232,7 @@ export function LitScene() {
                         scene.environmentMap = env;
                         scene.backgroundMap = env;
                         vec3.set(scene.environmentColor, cfg.envIntensity, cfg.envIntensity, cfg.envIntensity);
-                        props[0]![0].rotation[1] = time * 0.6;
+                        props[0]![0].setEuler(0, time * 0.6, 0);
                         return graph;
                     };
                 }}
@@ -275,7 +275,7 @@ export function Direct() {
                     );
                     return ({time}) => {
                         palette.apply();
-                        vec3.set(torus.rotation, time * 0.4, time * 0.6, 0);
+                        torus.setEuler(time * 0.4, time * 0.6, 0);
                         return graph;
                     };
                 }}

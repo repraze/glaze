@@ -184,7 +184,7 @@ export function Shapes() {
                             shown = mesh;
                             setStats({vertices: mesh.geometry.vertexCount, triangles: mesh.geometry.indexCount / 3});
                         }
-                        vec3.set(mesh.rotation, 0.4, time * 0.4, 0);
+                        mesh.setEuler(0.4, time * 0.4, 0);
                         return graph;
                     };
                 }}
@@ -258,7 +258,7 @@ export function Custom() {
                     graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas"});
                     return ({time}) => {
                         palette.apply();
-                        vec3.set(mesh.rotation, time * 0.5, time * 0.7, 0);
+                        mesh.setEuler(time * 0.5, time * 0.7, 0);
                         return graph;
                     };
                 }}

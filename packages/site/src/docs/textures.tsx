@@ -10,7 +10,6 @@ import {
     Scene,
     Texture,
 } from "@repraze/glaze";
-import {vec3} from "gl-matrix";
 import {useState} from "react";
 
 import {ControlSegmented, ControlSelect, DemoStage} from "@/glaze/demo-stage";
@@ -145,7 +144,7 @@ export function FromPixels() {
                         const env = environments.get(live.current.environment) ?? null;
                         scene.environmentMap = env;
                         scene.backgroundMap = env;
-                        vec3.set(cube.rotation, 0.3, time * 0.4, 0);
+                        cube.setEuler(0.3, time * 0.4, 0);
                         return graph;
                     };
                 }}
@@ -209,7 +208,7 @@ export function FromCanvas() {
                     graph.addPass(new BlitPass(), {color}, {canvasSlot: "canvas"});
                     return ({time}) => {
                         palette.apply();
-                        vec3.set(cube.rotation, 0.25, time * 0.5, 0);
+                        cube.setEuler(0.25, time * 0.5, 0);
                         return graph;
                     };
                 }}

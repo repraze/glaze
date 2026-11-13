@@ -171,7 +171,7 @@ export function MovingLights() {
                         palette.material(new PBRMaterial({roughness: 0.25, metallic: 0.6}), (c) => c.neutral),
                     );
                     vec3.set(torus.position, 0, 1.2, 0);
-                    vec3.set(torus.rotation, Math.PI / 2, 0, 0);
+                    torus.setEuler(Math.PI / 2, 0, 0);
                     scene.add(torus);
 
                     const sunLight = palette.light(

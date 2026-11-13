@@ -167,7 +167,7 @@ export function Viewer() {
                             key = `${shape}:${flat}`;
                         }
                         orbit(camera, {distance: 4, elevation: 20, azimuth: time * 17});
-                        vec3.set(mesh!.rotation, 0, time * 0.5, 0);
+                        mesh!.setEuler(0, time * 0.5, 0);
                         return graph;
                     };
                 }}
@@ -214,7 +214,7 @@ export function OneChannel() {
                     const blit = new BlitPass({input: "source", toneMapping: "aces"});
                     return ({time}) => {
                         palette.apply();
-                        vec3.set(mesh.rotation, time * 0.3, time * 0.5, 0);
+                        mesh.setEuler(time * 0.3, time * 0.5, 0);
                         const graph = new RenderGraph();
                         const outputs = graph.addPass(scenePass);
                         graph.addPass(blit, {source: outputs[live.current]}, {canvasSlot: "canvas"});

@@ -76,7 +76,7 @@ const {color} = graph.addPass(new DeferredScenePass({scene}));
 graph.addPass(new BlitPass(), {color}, {canvasSlot: "canvas"});
 
 const stop = renderer.startAnimation(() => {
-    cube.rotation[1] = performance.now() / 1000;
+    cube.setEuler(0, performance.now() / 1000, 0);
     return graph;
 });`}
                 />
@@ -125,7 +125,7 @@ renderer.destroy();`}
             const {color} = graph.addPass(new DeferredScenePass({scene}));
             graph.addPass(new BlitPass(), {color}, {canvasSlot: "canvas"});
             stop = renderer.startAnimation(() => {
-                cube.rotation[1] += 0.01 * speedRef.current;
+                cube.rotateY(0.01 * speedRef.current);
                 return graph;
             });
         });
@@ -227,7 +227,7 @@ export function FirstScene() {
                         setColorRgb(sun.color, c.key);
                         tint(ground, c.floor);
                         tint(paint, c.accent);
-                        vec3.set(cube.rotation, time * 0.4, time * 0.7, 0);
+                        cube.setEuler(time * 0.4, time * 0.7, 0);
                         cube.position[1] = 1 + Math.sin(time * 1.5) * 0.25;
                         return graph;
                     };

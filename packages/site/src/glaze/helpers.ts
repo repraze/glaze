@@ -99,7 +99,7 @@ export function orbit(
         target[1] + distance * Math.sin(el),
         target[2] + distance * Math.cos(el) * Math.cos(az),
     );
-    vec3.set(entity.rotation, -el, az, 0);
+    entity.lookAt(target);
 }
 
 // ─── Colors ───────────────────────────────────────────────────────────────────

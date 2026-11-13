@@ -244,7 +244,7 @@ export function ChainDemo() {
                         setColorRgb(sun.color, c.key);
                         tint(ground, c.floor);
                         [c.accent, c.hues.cyan, c.hues.purple].forEach((hex, i) => tint(paints[i]!, hex));
-                        balls.forEach((ball, i) => vec3.set(ball.rotation, time * 0.3, time * (0.4 + i * 0.2), 0));
+                        balls.forEach((ball, i) => ball.setEuler(time * 0.3, time * (0.4 + i * 0.2), 0));
                         const {post, toneMapping} = live.current;
                         const graph = new RenderGraph();
                         const {color} = graph.addPass(scenePass);

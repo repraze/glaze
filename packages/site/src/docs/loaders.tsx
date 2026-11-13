@@ -258,7 +258,7 @@ export function ModelViewer() {
                                 });
                             });
                         }
-                        pivot.rotation[1] = time * 0.5;
+                        pivot.setEuler(0, time * 0.5, 0);
                         return graph;
                     };
                 }}
@@ -453,9 +453,9 @@ export function ObjFromText() {
                         }
                         // the card sways to stay readable; the gem turns
                         if (next === card) {
-                            vec3.set(card.rotation, 0, Math.sin(time * 0.6) * 0.5, 0);
+                            card.setEuler(0, Math.sin(time * 0.6) * 0.5, 0);
                         } else {
-                            vec3.set(gem.rotation, 0.2, time * 0.6, 0);
+                            gem.setEuler(0.2, time * 0.6, 0);
                         }
                         return graph;
                     };

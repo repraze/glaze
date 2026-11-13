@@ -9,7 +9,6 @@ import {
     setColorRgb,
     ShaderPass,
 } from "@repraze/glaze";
-import {vec3} from "gl-matrix";
 import {useState} from "react";
 
 import {ControlGroup, ControlSelect, ControlSlider, ControlSwitch, DemoStage} from "@/glaze/demo-stage";
@@ -242,7 +241,7 @@ export function Dithering() {
                             mesh = new Mesh(makeShape(kind, true), material);
                             scene.add(mesh);
                         }
-                        vec3.set(mesh.rotation, time * 0.3, time * 0.5, 0);
+                        mesh.setEuler(time * 0.3, time * 0.5, 0);
 
                         // one ShaderPass per combination of baked settings
                         const key = `${cfg.pixelSize}:${cfg.dither}:${cfg.method}:${cfg.levels}:${cfg.pattern}`;

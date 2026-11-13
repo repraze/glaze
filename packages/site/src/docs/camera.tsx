@@ -77,7 +77,7 @@ function Notes() {
             <h2 className="font-mono text-xl font-semibold">Aiming</h2>
             <p className="text-sm text-muted-foreground">
                 A camera looks down its local −Z. To orbit a target, put it on a sphere and turn it back toward the
-                center: pitch by −elevation, yaw by the azimuth.
+                center with <code>lookAt</code>, which points −Z at a world-space target.
             </p>
             <Code
                 code={`const camera = new PerspectiveCamera({fov: Math.PI / 4, near: 0.1, far: 100});
@@ -87,7 +87,7 @@ scene.activeCamera = camera;
 const el = elevation * (Math.PI / 180);
 const az = azimuth * (Math.PI / 180);
 vec3.set(camera.position, d * Math.cos(el) * Math.sin(az), d * Math.sin(el), d * Math.cos(el) * Math.cos(az));
-vec3.set(camera.rotation, -el, az, 0);`}
+camera.lookAt([0, 0, 0]);`}
             />
         </section>
     );

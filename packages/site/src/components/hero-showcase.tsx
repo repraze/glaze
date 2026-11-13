@@ -202,7 +202,7 @@ function LightsSlide() {
             palette.material(new PBRMaterial({roughness: 0.25, metallic: 0.6}), (c) => c.neutral),
         );
         torus.position[1] = 1.1;
-        torus.rotation[0] = Math.PI / 2;
+        torus.setEuler(Math.PI / 2, 0, 0);
         scene.add(torus);
         const bulbs = (["red", "green", "blue"] as const).map((hue) => {
             const light = palette.light(new PointLight({intensity: 8, range: 7, castShadow: true}), (c) => c.hues[hue]);
@@ -214,7 +214,7 @@ function LightsSlide() {
         graph.addPass(new BlitPass(), {color}, {canvasSlot: "canvas"});
         return ({time}) => {
             palette.apply();
-            torus.rotation[2] = time * 0.3;
+            torus.setEuler(Math.PI / 2, 0, time * 0.3);
             bulbs.forEach((bulb, i) => {
                 const a = time * (0.9 + i * 0.25) + (i * Math.PI * 2) / 3;
                 bulb.position[0] = Math.cos(a) * 2;
@@ -271,7 +271,7 @@ function GBufferSlide() {
         return ({time}) => {
             palette.apply();
             orbit(camera, {distance: 3.4, elevation: 25, azimuth: time * 20});
-            mesh.rotation[0] = time * 0.4;
+            mesh.setEuler(time * 0.4, 0, 0);
             return graph;
         };
     };
@@ -315,8 +315,7 @@ function DitherSlide() {
         graph.addPass(post, {input0: color}, {canvasSlot: "canvas"});
         return ({time}) => {
             palette.apply();
-            mesh.rotation[0] = time * 0.3;
-            mesh.rotation[1] = time * 0.5;
+            mesh.setEuler(time * 0.3, time * 0.5, 0);
             return graph;
         };
     };
