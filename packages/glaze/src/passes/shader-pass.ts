@@ -271,8 +271,10 @@ export class ShaderPass<const Out extends string = string> extends Pass<Out> {
         }));
     }
 
+    private readonly globalsData = new Float32Array(4);
+
     private updateGlobals(device: GPUDevice, time: number): void {
-        const data = new Float32Array(4);
+        const data = this.globalsData;
         data[0] = time;
         data[1] = 0;
         data[2] = this.width;

@@ -130,6 +130,13 @@ export const doc = defineDoc({
                     description: "Stops before tone mapping: +1 doubles the light. A property too.",
                 },
                 {
+                    name: "dither",
+                    type: "boolean",
+                    default: "true",
+                    description:
+                        "A touch of noise after the sRGB encode, so smooth gradients don't band. A property too.",
+                },
+                {
                     name: "inputColorSpace",
                     type: '"linear-srgb" | "srgb"',
                     default: '"linear-srgb"',

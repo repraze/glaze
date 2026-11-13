@@ -20,6 +20,13 @@ export interface ShadowSettings {
     normalBias: number;
     /** …and toward the light by this many shadow texels. Default 0.5. */
     bias: number;
+    /** How dark the shadow is, 0..1: 1 blocks the light fully, 0.5 lets half through. Default 1. */
+    intensity: number;
+    /**
+     * Point and spot lights: where the shadow map starts, in world units from the light. Casters nearer than this
+     * cast nothing; a smaller value costs depth precision far away. Default 0.1.
+     */
+    near: number;
 }
 
 /** See {@link DirectionalShadowSettings.cascadeBlend}. */
@@ -66,7 +73,7 @@ export abstract class Light extends Entity {
         this.color = vec3.clone(color as vec3);
         this.intensity = intensity;
         this.castShadow = castShadow;
-        this.shadow = {softness: 0.05, samples: 16, normalBias: 1.5, bias: 0.5, ...shadow};
+        this.shadow = {softness: 0.05, samples: 16, normalBias: 1.5, bias: 0.5, intensity: 1, near: 0.1, ...shadow};
     }
 }
 
@@ -89,6 +96,8 @@ export class DirectionalLight extends Light {
             samples: 16,
             normalBias: 1.5,
             bias: 0.5,
+            intensity: 1,
+            near: 0.1,
             cascades: 4,
             maxDistance: 40,
             splitBalance: 0.6,

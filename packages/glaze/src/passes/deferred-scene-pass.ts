@@ -582,7 +582,20 @@ const SHADOW_DEPTH_STATE: GPUDepthStencilState = {
 };
 
 /** Near plane of the spot and point shadow projections. */
-const SHADOW_NEAR = 0.1;
+/** A shadow's strength, 0..1 (a light must cast for any shadow; a tiny strength still counts as casting). */
+function shadowStrength(light: {shadow: {intensity: number}}): number {
+    return Math.min(Math.max(light.shadow.intensity, 1e-4), 1);
+}
+
+/** Where a point or spot shadow map starts: light.shadow.near, kept short of the far plane. */
+function shadowNear(light: PointLight | SpotLight): number {
+    return Math.min(Math.max(light.shadow.near, 1e-4), shadowFar(light) * 0.5);
+}
+
+/** Where it ends: the light's range (at least a little past near). */
+function shadowFar(light: PointLight | SpotLight): number {
+    return Math.max(light.range, 1e-3);
+}
 
 // ─── Lighting uniform layout (in f32 slots) ──────────────────────────────────
 //
@@ -622,7 +635,7 @@ fn decodeCoverageAo(a: f32) -> f32 { return clamp((a - AO_FLOOR) / (1.0 - AO_FLO
 
 const LIGHT_STRUCTS_WGSL = /* wgsl */ `
 struct DirectionalLight {
-    direction:      vec4<f32>,   // xyz = direction, w = castShadow (0/1)
+    direction:      vec4<f32>,   // xyz = direction, w = shadow strength (0: casts none)
     colorIntensity: vec4<f32>,   // xyz = color, w = intensity
     shadow:         vec4<f32>,   // x = first shadow layer, y = cascades, z = tan(half the light's angle), w = samples
     shadowBias:     vec4<f32>,   // x = normal bias, y = bias (texels), z = cascade blend (0 none, 1 smooth, 2 dither), w = max distance
@@ -635,14 +648,14 @@ struct DirectionalLight {
 struct PointLight {
     position:       vec4<f32>,   // xyz = world pos, w = range
     colorIntensity: vec4<f32>,   // xyz = color, w = intensity
-    flags:          vec4<f32>,   // x = castShadow (0/1)
+    flags:          vec4<f32>,   // x = shadow strength (0: casts none)
     shadow:         vec4<f32>,   // x = light radius, y = samples, z = near, w = far
     shadowBias:     vec4<f32>,   // x = normal bias, y = bias (texels)
 };
 
 struct SpotLight {
     position:         vec4<f32>, // xyz = world pos, w = range
-    direction:        vec4<f32>, // xyz = direction, w = castShadow (0/1)
+    direction:        vec4<f32>, // xyz = direction, w = shadow strength (0: casts none)
     colorIntensity:   vec4<f32>, // xyz = color, w = intensity
     angles:           vec4<f32>, // x = cos(innerAngle), y = cos(outerAngle)
     shadow:           vec4<f32>, // x = light radius, y = samples, z = near, w = far
@@ -897,8 +910,8 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let dl = lighting.directionalLights[i];
         let L  = normalize(-dl.direction.xyz);
         var shadow = 1.0;
-        if (dl.direction.w > 0.5 && receiveShadow > 0.0 && dot(N, L) > 0.0) {
-            shadow = mix(1.0, directionalShadow(i, worldPos, N, L, rotation), receiveShadow);
+        if (dl.direction.w > 0.0 && receiveShadow > 0.0 && dot(N, L) > 0.0) {
+            shadow = mix(1.0, directionalShadow(i, worldPos, N, L, rotation), receiveShadow * dl.direction.w);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
                   * dl.colorIntensity.rgb * dl.colorIntensity.w * shadow;
@@ -911,7 +924,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let L       = toLight / dist;
         let attn    = clamp(1.0 - dist / pl.position.w, 0.0, 1.0);
         var shadow  = 1.0;
-        if (pl.flags.x > 0.5 && receiveShadow > 0.0 && attn > 0.0 && dot(N, L) > 0.0) {
+        if (pl.flags.x > 0.0 && receiveShadow > 0.0 && attn > 0.0 && dot(N, L) > 0.0) {
             // the face is chosen by where the lookup lands (off the surface), not by the surface point itself
             let lf    = shadowLookup(worldPos, N, L, 2.0 * dist * ${pointFaceScale(sizes.point).toFixed(6)} / f32(${sizes.point}), pl.shadowBias) - pl.position.xyz;
             let absLF = abs(lf);
@@ -927,7 +940,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
             // a face a little over 90° wide: a texel spans 2 · scale · depth / size, the depth being the largest axis
             let texel = 2.0 * ${pointFaceScale(sizes.point).toFixed(6)} * max(absLF.x, max(absLF.y, absLF.z)) / f32(${sizes.point});
             let raw   = perspectiveShadow(pointShadowMaps, layer, pointShadowMatrices.matrices[layer], worldPos, N, L, texel, pl.shadow, pl.shadowBias, f32(${sizes.point}), rotation);
-            shadow    = mix(1.0, raw, receiveShadow);
+            shadow    = mix(1.0, raw, receiveShadow * pl.flags.x);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
                   * pl.colorIntensity.rgb * (pl.colorIntensity.w * attn * attn * shadow);
@@ -942,13 +955,13 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let theta    = dot(L, normalize(-sl.direction.xyz));
         let spotAttn = smoothstep(sl.angles.y, sl.angles.x, theta);
         var shadow = 1.0;
-        if (sl.direction.w > 0.5 && receiveShadow > 0.0 && attn * spotAttn > 0.0 && dot(N, L) > 0.0) {
+        if (sl.direction.w > 0.0 && receiveShadow > 0.0 && attn * spotAttn > 0.0 && dot(N, L) > 0.0) {
             // the cone spans 2 · tan(outer) · depth over the map
             let cosOuter = max(sl.angles.y, 0.01);
             let depth    = dot(-toLight, normalize(sl.direction.xyz));
             let texel    = 2.0 * depth * sqrt(1.0 - cosOuter * cosOuter) / cosOuter / f32(${sizes.spot});
             let raw = perspectiveShadow(spotShadowMaps, i32(i), sl.lightSpaceMatrix, worldPos, N, L, texel, sl.shadow, sl.shadowBias, f32(${sizes.spot}), rotation);
-            shadow = mix(1.0, raw, receiveShadow);
+            shadow = mix(1.0, raw, receiveShadow * sl.direction.w);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
                   * sl.colorIntensity.rgb * (sl.colorIntensity.w * attn * attn * spotAttn * shadow);
@@ -1320,6 +1333,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private readonly normalMatrix = mat4.create();
     private readonly tmpCenter = vec3.create();
     private readonly tmpEye = vec3.create();
+    private readonly cameraData = new Float32Array(208 / 4);
+    private readonly warnedLights = new Set<string>();
     /** This frame's camera view-projection, for culling. */
     private readonly viewProjection = mat4.create();
     private readonly materialScratch = new Float32Array(MATERIAL_BUFFER_SIZE / 4);
@@ -1392,9 +1407,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
         const visible = this.scene.activeCamera?.visibleLayers ?? 0xffffffff;
         const meshes = this.scene.collectMeshes().filter((m) => (m.layers & visible) !== 0);
-        const dirLights = this.scene.collectDirectionalLights().slice(0, MAX_DIRECTIONAL);
-        const pointLights = this.scene.collectPointLights().slice(0, MAX_POINT);
-        const spotLights = this.scene.collectSpotLights().slice(0, MAX_SPOT);
+        const dirLights = this.keepLights(this.scene.collectDirectionalLights(), MAX_DIRECTIONAL, "directional");
+        const pointLights = this.keepLights(this.scene.collectPointLights(), MAX_POINT, "point");
+        const spotLights = this.keepLights(this.scene.collectSpotLights(), MAX_SPOT, "spot");
 
         const spotMatrices = spotLights.map((l) => (l.castShadow ? this.computeSpotLightMatrix(l) : null));
         const pointMatrices = pointLights.map((l) => (l.castShadow ? this.computePointLightFaceMatrices(l) : null));
@@ -2400,7 +2415,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         mat4.invert(this.currentInvVP, vpMatrix);
         mat4.copy(this.viewProjection, vpMatrix);
 
-        const data = new Float32Array(208 / 4);
+        const data = this.cameraData;
         data.set(viewMatrix, 0);
         data.set(projMatrix, 16);
         data.set(vpMatrix, 32);
@@ -2492,7 +2507,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 0] = dir[0];
             f32[base + 1] = dir[1];
             f32[base + 2] = dir[2];
-            f32[base + 3] = shadowed ? 1.0 : 0.0;
+            f32[base + 3] = shadowed ? shadowStrength(l) : 0.0;
             f32[base + 4] = srgbToLinear(l.color[0]);
             f32[base + 5] = srgbToLinear(l.color[1]);
             f32[base + 6] = srgbToLinear(l.color[2]);
@@ -2530,7 +2545,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 5] = srgbToLinear(l.color[1]);
             f32[base + 6] = srgbToLinear(l.color[2]);
             f32[base + 7] = l.intensity;
-            f32[base + 8] = l.castShadow ? 1.0 : 0.0;
+            f32[base + 8] = l.castShadow ? shadowStrength(l) : 0.0;
             this.packPerspectiveShadow(f32, base + 12, l);
         }
 
@@ -2547,7 +2562,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 4] = dir[0];
             f32[base + 5] = dir[1];
             f32[base + 6] = dir[2];
-            f32[base + 7] = l.castShadow ? 1.0 : 0.0;
+            f32[base + 7] = l.castShadow ? shadowStrength(l) : 0.0;
             f32[base + 8] = srgbToLinear(l.color[0]);
             f32[base + 9] = srgbToLinear(l.color[1]);
             f32[base + 10] = srgbToLinear(l.color[2]);
@@ -2594,8 +2609,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const sh = light.shadow;
         f32[at + 0] = sh.softness;
         f32[at + 1] = Math.max(1, Math.round(sh.samples));
-        f32[at + 2] = SHADOW_NEAR;
-        f32[at + 3] = light.range;
+        f32[at + 2] = shadowNear(light);
+        f32[at + 3] = shadowFar(light);
         f32[at + 4] = sh.normalBias;
         f32[at + 5] = sh.bias;
     }
@@ -2613,7 +2628,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         mat4.lookAt(view, eye, center, up);
 
         const proj = mat4.create();
-        mat4.perspectiveZO(proj, spotCone(light).outer * 2, 1.0, SHADOW_NEAR, light.range);
+        mat4.perspectiveZO(proj, spotCone(light).outer * 2, 1.0, shadowNear(light), shadowFar(light));
 
         const lsMatrix = mat4.create();
         mat4.multiply(lsMatrix, proj, view);
@@ -2633,8 +2648,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 proj,
                 2 * Math.atan(pointFaceScale(this.shadowSizes.point)),
                 1,
-                SHADOW_NEAR,
-                light.range,
+                shadowNear(light),
+                shadowFar(light),
             );
             const vp = mat4.create();
             mat4.multiply(vp, proj, view);
@@ -2876,6 +2891,40 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             });
         }
         return res.bindGroup!;
+    }
+
+    /**
+     * The lights that fit the shader's arrays. Over the limit, the ones that matter most to the view stay (the
+     * brightest suns; the point and spot lights whose reach is nearest the camera), and a warning says so once.
+     */
+    private keepLights<L extends DirectionalLight | PointLight | SpotLight>(
+        lights: L[],
+        max: number,
+        kind: string,
+    ): L[] {
+        if (lights.length <= max) {
+            return lights;
+        }
+        if (!this.warnedLights.has(kind)) {
+            this.warnedLights.add(kind);
+            console.warn(
+                `[glaze] ${lights.length} ${kind} lights: only the ${max} that matter most to the view are lit`,
+            );
+        }
+        const eye = this.tmpEye;
+        const camera = this.scene.activeCamera;
+        if (camera !== null) {
+            mat4.getTranslation(eye, camera.worldMatrix);
+        }
+        const score = (l: L): number => {
+            if (!("range" in l)) {
+                return -l.intensity;
+            }
+            const w = l.worldMatrix;
+            const distance = Math.hypot(w[12]! - eye[0], w[13]! - eye[1], w[14]! - eye[2]);
+            return Math.max(distance - l.range, 0) - l.intensity * 1e-3; // inside the reach: 0, then by intensity
+        };
+        return [...lights].sort((a, b) => score(a) - score(b)).slice(0, max);
     }
 
     /** A GPU sampler for a texture's sampling settings (shared by every texture with the same ones). */

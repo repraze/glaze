@@ -53,6 +53,13 @@ export const doc = defineDoc({
                 {name: "left / right", type: "number", default: "-1 / 1", description: "View box in world units."},
                 {name: "top / bottom", type: "number", default: "1 / -1"},
                 {name: "near / far", type: "number", default: "0.1 / 1000"},
+                {
+                    name: "zoom",
+                    type: "number",
+                    default: "1",
+                    description:
+                        "Magnifies the box about its center (OrbitControls zooms it, within minZoom / maxZoom).",
+                },
             ],
         },
         {

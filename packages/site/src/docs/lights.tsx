@@ -87,6 +87,18 @@ export const doc = defineDoc({
                     description:
                         "Lookup offsets in shadow texels: along the normal (at grazing light) and toward the light.",
                 },
+                {
+                    name: "shadow.intensity",
+                    type: "number",
+                    default: "1",
+                    description: "How dark the shadow gets: 0.5 lets half the light through.",
+                },
+                {
+                    name: "shadow.near",
+                    type: "number",
+                    default: "0.1",
+                    description: "Point and spot lights: where the shadow map starts; nearer casters cast nothing.",
+                },
             ],
         },
         {

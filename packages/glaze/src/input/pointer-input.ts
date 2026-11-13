@@ -112,7 +112,7 @@ export interface PointerInputOptions {
     scene?: Scene | null;
     /** The camera rays are cast from. Default: the scene's activeCamera. */
     camera?: Camera | null;
-    /** Which entities can be hit: as raycast's `layers` and `filter`. */
+    /** Which entities can be hit: as raycast's `layers` (default: the camera's `visibleLayers`) and `filter`. */
     layers?: number;
     filter?: RaycastOptions["filter"];
     /** Movement (CSS px) past which a press is a drag, not a click. Default 4. */
@@ -256,12 +256,36 @@ export class PointerInput {
         this.listeners.push([type, listener, options]);
     }
 
+    /**
+     * The element's content box in client pixels: inside its border and padding, where the canvas draws (the
+     * bounding rect includes both, so a padded or bordered canvas would pick off-target).
+     */
+    private contentBox(): {left: number; top: number; width: number; height: number} {
+        const el = this.element;
+        const rect = el.getBoundingClientRect();
+        let left = rect.left;
+        let top = rect.top;
+        let width = rect.width;
+        let height = rect.height;
+        if (typeof getComputedStyle === "function") {
+            const style = getComputedStyle(el);
+            const px = (v: string) => parseFloat(v) || 0;
+            const l = px(style.borderLeftWidth) + px(style.paddingLeft);
+            const t = px(style.borderTopWidth) + px(style.paddingTop);
+            left += l;
+            top += t;
+            width -= l + px(style.borderRightWidth) + px(style.paddingRight);
+            height -= t + px(style.borderBottomWidth) + px(style.paddingBottom);
+        }
+        return {left, top, width: Math.max(width, 1), height: Math.max(height, 1)};
+    }
+
     private toPointer(e: PointerEvent): InputPointer {
-        const rect = this.element.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        const width = Math.max(rect.width, 1);
-        const height = Math.max(rect.height, 1);
+        const box = this.contentBox();
+        const x = e.clientX - box.left;
+        const y = e.clientY - box.top;
+        const width = box.width;
+        const height = box.height;
         return {
             native: e,
             pointerId: e.pointerId,
@@ -305,7 +329,8 @@ export class PointerInput {
         if (claimer !== null) {
             // Keep receiving this pointer's moves when it leaves the canvas mid-drag.
             this.element.setPointerCapture?.(e.pointerId);
-            if (e.button === 2) {
+            // a right drag, or a ctrl+click drag (macOS opens the context menu on it)
+            if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
                 this.suppressContextMenu = true;
             }
             if (e.pointerType !== "touch") {
@@ -401,11 +426,11 @@ export class PointerInput {
         clientY: number,
         fields: Omit<InputWheel, "native" | "x" | "y" | "ndcX" | "ndcY" | "width" | "height">,
     ): void {
-        const rect = this.element.getBoundingClientRect();
-        const x = clientX - rect.left;
-        const y = clientY - rect.top;
-        const width = Math.max(rect.width, 1);
-        const height = Math.max(rect.height, 1);
+        const box = this.contentBox();
+        const x = clientX - box.left;
+        const y = clientY - box.top;
+        const width = box.width;
+        const height = box.height;
         const wheel: InputWheel = {
             native,
             ...fields,
@@ -582,7 +607,12 @@ class ScenePicking implements PointerConsumer {
         let hits: RaycastHit[] | null = null;
         return {
             ray: r,
-            hits: () => (hits ??= raycast(scene, r, {layers: this.input.layers, filter: this.input.filter})),
+            // by default, only what the camera shows can be picked
+            hits: () =>
+                (hits ??= raycast(scene, r, {
+                    layers: this.input.layers ?? (this.input.camera ?? scene.activeCamera)?.visibleLayers,
+                    filter: this.input.filter,
+                })),
         };
     }
 

@@ -58,7 +58,13 @@ export class Entity {
     /** Local transform computed from position/quaternion/scale. */
     readonly localMatrix: mat4 = mat4.create();
 
+    /** Makes `child` a child of this entity (taking it from its previous parent). An ancestor can't be added. */
     add(child: Entity): this {
+        for (let e: Entity | null = this; e !== null; e = e.parent) {
+            if (e === child) {
+                throw new Error("Entity.add: an entity can't be added to itself or to one of its descendants");
+            }
+        }
         child.parent?.remove(child);
         child.parent = this;
         this.children.push(child);
@@ -74,7 +80,10 @@ export class Entity {
         return this;
     }
 
-    /** Calls `fn` for this entity and every descendant, depth first; return false from `fn` to skip a subtree. */
+    /**
+     * Calls `fn` for this entity and every descendant, depth first; return false from `fn` to skip a subtree.
+     * Don't add or remove children of the entity being visited from `fn` (collect them, then change the tree).
+     */
     traverse(fn: (entity: Entity) => boolean | void): void {
         if (fn(this) === false) {
             return;

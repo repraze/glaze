@@ -86,13 +86,17 @@ describe("OrbitControls", () => {
         assert.ok(near(camera.position[0], 1) && near(camera.position[1], 2) && near(camera.position[2], 5));
     });
 
-    test("an orthographic camera zooms by scaling its view box", () => {
+    test("an orthographic camera zooms by magnifying its view, within minZoom / maxZoom", () => {
         const camera = new OrthographicCamera({left: -2, right: 2, top: 1, bottom: -1});
         vec3.set(camera.position, 0, 0, 5);
-        const controls = new OrbitControls(camera, {damping: 0});
+        const controls = new OrbitControls(camera, {damping: 0, maxZoom: 3});
         controls.zoom(0.5).update();
-        assert.ok(near(camera.right, 1) && near(camera.top, 0.5));
+        assert.ok(near(camera.zoom, 2));
+        assert.ok(near(camera.right, 2)); // the box stays; the projection shows half of it
+        assert.ok(near(camera.getProjectionMatrix(1)[0]!, 1)); // 2 / (right - left) at zoom 2: 2 / 2
         assert.ok(near(controls.distance, 5));
+        controls.zoom(0.1).update();
+        assert.ok(near(camera.zoom, 3));
     });
 });
 

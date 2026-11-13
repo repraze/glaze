@@ -27,6 +27,7 @@ function buildFragmentShader(toneMapping: ToneMapping, encode: boolean): string 
     return /* wgsl */ `
 struct BlitUniform {
     exposure: f32, // linear multiplier, 2^stops
+    dither:   f32, // 1: add ±1/255 of triangular noise after the encode
 };
 
 @group(0) @binding(0) var inputSampler: sampler;
@@ -36,11 +37,27 @@ struct BlitUniform {
 ${TONE_MAP_FN[toneMapping]}
 ${COLOR_WGSL}
 
+// interleaved gradient noise (Jimenez 2014): 0..1, even over a pixel's neighbours
+fn ign(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
 @fragment
 fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
     let color = textureSample(inputTex, inputSampler, in.uv);
-    let mapped = applyToneMap(color.rgb * blit.exposure);
-    return vec4<f32>(${encode ? "linearToSrgb(mapped)" : "mapped"}, color.a);
+    let mapped = applyToneMap(color.rgb * blit.exposure);${
+        encode
+            ? `
+    var encoded = linearToSrgb(mapped);
+    // 8 bits a channel band smooth gradients: noise of about one step breaks the bands up
+    if (blit.dither > 0.5) {
+        let n = ign(in.pos.xy) + ign(in.pos.xy + vec2<f32>(17.0, 59.0)) - 1.0; // triangular, -1..1
+        encoded += vec3<f32>(n / 255.0);
+    }
+    return vec4<f32>(encoded, color.a);`
+            : `
+    return vec4<f32>(mapped, color.a);`
+    }
 }
 `;
 }
@@ -148,6 +165,11 @@ export interface BlitPassOptions {
     /** Brightness in stops before tone mapping: +1 doubles the light, -1 halves it. Defaults to 0. */
     exposure?: number;
     /**
+     * Adds a little noise after the sRGB encode (default true), so smooth gradients don't band in 8 bits. Only when
+     * this pass does the encode (not for an `"srgb"` input or an `-srgb` canvas).
+     */
+    dither?: boolean;
+    /**
      * What the input holds. `"linear-srgb"` (default: DeferredScenePass's color) is tone mapped, then encoded to
      * sRGB for the screen. `"srgb"`: already encoded (a 2D pass's output), copied as is.
      */
@@ -168,6 +190,9 @@ export class BlitPass extends Pass {
     toneMapping: ToneMapping;
     /** Stops, see {@link BlitPassOptions.exposure}. */
     exposure: number;
+    /** See {@link BlitPassOptions.dither}. */
+    dither: boolean;
+    private lastDither: boolean | null = null;
 
     private readonly inputName: string;
     private readonly inputColorSpace: ColorSpace;
@@ -190,6 +215,7 @@ export class BlitPass extends Pass {
         this.inputName = options.input ?? "color";
         this.toneMapping = options.toneMapping ?? "none";
         this.exposure = options.exposure ?? 0;
+        this.dither = options.dither ?? true;
         this.inputColorSpace = options.inputColorSpace ?? "linear-srgb";
         this.inputSlots = [{name: this.inputName}];
     }
@@ -251,9 +277,11 @@ export class BlitPass extends Pass {
             });
         }
 
-        if (this.exposure !== this.lastExposure) {
+        if (this.exposure !== this.lastExposure || this.dither !== this.lastDither) {
             this.lastExposure = this.exposure;
+            this.lastDither = this.dither;
             this.uniformData[0] = Math.pow(2, this.exposure);
+            this.uniformData[1] = this.dither ? 1 : 0;
             this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
         }
 

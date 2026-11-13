@@ -151,3 +151,25 @@ describe("Entity names", () => {
         assert.equal(root.find("nope"), null);
     });
 });
+
+describe("Entity.add", () => {
+    test("refuses itself and its ancestors (a cycle would never end a traversal)", () => {
+        const a = new Entity();
+        const b = new Entity();
+        a.add(b);
+        assert.throws(() => a.add(a));
+        assert.throws(() => b.add(a));
+        assert.equal(b.parent, a);
+        assert.equal(a.parent, null);
+    });
+
+    test("getWorldQuaternion under a non-uniformly scaled parent is the parent's rotation (not a skewed one)", () => {
+        const parent = new Entity();
+        parent.scale.set([1, 3, 1]);
+        parent.setEuler(0, 0.7, 0);
+        const child = new Entity();
+        parent.add(child);
+        const q = child.getWorldQuaternion();
+        assert.ok(Math.abs(Math.abs(quat.dot(q, parent.quaternion)) - 1) < 1e-6);
+    });
+});

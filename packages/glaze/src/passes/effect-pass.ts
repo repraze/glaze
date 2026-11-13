@@ -407,8 +407,12 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
 
     // ─── Per-frame writes ──────────────────────────────────────────────────────
 
+    private readonly globalsData = new Float32Array(4);
+    private uniformScratch: ArrayBuffer | null = null;
+    private uniformView: DataView | null = null;
+
     private writeGlobals(device: GPUDevice, time: number): void {
-        const data = new Float32Array(4);
+        const data = this.globalsData;
         data[0] = time;
         data[1] = 0;
         data[2] = this.width;
@@ -420,8 +424,12 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
         if (!this.uniformBuffer || this.uniformEntries.length === 0) {
             return;
         }
-        const buf = new ArrayBuffer(this.uniformBufferSize);
-        const view = new DataView(buf);
+        if (this.uniformScratch === null || this.uniformScratch.byteLength !== this.uniformBufferSize) {
+            this.uniformScratch = new ArrayBuffer(this.uniformBufferSize);
+            this.uniformView = new DataView(this.uniformScratch);
+        }
+        const buf = this.uniformScratch;
+        const view = this.uniformView!;
         for (let i = 0; i < this.uniformEntries.length; i++) {
             this.uniformEntries[i]![1].writeToView(view, this.uniformOffsets[i]!);
         }

@@ -79,6 +79,8 @@ export class OrthographicCamera extends Camera {
     bottom: number;
     near: number;
     far: number;
+    /** Magnification: the box's extents are divided by it (2 shows half as much). Default 1. */
+    zoom = 1;
 
     constructor({left = -1, right = 1, top = 1, bottom = -1, near = 0.1, far = 1000}: OrthographicCameraOptions = {}) {
         super();
@@ -92,7 +94,13 @@ export class OrthographicCamera extends Camera {
 
     getProjectionMatrix(_aspect: number): mat4 {
         const proj = mat4.create();
-        mat4.orthoZO(proj, this.left, this.right, this.bottom, this.top, this.near, this.far);
+        // zoom scales the box about its center
+        const z = this.zoom > 0 ? this.zoom : 1;
+        const cx = (this.left + this.right) / 2;
+        const cy = (this.top + this.bottom) / 2;
+        const hw = (this.right - this.left) / (2 * z);
+        const hh = (this.top - this.bottom) / (2 * z);
+        mat4.orthoZO(proj, cx - hw, cx + hw, cy - hh, cy + hh, this.near, this.far);
         return proj;
     }
 }

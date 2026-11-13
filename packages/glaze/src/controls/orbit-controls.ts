@@ -9,6 +9,9 @@ export interface OrbitControlsOptions {
     /** Distance limits from the target. Defaults: 0.01 and Infinity. */
     minDistance?: number;
     maxDistance?: number;
+    /** Orthographic cameras: how far out and in the wheel or a pinch zooms (camera.zoom). Default 0.01 and 100. */
+    minZoom?: number;
+    maxZoom?: number;
     /** Angle from straight up (+Y), radians. Defaults keep just off the poles: 0.01 and π - 0.01. */
     minPolarAngle?: number;
     maxPolarAngle?: number;
@@ -76,6 +79,9 @@ export class OrbitControls implements PointerConsumer {
     enabled = true;
     minDistance: number;
     maxDistance: number;
+    /** Orthographic cameras: the zoom range (camera.zoom). */
+    minZoom: number;
+    maxZoom: number;
     minPolarAngle: number;
     maxPolarAngle: number;
     rotateSpeed: number;
@@ -118,6 +124,8 @@ export class OrbitControls implements PointerConsumer {
         this.target = vec3.clone(options.target ?? [0, 0, 0]);
         this.minDistance = options.minDistance ?? 0.01;
         this.maxDistance = options.maxDistance ?? Infinity;
+        this.minZoom = options.minZoom ?? 0.01;
+        this.maxZoom = options.maxZoom ?? 100;
         this.minPolarAngle = options.minPolarAngle ?? 0.01;
         this.maxPolarAngle = options.maxPolarAngle ?? Math.PI - 0.01;
         this.rotateSpeed = options.rotateSpeed ?? 1;
@@ -405,7 +413,7 @@ export class OrbitControls implements PointerConsumer {
         if (this.camera instanceof PerspectiveCamera) {
             worldPerPixel = (2 * this.distance * Math.tan(this.camera.fov / 2)) / height;
         } else if (this.camera instanceof OrthographicCamera) {
-            worldPerPixel = (this.camera.top - this.camera.bottom) / height;
+            worldPerPixel = (this.camera.top - this.camera.bottom) / (this.camera.zoom || 1) / height;
         } else {
             worldPerPixel = this.distance / height;
         }
@@ -414,16 +422,8 @@ export class OrbitControls implements PointerConsumer {
 
     private applyZoom(scale: number): void {
         if (this.camera instanceof OrthographicCamera) {
-            // An orthographic view doesn't change with distance: scale its box instead.
-            const cam = this.camera;
-            const cx = (cam.left + cam.right) / 2;
-            const cy = (cam.top + cam.bottom) / 2;
-            const hw = ((cam.right - cam.left) / 2) * scale;
-            const hh = ((cam.top - cam.bottom) / 2) * scale;
-            cam.left = cx - hw;
-            cam.right = cx + hw;
-            cam.top = cy + hh;
-            cam.bottom = cy - hh;
+            // An orthographic view doesn't change with distance: magnify instead, within the limits.
+            this.camera.zoom = clamp(this.camera.zoom / scale, this.minZoom, this.maxZoom);
             return;
         }
         this.distance = clamp(this.distance * scale, this.minDistance, this.maxDistance);
