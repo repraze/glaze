@@ -197,8 +197,8 @@ export function LitScene() {
                         (c) => c.key,
                     );
                     scene.add(sun);
-                    const warm = palette.light(new PointLight({intensity: 6, range: 6}), (c) => c.accent);
-                    const cool = palette.light(new PointLight({intensity: 6, range: 6}), (c) => c.hues.cyan);
+                    const warm = palette.light(new PointLight({intensity: 11, range: 6}), (c) => c.accent);
+                    const cool = palette.light(new PointLight({intensity: 11, range: 6}), (c) => c.hues.cyan);
                     scene.add(warm).add(cool);
 
                     const floor = new Mesh(

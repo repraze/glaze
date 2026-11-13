@@ -4,6 +4,8 @@ import {describe, test} from "node:test";
 import {quat, vec3} from "gl-matrix";
 
 import {AnimationMixer} from "../animation/mixer";
+import {linearToSrgb} from "../color";
+import {PointLight, SpotLight} from "../scene/light";
 import {Mesh} from "../scene/mesh";
 import {SkinnedMesh} from "../scene/skin";
 import {readAccessor} from "./glb";
@@ -427,5 +429,35 @@ describe("parseGltf primitives", () => {
         assert.ok(near(g.colors!, [1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1]));
         assert.ok(near(g.uvs1!, [0, 0, 1, 0, 0, 1]));
         assert.ok(g.hasExtras);
+    });
+
+    test("reads KHR_lights_punctual lights as children of their nodes", async () => {
+        const model = await parseGltf(
+            noDevice,
+            triangleGltf((json) => {
+                json.extensions = {
+                    KHR_lights_punctual: {
+                        lights: [
+                            {type: "point", name: "Bulb", color: [1, 0.5, 0], intensity: 20, range: 6},
+                            {type: "spot", intensity: 50, spot: {innerConeAngle: 0.2, outerConeAngle: 0.5}},
+                        ],
+                    },
+                };
+                const nodes = json.nodes as Record<string, unknown>[];
+                nodes[1]!.extensions = {KHR_lights_punctual: {light: 0}};
+                nodes[2]!.extensions = {KHR_lights_punctual: {light: 1}};
+            }),
+        );
+        assert.equal(model.lights.length, 2);
+        const [bulb, spot] = model.lights as [PointLight, SpotLight];
+        assert.ok(bulb instanceof PointLight && spot instanceof SpotLight);
+        assert.equal(bulb.name, "Bulb");
+        assert.equal(bulb.parent, model.root.find("Sprinkle A"));
+        assert.equal(bulb.intensity, 20);
+        assert.equal(bulb.range, 6);
+        assert.ok(near(bulb.color, [1, linearToSrgb(0.5), 0]));
+        assert.equal(spot.range, Infinity);
+        assert.ok(Math.abs(spot.outerAngle - 0.5) < 1e-9 && Math.abs(spot.innerAngle - 0.2) < 1e-9);
+        assert.ok(near(spot.quaternion, [0, 0, 0, 1])); // shines along its node's -Z
     });
 });

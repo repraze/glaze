@@ -96,7 +96,7 @@ export type {
     LightOptions,
     ShadowSettings,
 } from "./scene/light";
-export {DirectionalLight, Light, PointLight, SpotLight} from "./scene/light";
+export {DirectionalLight, Light, lightReach, PointLight, SpotLight} from "./scene/light";
 export {Mesh} from "./scene/mesh";
 export type {RaycastHit, RaycastOptions} from "./scene/raycast";
 export {raycast} from "./scene/raycast";

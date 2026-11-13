@@ -128,7 +128,7 @@ const stop = renderer.startAnimation(graph);`}
 /** The donut's lighting, tuned by eye. */
 const LOOK = {
     key: "#ffeedb",
-    keyIntensity: 5.5,
+    keyIntensity: 60,
     fill: "#ffd2a8",
     fillIntensity: 0.35,
     env: 0.35,

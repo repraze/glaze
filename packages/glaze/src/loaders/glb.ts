@@ -43,6 +43,16 @@ interface GltfTextureRef {
     };
 }
 
+/** @internal A KHR_lights_punctual light (color linear; intensity in candela for point / spot, lux for sun). */
+export interface GltfLightDef {
+    name?: string;
+    type: "directional" | "point" | "spot";
+    color?: [number, number, number];
+    intensity?: number;
+    range?: number;
+    spot?: {innerConeAngle?: number; outerConeAngle?: number};
+}
+
 /** @internal A glTF sampler (WebGL enums). */
 interface GltfSamplerDef {
     magFilter?: number;
@@ -112,6 +122,7 @@ export interface GltfNode {
     translation?: [number, number, number];
     rotation?: [number, number, number, number];
     scale?: [number, number, number];
+    extensions?: {KHR_lights_punctual?: {light: number}};
 }
 
 /** @internal The subset of glTF JSON Glaze reads. */
@@ -129,6 +140,7 @@ export interface GltfJson {
     animations?: GltfAnimation[];
     skins?: {name?: string; joints: number[]; inverseBindMatrices?: number; skeleton?: number}[];
     samplers?: GltfSamplerDef[];
+    extensions?: {KHR_lights_punctual?: {lights?: GltfLightDef[]}};
     extensionsUsed?: string[];
     extensionsRequired?: string[];
 }
@@ -138,6 +150,7 @@ const SUPPORTED_REQUIRED_EXTENSIONS = new Set([
     "KHR_mesh_quantization",
     "KHR_materials_emissive_strength",
     "KHR_texture_transform",
+    "KHR_lights_punctual",
 ]);
 
 /**

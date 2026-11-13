@@ -59,7 +59,12 @@ export const doc = defineDoc({
             component: "Light (all)",
             rows: [
                 {name: "color", type: "ColorRgb", default: "[1, 1, 1]", description: "sRGB 0-1, as picked."},
-                {name: "intensity", type: "number", default: "1"},
+                {
+                    name: "intensity",
+                    type: "number",
+                    default: "1",
+                    description: "Directional: as is. Point and spot: at 1 unit away, then over distance².",
+                },
                 {
                     name: "castShadow",
                     type: "boolean",
@@ -140,7 +145,13 @@ export const doc = defineDoc({
         {
             component: "PointLight",
             rows: [
-                {name: "range", type: "number", default: "10", description: "Distance where the light reaches zero."},
+                {
+                    name: "range",
+                    type: "number",
+                    default: "Infinity",
+                    description:
+                        "Where the light fades out completely. Light falls off with the square of the distance; range smooths it to 0 there. Infinity: where it drops below ~1/250.",
+                },
             ],
         },
         {
@@ -159,7 +170,7 @@ export const doc = defineDoc({
                     description: "Full intensity inside this half-angle.",
                 },
                 {name: "outerAngle", type: "number", default: "π / 4", description: "Zero outside; smooth in between."},
-                {name: "range", type: "number", default: "10"},
+                {name: "range", type: "number", default: "Infinity"},
             ],
         },
     ],
@@ -171,14 +182,17 @@ function Notes() {
             <section id="falloff-and-shadows" className="flex scroll-mt-24 flex-col gap-3">
                 <h2 className="font-mono text-xl font-semibold">Falloff and shadows</h2>
                 <p className="text-sm text-muted-foreground">
-                    Point and spot lights fade smoothly to zero at their range, so a light only touches what is near it.
-                    Each frame the pass renders a shadow map per light with castShadow (six for a point light) from
-                    every mesh with castShadow; meshes opt out of receiving with receiveShadow. Up to 4 directional, 8
-                    point and 4 spot lights are lit at once.
+                    Point and spot lights fall off with the square of the distance, as light does: an intensity of 1
+                    lights a surface 1 unit away as brightly as a directional light of 1 (glTF&apos;s
+                    KHR_lights_punctual uses the same units). range fades them smoothly to zero, so a light only touches
+                    what is near it. Each frame the pass renders a shadow map per light with castShadow (six for a point
+                    light) from every mesh with castShadow; meshes opt out of receiving with receiveShadow. Up to 4
+                    directional, 8 point and 4 spot lights are lit at once (the ones nearest the view when there are
+                    more).
                 </p>
                 <Code
                     code={`const sun = palette.light(new DirectionalLight({direction: [1, -2, 0.5], intensity: 1.2}), (c) => c.key);
-const bulb = palette.light(new PointLight({intensity: 8, range: 8, castShadow: true}), (c) => c.hues.red);
+const bulb = palette.light(new PointLight({intensity: 18, range: 8, castShadow: true}), (c) => c.hues.red);
 const spot = new SpotLight({direction: [0, -1, 0], innerAngle: Math.PI / 12, outerAngle: Math.PI / 6, range: 10});
 vec3.set(spot.position, 0, 5, 0);
 spot.lookAt([0, 0, 0]); // lights are entities: aim them, or parent them to something that moves
@@ -223,7 +237,7 @@ pass.debugCascades = true; // tint each cascade: red, green, blue, yellow`}
 export function MovingLights() {
     const colors = useSceneColors();
     const [speed, setSpeed] = useState(1);
-    const [intensity, setIntensity] = useState(8);
+    const [intensity, setIntensity] = useState(18);
     const [range, setRange] = useState(8);
     const [points, setPoints] = useState(true);
     const [pointShadows, setPointShadows] = useState(true);
@@ -243,8 +257,8 @@ export function MovingLights() {
                             value={intensity}
                             onChange={setIntensity}
                             min={0}
-                            max={20}
-                            step={0.5}
+                            max={60}
+                            step={1}
                         />
                         <ControlSlider label="Range" value={range} onChange={setRange} min={1} max={15} step={0.5} />
                     </ControlGroup>
@@ -288,7 +302,7 @@ export function MovingLights() {
                     const spotLight = palette.light(
                         new SpotLight({
                             direction: [0, -1, 0],
-                            intensity: 12,
+                            intensity: 85,
                             range: 10,
                             innerAngle: Math.PI / 12,
                             outerAngle: Math.PI / 6,
@@ -303,7 +317,7 @@ export function MovingLights() {
                     const marker = createSphere({radius: 0.08, widthSegments: 8, heightSegments: 6});
                     const hues = ["red", "green", "blue"] as const;
                     const bulbs = hues.map((hue) => {
-                        const light = palette.light(new PointLight({intensity: 8, range: 8}), (c) => c.hues[hue]);
+                        const light = palette.light(new PointLight({intensity: 18, range: 8}), (c) => c.hues[hue]);
                         const dot = new Mesh(
                             marker,
                             palette.emissive(new PBRMaterial({color: [0, 0, 0]}), (c) => c.hues[hue]),

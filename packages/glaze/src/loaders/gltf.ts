@@ -1,10 +1,12 @@
 import {quat, vec3} from "gl-matrix";
 
 import {AnimationClip, type AnimationTrack} from "../animation/clip";
+import {type ColorRgb, linearToSrgb} from "../color";
 import {computeTangents, Geometry} from "../geometry/geometry";
 import {PBRMaterial} from "../material/material";
 import {decompose} from "../math/transform";
 import {Entity} from "../scene/entity";
+import {DirectionalLight, type Light, PointLight, SpotLight} from "../scene/light";
 import {Mesh} from "../scene/mesh";
 import {Skin, SkinnedMesh} from "../scene/skin";
 import type {Texture} from "../texture";
@@ -14,6 +16,7 @@ import {
     decodeDataUri,
     extractMaterial,
     type GltfJson,
+    type GltfLightDef,
     type GltfNode,
     type GltfTextureSource,
     nodeMatrix,
@@ -38,6 +41,8 @@ export interface GltfModel {
     readonly animations: readonly AnimationClip[];
     /** The file's skins (skeletons), by index: their joints are entities in `nodes`. */
     readonly skins: readonly Skin[];
+    /** KHR_lights_punctual lights, each a child of its node (shining along the node's -Z, as glTF defines). */
+    readonly lights: readonly Light[];
     /** Frees the model's textures (renderers release meshes and materials they stop drawing on their own). */
     destroy(): void;
 }
@@ -180,6 +185,7 @@ async function buildModel(
     };
 
     const meshes: Mesh[] = [];
+    const lights: Light[] = [];
     const nodes: Entity[] = (json.nodes ?? []).map((node, nodeIndex) => {
         const gltfMesh = node.mesh !== undefined ? json.meshes?.[node.mesh] : undefined;
         const prims = (gltfMesh?.primitives ?? [])
@@ -215,6 +221,14 @@ async function buildModel(
             }
         }
         setLocalTransform(entity, node);
+        const lightIndex = node.extensions?.KHR_lights_punctual?.light;
+        const lightDef =
+            lightIndex !== undefined ? json.extensions?.KHR_lights_punctual?.lights?.[lightIndex] : undefined;
+        if (lightDef !== undefined) {
+            const light = makeLight(lightDef);
+            entity.add(light);
+            lights.push(light);
+        }
         return entity;
     });
 
@@ -278,6 +292,7 @@ async function buildModel(
         textures,
         animations: readAnimations(json, buffers, nodes),
         skins,
+        lights,
         destroy() {
             for (const texture of textures) {
                 texture.destroy();
@@ -310,6 +325,35 @@ function readAnimations(json: GltfJson, buffers: ArrayBuffer[], nodes: Entity[])
         }
         return new AnimationClip(animation.name ?? `animation${index}`, tracks);
     });
+}
+
+/**
+ * A Glaze light for a KHR_lights_punctual one. Colors go from glTF's linear values to the sRGB Glaze lights take;
+ * intensities carry over (candela for point and spot lights is Glaze's intensity at 1 unit, lux for the sun);
+ * a missing range is Infinity. Spot cone angles are half-angles in both.
+ */
+function makeLight(def: GltfLightDef): Light {
+    const [r, g, b] = def.color ?? [1, 1, 1];
+    const options = {
+        color: [linearToSrgb(r), linearToSrgb(g), linearToSrgb(b)] as ColorRgb,
+        intensity: def.intensity ?? 1,
+    };
+    const range = def.range ?? Infinity;
+    // glTF lights shine along their node's -Z: so do Glaze's, so the light keeps an identity local transform
+    const light =
+        def.type === "directional"
+            ? new DirectionalLight({...options, direction: [0, 0, -1]})
+            : def.type === "spot"
+              ? new SpotLight({
+                    ...options,
+                    direction: [0, 0, -1],
+                    range,
+                    innerAngle: def.spot?.innerConeAngle ?? 0,
+                    outerAngle: def.spot?.outerConeAngle ?? Math.PI / 4,
+                })
+              : new PointLight({...options, range});
+    light.name = def.name ?? `${def.type} light`;
+    return light;
 }
 
 function setLocalTransform(entity: Entity, node: GltfNode): void {

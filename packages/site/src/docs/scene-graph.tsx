@@ -209,7 +209,7 @@ export function Hierarchy() {
                         palette.emissive(new PBRMaterial({color: [0, 0, 0]}), (c) => c.accentFill, 1.2),
                     );
                     sun.castShadow = false;
-                    sun.add(palette.light(new PointLight({intensity: 30, range: 12}), (c) => c.accentFill));
+                    sun.add(palette.light(new PointLight({intensity: 160, range: 12}), (c) => c.accentFill));
                     scene.add(sun);
 
                     // planet pivot rotates around the sun; the planet sits at its edge

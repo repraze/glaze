@@ -209,7 +209,10 @@ function LightsSlide() {
         torus.setEuler(Math.PI / 2, 0, 0);
         scene.add(torus);
         const bulbs = (["red", "green", "blue"] as const).map((hue) => {
-            const light = palette.light(new PointLight({intensity: 8, range: 7, castShadow: true}), (c) => c.hues[hue]);
+            const light = palette.light(
+                new PointLight({intensity: 16, range: 7, castShadow: true}),
+                (c) => c.hues[hue],
+            );
             scene.add(light);
             return light;
         });

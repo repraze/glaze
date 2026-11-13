@@ -67,8 +67,9 @@ export const doc = defineDoc({
                 {name: "parseGltf(device, bytes, {resolveUri?})", type: "Promise<GltfModel>"},
                 {
                     name: "GltfModel",
-                    type: "{root, nodes, meshes, materials, textures, destroy()}",
-                    description: "root is the default scene; nodes by glTF index.",
+                    type: "{root, nodes, meshes, materials, textures, animations, skins, lights, destroy()}",
+                    description:
+                        "root is the default scene; nodes by glTF index; lights from KHR_lights_punctual, children of their nodes.",
                 },
                 {
                     name: "computeWorldBounds(entity)",

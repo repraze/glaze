@@ -121,13 +121,29 @@ export class DirectionalLight extends Light {
 }
 
 export interface PointLightOptions extends LightOptions {
+    /** See {@link PointLight.range}. Default Infinity. */
     range?: number;
 }
 
+/**
+ * The distance where a point or spot light's contribution has faded to nothing. Light falls off with the
+ * square of the distance (intensity / d², intensity in candela-like units: 1 lights a surface 1 unit away like a
+ * directional light of intensity 1); `range` fades it smoothly to 0 by that distance (glTF's window). Infinity
+ * (or 0): ends where it drops below about 1/250 of a directional light of intensity 1.
+ */
+export function lightReach(light: {intensity: number; range: number}): number {
+    if (Number.isFinite(light.range) && light.range > 0) {
+        return light.range;
+    }
+    return Math.max(Math.sqrt(Math.max(light.intensity, 0) * 250), 1e-3);
+}
+
+/** A light shining in every direction from the entity's position, fading with the square of the distance. */
 export class PointLight extends Light {
+    /** Where it fades out completely, in world units (see {@link lightReach}). Default Infinity. */
     range: number;
 
-    constructor({range = 10, ...rest}: PointLightOptions = {}) {
+    constructor({range = Infinity, ...rest}: PointLightOptions = {}) {
         super(rest);
         this.range = range;
     }
@@ -140,6 +156,7 @@ export interface SpotLightOptions extends LightOptions {
     innerAngle?: number;
     /** Half-angle (radians) where the light reaches 0. Kept below 89°. */
     outerAngle?: number;
+    /** See {@link PointLight.range}. Default Infinity. */
     range?: number;
 }
 
@@ -156,13 +173,14 @@ export function spotCone(light: SpotLight): {inner: number; outer: number} {
 export class SpotLight extends Light {
     innerAngle: number;
     outerAngle: number;
+    /** Where it fades out completely (see {@link lightReach}). Default Infinity. */
     range: number;
 
     constructor({
         direction = [0, -1, 0],
         innerAngle = Math.PI / 8,
         outerAngle = Math.PI / 4,
-        range = 10,
+        range = Infinity,
         ...rest
     }: SpotLightOptions = {}) {
         super(rest);

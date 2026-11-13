@@ -8,7 +8,7 @@ import {isMirrored} from "../math/transform";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 import type {Camera} from "../scene/camera";
-import {type DirectionalLight, type PointLight, spotCone, type SpotLight} from "../scene/light";
+import {type DirectionalLight, lightReach, type PointLight, spotCone, type SpotLight} from "../scene/light";
 import type {Mesh} from "../scene/mesh";
 import type {Scene} from "../scene/scene";
 import {type Cascade, fitCascades, lightView, MAX_CASCADES} from "../scene/shadow-cascades";
@@ -603,7 +603,7 @@ function shadowNear(light: PointLight | SpotLight): number {
 
 /** Where it ends: the light's range (at least a little past near). */
 function shadowFar(light: PointLight | SpotLight): number {
-    return Math.max(light.range, 1e-3);
+    return lightReach(light);
 }
 
 // ─── Lighting uniform layout (in f32 slots) ──────────────────────────────────
@@ -732,6 +732,14 @@ fn sampleEquirect(dir: vec3<f32>) -> vec2<f32> {
 
 fn sampleEnvMap(dir: vec3<f32>) -> vec3<f32> {
     return textureSampleLevel(environmentMap, envSampler, sampleEquirect(dir), 0.0).rgb;
+}
+
+// Point and spot falloff: inverse square (intensity 1 at distance 1 lights like a directional light of 1), faded
+// to 0 at 'reach' by glTF's window, (1 - (d / reach)⁴)². The distance is kept above 1 cm: no infinity at the light.
+fn falloff(d: f32, reach: f32) -> f32 {
+    let r = d / reach;
+    let window = clamp(1.0 - r * r * r * r, 0.0, 1.0);
+    return window * window / max(d * d, 1e-4);
 }
 
 fn brdf_direct(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, albedo: vec3<f32>, roughness: f32, metallic: f32, F0: vec3<f32>, NdotV: f32) -> vec3<f32> {
@@ -931,7 +939,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let toLight = pl.position.xyz - worldPos;
         let dist    = length(toLight);
         let L       = toLight / dist;
-        let attn    = clamp(1.0 - dist / pl.position.w, 0.0, 1.0);
+        let attn    = falloff(dist, pl.position.w);
         var shadow  = 1.0;
         if (pl.flags.x > 0.0 && receiveShadow > 0.0 && attn > 0.0 && dot(N, L) > 0.0) {
             // the face is chosen by where the lookup lands (off the surface), not by the surface point itself
@@ -952,7 +960,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
             shadow    = mix(1.0, raw, receiveShadow * pl.flags.x);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
-                  * pl.colorIntensity.rgb * (pl.colorIntensity.w * attn * attn * shadow);
+                  * pl.colorIntensity.rgb * (pl.colorIntensity.w * attn * shadow);
     }
 
     for (var i = 0u; i < lighting.counts.z; i++) {
@@ -960,7 +968,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let toLight = sl.position.xyz - worldPos;
         let dist    = length(toLight);
         let L       = toLight / dist;
-        let attn     = clamp(1.0 - dist / sl.position.w, 0.0, 1.0);
+        let attn     = falloff(dist, sl.position.w);
         let theta    = dot(L, normalize(-sl.direction.xyz));
         let spotAttn = smoothstep(sl.angles.y, sl.angles.x, theta);
         var shadow = 1.0;
@@ -973,7 +981,7 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
             shadow = mix(1.0, raw, receiveShadow * sl.direction.w);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV)
-                  * sl.colorIntensity.rgb * (sl.colorIntensity.w * attn * attn * spotAttn * shadow);
+                  * sl.colorIntensity.rgb * (sl.colorIntensity.w * attn * spotAttn * shadow);
     }
     if (lighting.cameraForward.w > 0.5 && lighting.counts.x > 0u && lighting.directionalLights[0].direction.w > 0.5) {
         // debug: tint by the first directional light's cascade (red, green, blue, yellow; none past the last)
@@ -2558,7 +2566,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 0] = wp[12]!;
             f32[base + 1] = wp[13]!;
             f32[base + 2] = wp[14]!;
-            f32[base + 3] = l.range;
+            f32[base + 3] = lightReach(l);
             f32[base + 4] = srgbToLinear(l.color[0]);
             f32[base + 5] = srgbToLinear(l.color[1]);
             f32[base + 6] = srgbToLinear(l.color[2]);
@@ -2575,7 +2583,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 0] = wp[12]!;
             f32[base + 1] = wp[13]!;
             f32[base + 2] = wp[14]!;
-            f32[base + 3] = l.range;
+            f32[base + 3] = lightReach(l);
             const dir = worldForward(wp, tmpDir);
             f32[base + 4] = dir[0];
             f32[base + 5] = dir[1];
@@ -2940,7 +2948,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             }
             const w = l.worldMatrix;
             const distance = Math.hypot(w[12]! - eye[0], w[13]! - eye[1], w[14]! - eye[2]);
-            return Math.max(distance - l.range, 0) - l.intensity * 1e-3; // inside the reach: 0, then by intensity
+            return Math.max(distance - lightReach(l), 0) - l.intensity * 1e-3; // inside the reach: 0, then by intensity
         };
         return [...lights].sort((a, b) => score(a) - score(b)).slice(0, max);
     }
