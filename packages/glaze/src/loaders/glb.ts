@@ -78,6 +78,7 @@ export interface GltfMesh {
 export interface GltfNode {
     name?: string;
     mesh?: number;
+    skin?: number;
     children?: number[];
     matrix?: number[];
     translation?: [number, number, number];
@@ -98,6 +99,7 @@ export interface GltfJson {
     textures?: GltfTextureDef[];
     images?: GltfImageDef[];
     animations?: GltfAnimation[];
+    skins?: {name?: string; joints: number[]; inverseBindMatrices?: number; skeleton?: number}[];
 }
 
 /** @internal */
@@ -362,6 +364,8 @@ export function readPrimitive(
     uvs: Float32Array;
     tangents: Float32Array | null;
     indices: Uint32Array;
+    joints: Uint16Array | null;
+    weights: Float32Array | null;
 } | null {
     // Only TRIANGLES (mode 4, also the default)
     if (prim.mode !== undefined && prim.mode !== 4) {
@@ -389,7 +393,24 @@ export function readPrimitive(
             indices[i] = i;
         }
     }
-    return {positions, normals, uvs, tangents, indices};
+    // skinning: 4 joints and weights per vertex (uint8 / uint16 joints, float or normalized weights)
+    const jointsIdx = prim.attributes["JOINTS_0"];
+    const weightsIdx = prim.attributes["WEIGHTS_0"];
+    let joints: Uint16Array | null = null;
+    let weights: Float32Array | null = null;
+    if (jointsIdx !== undefined && weightsIdx !== undefined) {
+        joints = Uint16Array.from(readAccessor(json, buffers, jointsIdx));
+        weights = Float32Array.from(readAccessor(json, buffers, weightsIdx));
+        for (let i = 0; i < weights.length; i += 4) {
+            const sum = weights[i]! + weights[i + 1]! + weights[i + 2]! + weights[i + 3]!;
+            if (sum > 0 && Math.abs(sum - 1) > 1e-6) {
+                for (let k = 0; k < 4; k++) {
+                    weights[i + k] = weights[i + k]! / sum;
+                }
+            }
+        }
+    }
+    return {positions, normals, uvs, tangents, indices, joints, weights};
 }
 
 /** @internal Splits a GLB file into its JSON and binary chunk (the file's buffer 0). */

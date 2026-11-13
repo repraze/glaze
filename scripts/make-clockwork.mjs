@@ -146,6 +146,42 @@ function gear(radius, depth, teeth) {
     return out;
 }
 
+/**
+ * A tube along +Y from `y0`, `bones` segments of `segment` each, skinned to a chain of bones: each ring follows
+ * the two bones it sits between, blended by height.
+ */
+function stalk(x, y0, z, radius, segment, bones, around = 12, ringsPerBone = 6) {
+    const out = {positions: [], normals: [], uvs: [], indices: [], joints: [], weights: []};
+    const rings = bones * ringsPerBone;
+    for (let j = 0; j <= rings; j++) {
+        const t = j / ringsPerBone; // in bones
+        const y = y0 + t * segment;
+        const bone = Math.min(Math.floor(t), bones - 1);
+        const f = Math.min(t - bone, 1);
+        // blend toward the next bone over the upper half of each segment
+        const w = Math.max(0, (f - 0.5) * 2);
+        const next = Math.min(bone + 1, bones - 1);
+        const taper = 1 - 0.35 * (j / rings);
+        for (let i = 0; i <= around; i++) {
+            const a = (i / around) * TAU;
+            const n = [Math.cos(a), 0, -Math.sin(a)];
+            out.positions.push(r6(x + n[0] * radius * taper), r6(y), r6(z + n[2] * radius * taper));
+            out.normals.push(r6(n[0]), 0, r6(n[2]));
+            out.uvs.push(i / around, j / rings);
+            out.joints.push(bone, next, 0, 0);
+            out.weights.push(r6(1 - w), r6(w), 0, 0);
+        }
+    }
+    for (let j = 0; j < rings; j++) {
+        for (let i = 0; i < around; i++) {
+            const a = j * (around + 1) + i;
+            const b = a + around + 1;
+            out.indices.push(a, a + 1, b, a + 1, b + 1, b);
+        }
+    }
+    return out;
+}
+
 // ─── Animation helpers ────────────────────────────────────────────────────────
 
 /** Quaternion [x, y, z, w] for `angle` about a unit axis. */
@@ -170,7 +206,7 @@ function view(bytes, target) {
     return bufferViews.length - 1;
 }
 
-const SIZES = {SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4};
+const SIZES = {SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16};
 
 function accessor(array, type, componentType, {target, fields = {}} = {}) {
     accessors.push({
@@ -202,6 +238,12 @@ function addGeometry(mesh) {
         POSITION: accessor(pos, "VEC3", 5126, {target: 34962, fields: bounds(pos, 3)}),
         NORMAL: accessor(new Float32Array(mesh.normals), "VEC3", 5126, {target: 34962}),
         TEXCOORD_0: accessor(new Float32Array(mesh.uvs), "VEC2", 5126, {target: 34962}),
+        ...(mesh.joints
+            ? {
+                  JOINTS_0: accessor(new Uint8Array(mesh.joints), "VEC4", 5121, {target: 34962}),
+                  WEIGHTS_0: accessor(new Float32Array(mesh.weights), "VEC4", 5126, {target: 34962}),
+              }
+            : {}),
         indices: accessor(new Uint16Array(mesh.indices), "SCALAR", 5123, {target: 34963}),
     };
 }
@@ -257,6 +299,9 @@ const gearBigMesh = mesh("Gear Big", addGeometry(gear(0.5, 0.12, 12)), 2);
 const gearSmallMesh = mesh("Gear Small", addGeometry(gear(0.3, 0.12, 8)), 2);
 const ballMesh = mesh("Ball", addGeometry(sphere(0.18)), 4);
 const lampMesh = mesh("Lamp", addGeometry(sphere(0.09, 20, 10)), 5);
+const STALK = {x: 0.15, y: 0.24, z: 0.5, segment: 0.3, bones: 4};
+const stalkMesh = mesh("Stalk", addGeometry(stalk(STALK.x, STALK.y, STALK.z, 0.05, STALK.segment, STALK.bones)), 3);
+const bulbMesh = mesh("Bulb", addGeometry(sphere(0.11, 24, 12)), 4);
 
 const nodes = [];
 function node(def) {
@@ -275,7 +320,30 @@ const gearSmall = node({name: "Gear Small", mesh: gearSmallMesh, translation: [1
 const ball = node({name: "Ball", mesh: ballMesh, translation: [1.15, 0.3, 0.45]});
 const lamp = node({name: "Lamp", mesh: lampMesh, translation: [-1.25, 2.4, 0]});
 const base = node({name: "Base", mesh: baseMesh, translation: [0, 0.12, 0]});
-const toy = node({name: "Clockwork", children: [base, post, beam, pivot, gearBig, gearSmall, ball, lamp]});
+
+// the stalk's skeleton: a chain of bones up the tube; the bulb rides the last one (a rigid child of a joint)
+const bulb = node({name: "Bulb", mesh: bulbMesh, translation: [0, STALK.segment + 0.08, 0]});
+const boneNodes = [];
+for (let i = STALK.bones - 1; i >= 0; i--) {
+    const children = i === STALK.bones - 1 ? [bulb] : [boneNodes[0]];
+    const translation = i === 0 ? [STALK.x, STALK.y, STALK.z] : [0, STALK.segment, 0];
+    boneNodes.unshift(node({name: `Bone ${i + 1}`, translation, children}));
+}
+// inverse bind matrices: bone i sits at (x, y0 + i·segment, z) in the bind pose, unrotated
+const inverseBind = new Float32Array(STALK.bones * 16);
+for (let i = 0; i < STALK.bones; i++) {
+    inverseBind.set(
+        [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -STALK.x, -(STALK.y + i * STALK.segment), -STALK.z, 1],
+        i * 16,
+    );
+}
+const skins = [{name: "Stalk", joints: boneNodes, inverseBindMatrices: accessor(inverseBind, "MAT4", 5126)}];
+const stalkNode = node({name: "Stalk", mesh: stalkMesh, skin: 0});
+
+const toy = node({
+    name: "Clockwork",
+    children: [base, post, beam, pivot, gearBig, gearSmall, ball, lamp, boneNodes[0], stalkNode],
+});
 
 // ─── Animations ───────────────────────────────────────────────────────────────
 
@@ -305,6 +373,32 @@ function spin(axis, turns, duration) {
         values.push(...axisAngle(axis, Math.sign(turns) * (i / 4) * TAU));
     }
     return [times, values];
+}
+
+/** A bone's wave: rotation about Z (and a little X) by ±amplitude, `phase` behind the bone below it. */
+function wave(amplitude, period, phase, keys = 24) {
+    const times = [];
+    const values = [];
+    for (let i = 0; i <= keys; i++) {
+        const t = (i / keys) * period;
+        const a = (t / period) * TAU - phase;
+        const q = mulQuat(
+            axisAngle([0, 0, 1], amplitude * Math.sin(a)),
+            axisAngle([1, 0, 0], amplitude * 0.4 * Math.cos(a)),
+        );
+        times.push(r6(t));
+        values.push(...q.map(r6));
+    }
+    return [times, values];
+}
+
+function mulQuat(a, b) {
+    return [
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    ];
 }
 
 /** Pendulum keys: a swing of ±amplitude over `period`, sampled finely (LINEAR between). */
@@ -351,6 +445,7 @@ clip("Run", [
     [gearSmall, "rotation", "LINEAR", ...spin([0, 0, 1], 1.5, 2)],
     [ball, "translation", "CUBICSPLINE", bounceTimes, bounceValues],
     [ball, "scale", "LINEAR", squashTimes, squashValues],
+    ...boneNodes.map((bone, i) => [bone, "rotation", "LINEAR", ...wave(0.32, 2, i * 0.7)]),
     [
         lamp,
         "scale",
@@ -367,6 +462,7 @@ clip("Idle", [
     [ball, "translation", "LINEAR", [0, 4], [1.15, BALL_REST, 0.45, 1.15, BALL_REST, 0.45]],
     [ball, "scale", "LINEAR", [0, 4], [1, 1, 1, 1, 1, 1]],
     [lamp, "scale", "STEP", [0, 4], [...lampOff, ...lampOff]],
+    ...boneNodes.map((bone, i) => [bone, "rotation", "LINEAR", ...wave(0.08, 4, i * 0.5)]),
 ]);
 
 // ─── GLB ──────────────────────────────────────────────────────────────────────
@@ -380,6 +476,7 @@ const json = {
     meshes,
     materials,
     animations,
+    skins,
     accessors,
     bufferViews,
     buffers: [{byteLength}],

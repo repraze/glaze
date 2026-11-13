@@ -23,14 +23,14 @@ export const doc = defineDoc({
     title: "Animation",
     category: "Scene",
     description:
-        "glTF animations load as clips: keyframe tracks on the model's entities. An AnimationMixer plays them through actions, with speed, looping and weights, and crossfades from one to another.",
+        "glTF animations load as clips: keyframe tracks on the model's entities. An AnimationMixer plays them through actions, with speed, looping and weights, and crossfades from one to another. Skinned meshes bend with their skeleton's joints.",
     engineFile: "animation/mixer.ts",
     order: 6,
     demos: [
         {
             title: "Clockwork",
             description:
-                "One glTF file, two clips over the same nodes. Run swings the pendulum (linear rotation), bounces the ball (cubic spline) and squashes it (linear scale), turns the gears and blinks the lamp (step). Switch to Idle: the mixer crossfades between them.",
+                "One glTF file, two clips over the same nodes. Run swings the pendulum (linear rotation), bounces the ball (cubic spline) and squashes it (linear scale), turns the gears, blinks the lamp (step) and waves the stalk, a skinned tube on a chain of four bones. Switch to Idle: the mixer crossfades between them.",
             component: Clockwork,
             layout: "full",
         },
@@ -39,6 +39,7 @@ export const doc = defineDoc({
     sections: [
         {id: "clips-and-actions", title: "Clips and actions"},
         {id: "blending", title: "Blending"},
+        {id: "skinning", title: "Skinning"},
     ],
     props: [
         {
@@ -71,6 +72,34 @@ export const doc = defineDoc({
                     description: "Weight ramps; fadeOut stops at the end.",
                 },
                 {name: "finished", type: "boolean", description: 'A "once" action at its end.'},
+            ],
+        },
+        {
+            component: "SkinnedMesh",
+            rows: [
+                {
+                    name: "new SkinnedMesh(geometry, material, skin?)",
+                    type: "SkinnedMesh",
+                    description: "Geometry with joints and weights.",
+                },
+                {name: "skin", type: "Skin | null", description: "Its skeleton; loadGltf sets it."},
+                {
+                    name: "collider",
+                    type: "Collider | null",
+                    default: "null",
+                    description: "Its triangles move: put colliders on the joints to pick it.",
+                },
+            ],
+        },
+        {
+            component: "Skin",
+            rows: [
+                {name: "joints", type: "Entity[]", description: "Animate them (or let clips do it) to bend the mesh."},
+                {
+                    name: "inverseBindMatrices",
+                    type: "Float32Array",
+                    description: "16 floats a joint: its bind pose, inverted.",
+                },
             ],
         },
         {
@@ -130,6 +159,25 @@ run.crossFadeTo(idle, 0.6); // run fades out and stops, idle fades in and plays
 
 action.loop = "once";       // stop on the last frame: action.finished turns true
 action.weight = 0.5;        // half this clip, half whatever else plays (or the rest pose)`}
+                />
+            </section>
+            <section id="skinning" className="flex scroll-mt-24 flex-col gap-3">
+                <h2 className="font-mono text-xl font-semibold">Skinning</h2>
+                <p className="text-sm text-muted-foreground">
+                    A glTF node with a skin loads as a <code className="font-mono text-foreground">SkinnedMesh</code>:
+                    each vertex follows up to four joints by its weights. Joints are ordinary entities, so clips animate
+                    them like anything else and you can parent things to them, like the bulb on the stalk. Each frame
+                    the pass uploads the joint matrices and the vertex shader blends them: the G-buffer, shadows and
+                    see-through meshes all bend alike.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                    The geometry stays in its bind pose on the CPU, so a skinned mesh has no collider by default: hang
+                    colliders on the joints to pick it. Shadow culling and sorting use a sphere around its joints.
+                </p>
+                <Code
+                    code={`const head = model.root.find("Head")!;      // a joint
+head.collider = sphereCollider(0.15);       // picks follow the animation
+input.on(head, "click", () => wave.play());`}
                 />
             </section>
         </div>

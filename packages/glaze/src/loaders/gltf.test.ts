@@ -5,6 +5,7 @@ import {quat, vec3} from "gl-matrix";
 
 import {AnimationMixer} from "../animation/mixer";
 import {Mesh} from "../scene/mesh";
+import {SkinnedMesh} from "../scene/skin";
 import {parseGltf} from "./gltf";
 
 const near = (a: ArrayLike<number>, b: ArrayLike<number>, eps = 1e-5) =>
@@ -208,5 +209,49 @@ describe("parseGltf", () => {
         assert.ok(near(sprinkle.quaternion, [0, 0, 0, 1])); // STEP: still the first key
         mixer.update(0.999);
         assert.ok(near(sprinkle.position, [3.998, 0, 0], 1e-3));
+    });
+
+    test("reads skins: skinned nodes become SkinnedMeshes on the file's joints, weights normalized", async () => {
+        const model = await parseGltf(
+            noDevice,
+            triangleGltf((json) => {
+                const joints = new Uint8Array([1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0]);
+                const weights = new Uint8Array([255, 0, 0, 0, 200, 50, 0, 0, 100, 100, 0, 0]); // last: sums to 0.78
+                const bytes = new Uint8Array(24);
+                bytes.set(joints, 0);
+                bytes.set(weights, 12);
+                (json.buffers as unknown[]).push({
+                    byteLength: bytes.length,
+                    uri: `data:application/octet-stream;base64,${Buffer.from(bytes).toString("base64")}`,
+                });
+                const views = json.bufferViews as unknown[];
+                const accessors = json.accessors as unknown[];
+                views.push({buffer: 1, byteOffset: 0, byteLength: 12}, {buffer: 1, byteOffset: 12, byteLength: 12});
+                accessors.push(
+                    {bufferView: views.length - 2, componentType: 5121, count: 3, type: "VEC4"},
+                    {bufferView: views.length - 1, componentType: 5121, count: 3, type: "VEC4", normalized: true},
+                );
+                const mesh = (json.meshes as {primitives: {attributes: Record<string, number>}[]}[])[0]!;
+                mesh.primitives[0]!.attributes.JOINTS_0 = accessors.length - 2;
+                mesh.primitives[0]!.attributes.WEIGHTS_0 = accessors.length - 1;
+                json.skins = [{joints: [0, 1]}];
+                (json.nodes as Record<string, unknown>[])[2]!.skin = 0;
+            }),
+        );
+        const skinnedNode = model.root.find("Sprinkle B")!;
+        assert.ok(skinnedNode instanceof SkinnedMesh);
+        assert.equal(skinnedNode.skin, model.skins[0]);
+        assert.deepEqual(
+            model.skins[0]!.joints.map((j) => j.name),
+            ["Donut", "Sprinkle A"],
+        );
+        // the same mesh on a node without a skin stays a plain Mesh
+        assert.ok(!(model.root.find("Sprinkle A") instanceof SkinnedMesh));
+        const w = skinnedNode.geometry.weights!;
+        assert.ok(near(w.subarray(8, 12), [0.5, 0.5, 0, 0]));
+        assert.deepEqual(Array.from(skinnedNode.geometry.joints!.subarray(0, 4)), [1, 0, 0, 0]);
+        assert.ok(
+            near(model.skins[0]!.inverseBindMatrices.subarray(0, 16), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+        );
     });
 });

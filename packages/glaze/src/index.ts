@@ -99,6 +99,7 @@ export {Mesh} from "./scene/mesh";
 export type {RaycastHit, RaycastOptions} from "./scene/raycast";
 export {raycast} from "./scene/raycast";
 export {Scene} from "./scene/scene";
+export {Skin, SkinnedMesh} from "./scene/skin";
 export {computeWorldBounds} from "./scene/world-bounds";
 export type {TextureOptions} from "./texture";
 export {generateMipmaps, mipLevelCount, Texture} from "./texture";

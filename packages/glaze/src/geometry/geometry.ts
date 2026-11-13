@@ -7,6 +7,10 @@ export interface GeometryOptions {
     indices: Uint32Array;
     /** 4 floats per vertex: tangent xyz + handedness w (+1 or -1). */
     tangents?: Float32Array;
+    /** Skinning: 4 joint indices per vertex (into the skin's joints). Needs `weights`. */
+    joints?: Uint16Array;
+    /** Skinning: 4 weights per vertex, summing to 1. */
+    weights?: Float32Array;
 }
 
 export class Geometry {
@@ -19,11 +23,20 @@ export class Geometry {
     readonly indices: Uint32Array;
     /** 4 floats per vertex: tangent xyz + handedness w (+1 or -1). Optional. */
     readonly tangents?: Float32Array;
+    /** Skinning: 4 joint indices per vertex. Optional (with `weights`). */
+    readonly joints?: Uint16Array;
+    /** Skinning: 4 weights per vertex. */
+    readonly weights?: Float32Array;
 
     readonly vertexCount: number;
     readonly indexCount: number;
 
-    constructor({positions, normals, uvs, indices, tangents}: GeometryOptions) {
+    constructor({positions, normals, uvs, indices, tangents, joints, weights}: GeometryOptions) {
+        if ((joints === undefined) !== (weights === undefined)) {
+            throw new Error("Geometry: joints and weights go together");
+        }
+        this.joints = joints;
+        this.weights = weights;
         this.positions = positions;
         this.normals = normals;
         this.uvs = uvs;
@@ -44,6 +57,31 @@ export class Geometry {
     /** Local-space sphere around the positions, computed on first use and cached (see `updateBounds`). */
     get boundingSphere(): ReadonlySphere {
         return (this._boundingSphere ??= sphere.fromPositions(sphere.create(), this.positions));
+    }
+
+    /** Has per-vertex joints and weights: drawn by a SkinnedMesh, deformed by its skin. */
+    get skinned(): boolean {
+        return this.joints !== undefined;
+    }
+
+    /**
+     * The skin attributes as one buffer, 24 bytes a vertex: 4 × uint16 joints, then 4 × float32 weights.
+     * Null without them.
+     */
+    buildSkinBuffer(): ArrayBuffer | null {
+        if (this.joints === undefined || this.weights === undefined) {
+            return null;
+        }
+        const out = new ArrayBuffer(this.vertexCount * 24);
+        const u16 = new Uint16Array(out);
+        const f32 = new Float32Array(out);
+        for (let i = 0; i < this.vertexCount; i++) {
+            for (let k = 0; k < 4; k++) {
+                u16[i * 12 + k] = this.joints[i * 4 + k]!;
+                f32[i * 6 + 2 + k] = this.weights[i * 4 + k]!;
+            }
+        }
+        return out;
     }
 
     /** Drops the cached bounds after `positions` were edited in place; they are recomputed on next use. */

@@ -5,6 +5,7 @@ import {computeTangents, Geometry} from "../geometry/geometry";
 import {PBRMaterial} from "../material/material";
 import {Entity} from "../scene/entity";
 import {Mesh} from "../scene/mesh";
+import {Skin, SkinnedMesh} from "../scene/skin";
 import type {Texture} from "../texture";
 import {
     createPBRMaterialFromGltf,
@@ -33,6 +34,8 @@ export interface GltfModel {
     readonly textures: readonly Texture[];
     /** The file's animations, targeting the entities in `nodes`: play them with an AnimationMixer. */
     readonly animations: readonly AnimationClip[];
+    /** The file's skins (skeletons), by index: their joints are entities in `nodes`. */
+    readonly skins: readonly Skin[];
     /** Frees the model's textures and material buffers. */
     destroy(): void;
 }
@@ -147,7 +150,11 @@ async function buildModel(
                 data === null
                     ? null
                     : new Geometry({
-                          ...data,
+                          positions: data.positions,
+                          normals: data.normals,
+                          uvs: data.uvs,
+                          indices: data.indices,
+                          ...(data.joints && data.weights ? {joints: data.joints, weights: data.weights} : {}),
                           tangents:
                               data.tangents ??
                               computeTangents(
@@ -170,14 +177,19 @@ async function buildModel(
             .map((prim, i) => ({geometry: geometryFor(node.mesh!, i), material: materialFor(prim.material)}))
             .filter((p): p is {geometry: Geometry; material: PBRMaterial} => p.geometry !== null);
 
+        // a node with a skin draws its skinned primitives as SkinnedMeshes (the skin is attached below)
+        const makeMesh = (geometry: Geometry, material: PBRMaterial): Mesh =>
+            node.skin !== undefined && geometry.skinned
+                ? new SkinnedMesh(geometry, material)
+                : new Mesh(geometry, material);
         let entity: Entity;
         if (prims.length === 1) {
-            entity = new Mesh(prims[0]!.geometry, prims[0]!.material);
+            entity = makeMesh(prims[0]!.geometry, prims[0]!.material);
             meshes.push(entity as Mesh);
         } else {
             entity = new Entity();
             prims.forEach(({geometry, material}, i) => {
-                const part = new Mesh(geometry, material);
+                const part = makeMesh(geometry, material);
                 part.name = `${gltfMesh?.name ?? `mesh${node.mesh}`}#${i}`;
                 meshes.push(part);
                 entity.add(part);
@@ -194,6 +206,29 @@ async function buildModel(
             const entity = nodes[child];
             if (entity !== undefined && entity.parent === null && child !== i) {
                 nodes[i]!.add(entity);
+            }
+        }
+    });
+
+    // skins: joints are node entities; each skinned node's meshes get theirs
+    const skins = (json.skins ?? []).map(
+        (def) =>
+            new Skin(
+                def.joints.map((i) => nodes[i]!),
+                def.inverseBindMatrices !== undefined
+                    ? Float32Array.from(readAccessor(json, buffers, def.inverseBindMatrices))
+                    : undefined,
+            ),
+    );
+    (json.nodes ?? []).forEach((node, i) => {
+        const skin = node.skin !== undefined ? skins[node.skin] : undefined;
+        if (skin === undefined) {
+            return;
+        }
+        const entity = nodes[i]!;
+        for (const mesh of entity instanceof SkinnedMesh ? [entity] : entity.children) {
+            if (mesh instanceof SkinnedMesh) {
+                mesh.skin = skin;
             }
         }
     });
@@ -224,6 +259,7 @@ async function buildModel(
         materials,
         textures,
         animations: readAnimations(json, buffers, nodes),
+        skins,
         destroy() {
             for (const material of materials) {
                 material.destroy();

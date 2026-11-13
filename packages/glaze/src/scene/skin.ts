@@ -1,0 +1,77 @@
+import {mat4} from "gl-matrix";
+
+import type {Geometry} from "../geometry/geometry";
+import type {Material} from "../material/material";
+import type {Entity} from "./entity";
+import {Mesh} from "./mesh";
+
+/**
+ * A skeleton: the joint entities that deform a skinned mesh, and each joint's inverse bind matrix (the
+ * inverse of its world transform when the mesh was bound to it). Animating the joints bends the mesh.
+ */
+export class Skin {
+    readonly joints: readonly Entity[];
+    /** 16 floats per joint, column-major. */
+    readonly inverseBindMatrices: Float32Array;
+
+    constructor(joints: readonly Entity[], inverseBindMatrices?: Float32Array) {
+        this.joints = joints;
+        this.inverseBindMatrices = inverseBindMatrices ?? identities(joints.length);
+        if (this.inverseBindMatrices.length !== joints.length * 16) {
+            throw new Error(`Skin: ${joints.length} joints need ${joints.length * 16} inverse bind matrix floats`);
+        }
+    }
+}
+
+function identities(count: number): Float32Array {
+    const out = new Float32Array(count * 16);
+    for (let i = 0; i < count; i++) {
+        out[i * 16] = out[i * 16 + 5] = out[i * 16 + 10] = out[i * 16 + 15] = 1;
+    }
+    return out;
+}
+
+const meshInverse = mat4.create();
+const joint = mat4.create();
+
+/**
+ * A mesh deformed by a skin: each vertex follows up to four joints by its weights. The geometry needs joints
+ * and weights. Its world matrix still places it, so it can be parented and moved like any mesh.
+ *
+ * Picking: a skinned mesh has no collider by default (its triangles move; the geometry's are the bind pose).
+ * Attach colliders to the joints instead, e.g. a sphere on the head.
+ */
+export class SkinnedMesh extends Mesh {
+    skin: Skin | null;
+    /** The joint matrices this frame (mesh space), 16 floats per joint: filled by `updateJointMatrices`. */
+    jointMatrices: Float32Array;
+
+    constructor(geometry: Geometry, material: Material, skin: Skin | null = null) {
+        super(geometry, material);
+        this.skin = skin;
+        this.jointMatrices = new Float32Array((skin?.joints.length ?? 0) * 16);
+        this.collider = null;
+    }
+
+    /**
+     * jointMatrix[i] = inverse(meshWorld) · jointWorld[i] · inverseBind[i]: a joint's movement from its bind pose,
+     * in the mesh's own space (the mesh's world matrix applies after). Call after world matrices are updated.
+     */
+    updateJointMatrices(): Float32Array {
+        const skin = this.skin;
+        if (skin === null) {
+            return this.jointMatrices;
+        }
+        if (this.jointMatrices.length !== skin.joints.length * 16) {
+            this.jointMatrices = new Float32Array(skin.joints.length * 16);
+        }
+        mat4.invert(meshInverse, this.worldMatrix);
+        for (let i = 0; i < skin.joints.length; i++) {
+            const ibm = skin.inverseBindMatrices.subarray(i * 16, i * 16 + 16);
+            mat4.multiply(joint, skin.joints[i]!.worldMatrix, ibm);
+            mat4.multiply(joint, meshInverse, joint);
+            this.jointMatrices.set(joint, i * 16);
+        }
+        return this.jointMatrices;
+    }
+}
