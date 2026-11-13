@@ -22,6 +22,9 @@ export interface ShadowSettings {
     bias: number;
 }
 
+/** See {@link DirectionalShadowSettings.cascadeBlend}. */
+export type CascadeBlend = "dither" | "smooth" | "none";
+
 /** A directional light's shadow: cascades fitted to the camera's view, finest near the camera. */
 export interface DirectionalShadowSettings extends ShadowSettings {
     /** How many shadow maps split the view in depth, 1 to 4. Default 4. */
@@ -33,8 +36,14 @@ export interface DirectionalShadowSettings extends ShadowSettings {
      * Default 0.6 (about 10%, 20% and 45% of maxDistance for four cascades).
      */
     splitBalance: number;
-    /** Cross-fade between neighbouring cascades over the last tenth of each, hiding the seam. Default true. */
-    blendCascades: boolean;
+    /**
+     * How a cascade hands over to the next, over the last tenth of it, so the seam doesn't show:
+     * - `"dither"` (default): each pixel picks one of the two with a fixed screen-space threshold. One lookup,
+     *   and stable: the pattern doesn't change from frame to frame, so it doesn't flicker.
+     * - `"smooth"`: both are looked up and cross-faded. Softest, twice the work in the band.
+     * - `"none"`: a hard switch, cheapest; the change in sharpness can show as a line.
+     */
+    cascadeBlend: CascadeBlend;
 }
 
 export interface LightOptions {
@@ -83,7 +92,7 @@ export class DirectionalLight extends Light {
             cascades: 4,
             maxDistance: 40,
             splitBalance: 0.6,
-            blendCascades: true,
+            cascadeBlend: "dither",
             ...shadow,
         };
         this.lookAlong(direction);

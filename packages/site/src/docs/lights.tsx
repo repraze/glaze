@@ -1,5 +1,6 @@
 import {
     BlitPass,
+    type CascadeBlend,
     createCone,
     createCube,
     createIcosphere,
@@ -116,10 +117,11 @@ export const doc = defineDoc({
                     description: "0: even splits. 1: logarithmic, finer near the camera.",
                 },
                 {
-                    name: "shadow.blendCascades",
-                    type: "boolean",
-                    default: "true",
-                    description: "Cross-fades neighbouring cascades so the seam doesn't show.",
+                    name: "shadow.cascadeBlend",
+                    type: '"dither" | "smooth" | "none"',
+                    default: '"dither"',
+                    description:
+                        "Hand-over between cascades: a fixed per-pixel dither (one lookup, no flicker), a cross-fade (two), or a hard switch.",
                 },
             ],
         },
@@ -358,6 +360,11 @@ const CASCADE_OPTIONS = [
     {value: "3", label: "3"},
     {value: "4", label: "4"},
 ] as const;
+const BLEND_OPTIONS: {value: CascadeBlend; label: string}[] = [
+    {value: "dither", label: "Dither"},
+    {value: "smooth", label: "Smooth"},
+    {value: "none", label: "None"},
+];
 const SAMPLE_OPTIONS = [
     {value: "4", label: "4"},
     {value: "8", label: "8"},
@@ -372,7 +379,8 @@ export function SunShadows() {
     const [samples, setSamples] = useState<(typeof SAMPLE_OPTIONS)[number]["value"]>("16");
     const [maxDistance, setMaxDistance] = useState(40);
     const [show, setShow] = useState(false);
-    const live = useLatest({cascades, softness, samples, maxDistance, show});
+    const [blend, setBlend] = useState<CascadeBlend>("dither");
+    const live = useLatest({cascades, softness, samples, maxDistance, show, blend});
     return (
         <DemoStage
             controls={
@@ -394,6 +402,7 @@ export function SunShadows() {
                         format={(v) => (v === 0 ? "hard" : `${v}°`)}
                     />
                     <ControlSegmented label="Samples" value={samples} options={SAMPLE_OPTIONS} onChange={setSamples} />
+                    <ControlSegmented label="Cascade blend" value={blend} options={BLEND_OPTIONS} onChange={setBlend} />
                     <ControlSlider
                         label="Max distance"
                         value={maxDistance}
@@ -458,6 +467,7 @@ export function SunShadows() {
                         sun.shadow.softness = cfg.softness;
                         sun.shadow.samples = Number(cfg.samples);
                         sun.shadow.maxDistance = cfg.maxDistance;
+                        sun.shadow.cascadeBlend = cfg.blend;
                         pass.debugCascades = cfg.show;
                         return graph;
                     };

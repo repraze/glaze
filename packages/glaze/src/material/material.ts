@@ -31,11 +31,7 @@ export interface PBRMaterialOptions {
     alphaMode?: AlphaMode;
     /** "mask": fragments with alpha below this are cut. Default 0.5. */
     alphaCutoff?: number;
-    /**
-     * Render back faces too, lit from their own side. Default false. Also decides shadows: a single-sided mesh
-     * casts with its back faces (closed meshes then never shadow themselves), so an open single-sided surface
-     * casts nothing toward a light it faces; make it double-sided to cast from both sides.
-     */
+    /** Render back faces too, lit from their own side (and cast shadows from both). Default false. */
     doubleSided?: boolean;
 }
 

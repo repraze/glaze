@@ -371,6 +371,15 @@ const CUBE_FACE_DIRS: {dir: [number, number, number]; up: [number, number, numbe
     {dir: [0, 0, -1], up: [0, -1, 0]},
 ];
 
+/** Shadow casters write depth pushed back along their slope, so a lit face doesn't compare against itself. */
+const SHADOW_DEPTH_STATE: GPUDepthStencilState = {
+    format: "depth32float",
+    depthWriteEnabled: true,
+    depthCompare: "less",
+    depthBias: 2,
+    depthBiasSlopeScale: 1.5,
+};
+
 /** Near plane of the spot and point shadow projections. */
 const SHADOW_NEAR = 0.1;
 
@@ -405,7 +414,7 @@ struct DirectionalLight {
     direction:      vec4<f32>,   // xyz = direction, w = castShadow (0/1)
     colorIntensity: vec4<f32>,   // xyz = color, w = intensity
     shadow:         vec4<f32>,   // x = first shadow layer, y = cascades, z = tan(half the light's angle), w = samples
-    shadowBias:     vec4<f32>,   // x = normal bias, y = bias (texels), z = blend cascades (0/1), w = max distance
+    shadowBias:     vec4<f32>,   // x = normal bias, y = bias (texels), z = cascade blend (0 none, 1 smooth, 2 dither), w = max distance
     splits:         vec4<f32>,   // camera view depth where each cascade ends
     texels:         vec4<f32>,   // world size of a texel, per cascade
     depthRanges:    vec4<f32>,   // world distance each cascade's 0..1 depth spans
@@ -610,13 +619,20 @@ fn directionalShadow(i: u32, worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>, ro
         if (viewDepth < dl.splits[k]) { c = k; break; }
     }
     if (c >= count) { return 1.0; }
-    var lit = cascadeShadow(i, c, worldPos, N, L, rotation);
-    // cross-fade into the next cascade over the last tenth of this one
+    // hand over to the next cascade over the last tenth of this one
+    var fade = 0.0;
     if (dl.shadowBias.z > 0.5 && c + 1u < count) {
         let begin = select(0.0, dl.splits[max(c, 1u) - 1u], c > 0u);
-        let t = (viewDepth - begin) / (dl.splits[c] - begin);
-        if (t > 0.9) {
-            lit = mix(lit, cascadeShadow(i, c + 1u, worldPos, N, L, rotation), (t - 0.9) * 10.0);
+        fade = clamp(((viewDepth - begin) / (dl.splits[c] - begin) - 0.9) * 10.0, 0.0, 1.0);
+    }
+    var lit: f32;
+    if (fade > 0.0 && dl.shadowBias.z > 1.5) {
+        // dither: one cascade per pixel, by the same fixed screen-space noise as the filter (no flicker)
+        lit = cascadeShadow(i, select(c, c + 1u, fade > rotation * 0.15915494), worldPos, N, L, rotation);
+    } else {
+        lit = cascadeShadow(i, c, worldPos, N, L, rotation);
+        if (fade > 0.0) {
+            lit = mix(lit, cascadeShadow(i, c + 1u, worldPos, N, L, rotation), fade);
         }
     }
     // and out of shadow over the last tenth of the max distance
@@ -1301,11 +1317,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     },
                 ],
             },
-            // no hardware bias: it would push the edge-on back faces at a silhouette behind what they shadow
-            depthStencil: {format: "depth32float", depthWriteEnabled: true, depthCompare: "less"},
-            // back faces: a lit face is compared with the far side of its own mesh, never with itself (which
-            // stair-steps across faces turning edge-on to the light); faces turned away get no direct light
-            primitive: {topology: "triangle-list", cullMode: "front"},
+            depthStencil: SHADOW_DEPTH_STATE,
+            // the faces toward the light: a shadow starts where the caster does, so objects resting on a surface
+            // stay grounded (the normal offset and slope bias keep lit faces from shadowing themselves)
+            primitive: {topology: "triangle-list", cullMode: "back"},
         });
     }
 
@@ -1319,18 +1334,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const key = alpha + (doubleSided ? "2" : "");
         let pipeline = this.shadowPipelines.get(key);
         if (pipeline === undefined) {
-            // double-sided casters store the side facing the light, which needs a slope bias against self-shadowing;
-            // single-sided ones store back faces, which must not be pushed back (see the base shadow pipeline)
-            const depthStencil: GPUDepthStencilState = doubleSided
-                ? {
-                      format: "depth32float",
-                      depthWriteEnabled: true,
-                      depthCompare: "less",
-                      depthBias: 2,
-                      depthBiasSlopeScale: 1.5,
-                  }
-                : {format: "depth32float", depthWriteEnabled: true, depthCompare: "less"};
-            const primitive: GPUPrimitiveState = {topology: "triangle-list", cullMode: doubleSided ? "none" : "front"};
+            const depthStencil = SHADOW_DEPTH_STATE;
+            const primitive: GPUPrimitiveState = {topology: "triangle-list", cullMode: doubleSided ? "none" : "back"};
             if (alpha === "opaque") {
                 const module = this.device.createShaderModule({label: "Shadow", code: buildShadowShader()});
                 pipeline = this.device.createRenderPipeline({
@@ -2056,7 +2061,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             f32[base + 11] = Math.max(1, Math.round(sh.samples));
             f32[base + 12] = sh.normalBias;
             f32[base + 13] = sh.bias;
-            f32[base + 14] = sh.blendCascades ? 1 : 0;
+            f32[base + 14] = sh.cascadeBlend === "smooth" ? 1 : sh.cascadeBlend === "dither" ? 2 : 0;
             f32[base + 15] = state.cascades[state.count - 1]!.far;
             for (let c = 0; c < state.count; c++) {
                 const cascade = state.cascades[c]!;
