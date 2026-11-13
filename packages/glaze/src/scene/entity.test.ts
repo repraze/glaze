@@ -165,7 +165,7 @@ describe("Entity.add", () => {
 
     test("getWorldQuaternion under a non-uniformly scaled parent is the parent's rotation (not a skewed one)", () => {
         const parent = new Entity();
-        parent.scale.set([1, 3, 1]);
+        vec3.set(parent.scale, 1, 3, 1);
         parent.setEuler(0, 0.7, 0);
         const child = new Entity();
         parent.add(child);
