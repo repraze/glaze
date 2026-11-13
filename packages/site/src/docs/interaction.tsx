@@ -394,7 +394,6 @@ export function PickDragOrbit() {
                             if (shown.get(item) !== key) {
                                 setColorRgb(item.material.emissive, colors.current.accentFill);
                                 item.material.emissiveIntensity = k;
-                                item.material.markDirty();
                                 shown.set(item, key);
                             }
                         }

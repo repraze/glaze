@@ -89,12 +89,12 @@ describe("sphere", () => {
 });
 
 describe("Geometry bounds", () => {
-    test("a cube's box is its size; the cache refreshes after updateBounds", () => {
+    test("a cube's box is its size; the cache refreshes after markChanged", () => {
         const g = createCube({size: 2});
         assert.ok(near(g.boundingBox.min, [-1, -1, -1]) && near(g.boundingBox.max, [1, 1, 1]));
         assert.equal(g.boundingBox, g.boundingBox);
         g.positions[0] = 10;
-        g.updateBounds();
+        g.markChanged();
         assert.equal(g.boundingBox.max[0], 10);
     });
 

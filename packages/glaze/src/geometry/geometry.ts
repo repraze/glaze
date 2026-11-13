@@ -62,12 +62,12 @@ export class Geometry {
     private _boundingBox: ReadonlyBox3 | null = null;
     private _boundingSphere: ReadonlySphere | null = null;
 
-    /** Local-space box around the positions, computed on first use and cached (see `updateBounds`). */
+    /** Local-space box around the positions, computed on first use and cached (see `markChanged`). */
     get boundingBox(): ReadonlyBox3 {
         return (this._boundingBox ??= box3.fromPositions(box3.create(), this.positions));
     }
 
-    /** Local-space sphere around the positions, computed on first use and cached (see `updateBounds`). */
+    /** Local-space sphere around the positions, computed on first use and cached (see `markChanged`). */
     get boundingSphere(): ReadonlySphere {
         return (this._boundingSphere ??= sphere.fromPositions(sphere.create(), this.positions));
     }
@@ -138,11 +138,22 @@ export class Geometry {
     }
     private _morphReach: number | null = null;
 
-    /** Drops the cached bounds after `positions` were edited in place; they are recomputed on next use. */
-    updateBounds(): void {
+    /**
+     * Call after editing the vertex data (positions, normals, uvs, tangents, joints, weights, morph targets or
+     * indices) in place: cached bounds are recomputed on next use and renderers upload the data again.
+     */
+    markChanged(): void {
         this._boundingBox = null;
         this._boundingSphere = null;
+        this._morphReach = null;
+        this._version++;
     }
+
+    /** Bumped by `markChanged`: renderers re-upload when it moves. */
+    get version(): number {
+        return this._version;
+    }
+    private _version = 0;
 
     /**
      * Returns an interleaved Float32Array with layout per vertex (stride = 48 bytes):

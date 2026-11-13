@@ -2,7 +2,7 @@ import {mat4, vec3} from "gl-matrix";
 
 import {COLOR_WGSL, type ColorSpace, srgbToLinear} from "../color";
 import type {Geometry} from "../geometry/geometry";
-import {PBRMaterial} from "../material/material";
+import {MATERIAL_BUFFER_SIZE, packMaterialUniforms, PBRMaterial} from "../material/material";
 import {isMirrored} from "../math/transform";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
@@ -12,6 +12,7 @@ import type {Mesh} from "../scene/mesh";
 import type {Scene} from "../scene/scene";
 import {type Cascade, fitCascades, lightView, MAX_CASCADES} from "../scene/shadow-cascades";
 import {SkinnedMesh} from "../scene/skin";
+import type {Texture} from "../texture";
 
 // ─── WGSL shaders ─────────────────────────────────────────────────────────────
 
@@ -985,6 +986,10 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
 
 /** One per Geometry, shared by every mesh drawing it. */
 interface GeometryGPUResources {
+    /** The geometry's version these buffers hold (see Geometry.markChanged). */
+    version: number;
+    /** The last frame a mesh drew it: unused entries are released. */
+    lastFrame: number;
     vertexBuffer: GPUBuffer;
     /** Joints and weights (24 bytes a vertex), for skinned geometry. */
     skinBuffer: GPUBuffer | null;
@@ -994,9 +999,35 @@ interface GeometryGPUResources {
     indexCount: number;
 }
 
+/** One per PBRMaterial: its uniforms (and what was last written to them) and its bind group. */
+interface MaterialGPUResources {
+    buffer: GPUBuffer;
+    uniforms: Float32Array;
+    /** The maps the bind group was built with. */
+    maps: (Texture | null)[];
+    bindGroup: GPUBindGroup | null;
+    lastFrame: number;
+}
+
+/** Cache entries unused this many frames (about two seconds at 60 Hz) are released. */
+const EVICT_AFTER_FRAMES = 120;
+
+function destroyGeometryResources(res: GeometryGPUResources): void {
+    res.vertexBuffer.destroy();
+    res.skinBuffer?.destroy();
+    res.morphBuffer?.destroy();
+    res.indexBuffer.destroy();
+}
+
+function destroyMaterialResources(res: MaterialGPUResources): void {
+    res.buffer.destroy();
+}
+
 /** One per Mesh: its geometry's buffers, its model uniforms and, skinned, its joint matrices. */
 interface MeshGPUResources {
     geometry: Geometry;
+    /** The last frame it was drawn: unused entries are released. */
+    lastFrame: number;
     vertexBuffer: GPUBuffer;
     skinBuffer: GPUBuffer | null;
     indexBuffer: GPUBuffer;
@@ -1161,11 +1192,15 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private readonly normalMatrix = mat4.create();
     private readonly tmpCenter = vec3.create();
     private readonly tmpEye = vec3.create();
+    private readonly materialScratch = new Float32Array(MATERIAL_BUFFER_SIZE / 4);
     private readonly tmpForward = vec3.create();
 
     // Cached GPU resources: vertex data per geometry (shared), uniforms per mesh
     private geometryCache = new Map<Geometry, GeometryGPUResources>();
     private meshCache = new Map<Mesh, MeshGPUResources>();
+    private materialCache = new Map<PBRMaterial, MaterialGPUResources>();
+    /** Frames rendered: cache entries remember when they were last used. */
+    private frame = 0;
 
     constructor({
         scene,
@@ -1215,6 +1250,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
     render(ctx: PassRenderContext): void {
         const {encoder} = ctx;
+        this.frame++;
+        if (this.frame % 60 === 0) {
+            this.evictUnused();
+        }
 
         this.scene.updateWorldMatrices();
 
@@ -1312,12 +1351,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             r.jointBuffer?.destroy();
         }
         this.meshCache.clear();
-        for (const g of this.geometryCache.values()) {
-            g.vertexBuffer.destroy();
-            g.skinBuffer?.destroy();
-            g.morphBuffer?.destroy();
-            g.indexBuffer.destroy();
-        }
+        this.materialCache.forEach(destroyMaterialResources);
+        this.materialCache.clear();
+        this.geometryCache.forEach(destroyGeometryResources);
         this.geometryCache.clear();
     }
 
@@ -1859,15 +1895,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             caster.pipeline = pipeline;
             caster.rank = rank;
             caster.material =
-                material !== null && material.alphaMode !== "opaque"
-                    ? material.getOrCreateBindGroup(
-                          this.device,
-                          this.materialBindGroupLayout,
-                          this.defaultWhiteView,
-                          this.defaultNormalView,
-                          this.texSampler,
-                      )
-                    : null;
+                material !== null && material.alphaMode !== "opaque" ? this.materialBindGroup(material) : null;
             caster.radius = this.meshBounds(mesh, caster.center);
         }
         casters.length = n;
@@ -2084,13 +2112,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 activePipelineKey = key;
             }
 
-            const matBg = material.getOrCreateBindGroup(
-                this.device,
-                this.materialBindGroupLayout,
-                this.defaultWhiteView,
-                this.defaultNormalView,
-                this.texSampler,
-            );
+            const matBg = this.materialBindGroup(material);
 
             pass.setBindGroup(1, res.modelBindGroup);
             pass.setBindGroup(2, matBg);
@@ -2177,16 +2199,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             }
             const features = getGBufferFeatures(material, res.jointBuffer !== null, res.morphed, res.mirrored);
             pass.setBindGroup(1, res.modelBindGroup);
-            pass.setBindGroup(
-                2,
-                material.getOrCreateBindGroup(
-                    this.device,
-                    this.materialBindGroupLayout,
-                    this.defaultWhiteView,
-                    this.defaultNormalView,
-                    this.texSampler,
-                ),
-            );
+            pass.setBindGroup(2, this.materialBindGroup(material));
             pass.setVertexBuffer(0, res.vertexBuffer);
             if (res.skinBuffer !== null) {
                 pass.setVertexBuffer(1, res.skinBuffer);
@@ -2457,7 +2470,14 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         for (const mesh of meshes) {
             const res = this.meshCache.get(mesh);
             const skinned = isSkinned(mesh);
-            if (res !== undefined && res.geometry === mesh.geometry && (res.jointBuffer !== null) === skinned) {
+            const geo = this.geometryResources(mesh.geometry); // re-uploads an edited geometry
+            if (
+                res !== undefined &&
+                res.geometry === mesh.geometry &&
+                res.vertexBuffer === geo.vertexBuffer &&
+                (res.jointBuffer !== null) === skinned
+            ) {
+                res.lastFrame = this.frame;
                 continue;
             }
             // first draw, or its geometry or skinning changed
@@ -2470,7 +2490,15 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     /** Vertex, skin and index buffers, uploaded once per Geometry and shared by its meshes. */
     private geometryResources(geo: Geometry): GeometryGPUResources {
         let res = this.geometryCache.get(geo);
-        if (res === undefined) {
+        if (res !== undefined && res.version !== geo.version) {
+            // edited in place: new buffers (the meshes drawing it rebind)
+            destroyGeometryResources(res);
+            this.geometryCache.delete(geo);
+            res = undefined;
+        }
+        if (res !== undefined) {
+            res.lastFrame = this.frame;
+        } else {
             const {device} = this;
             const interleaved = geo.buildInterleavedBuffer();
             const vertexBuffer = device.createBuffer({
@@ -2505,7 +2533,15 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
             });
             device.queue.writeBuffer(indexBuffer, 0, geo.indices);
-            res = {vertexBuffer, skinBuffer, morphBuffer, indexBuffer, indexCount: geo.indexCount};
+            res = {
+                version: geo.version,
+                lastFrame: this.frame,
+                vertexBuffer,
+                skinBuffer,
+                morphBuffer,
+                indexBuffer,
+                indexCount: geo.indexCount,
+            };
             this.geometryCache.set(geo, res);
         }
         return res;
@@ -2539,6 +2575,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         });
         return {
             geometry: mesh.geometry,
+            lastFrame: this.frame,
             vertexBuffer: geo.vertexBuffer,
             skinBuffer: skinned ? geo.skinBuffer : null,
             indexBuffer: geo.indexBuffer,
@@ -2550,6 +2587,101 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             morphed,
             mirrored: false,
         };
+    }
+
+    /**
+     * A material's uniforms and textures as a bind group. Uniforms are packed and compared once a frame, so
+     * changed properties reach the GPU without any call; a changed map rebuilds the bind group.
+     */
+    private materialBindGroup(material: PBRMaterial): GPUBindGroup {
+        let res = this.materialCache.get(material);
+        if (res === undefined) {
+            res = {
+                buffer: this.device.createBuffer({
+                    label: "PBRMaterial",
+                    size: MATERIAL_BUFFER_SIZE,
+                    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                }),
+                uniforms: new Float32Array(MATERIAL_BUFFER_SIZE / 4).fill(Number.NaN),
+                maps: [],
+                bindGroup: null,
+                lastFrame: -1,
+            };
+            this.materialCache.set(material, res);
+        }
+        if (res.lastFrame === this.frame && res.bindGroup !== null) {
+            return res.bindGroup;
+        }
+        res.lastFrame = this.frame;
+        const packed = packMaterialUniforms(material, this.materialScratch);
+        for (let i = 0; i < packed.length; i++) {
+            if (packed[i] !== res.uniforms[i]) {
+                res.uniforms.set(packed);
+                this.device.queue.writeBuffer(res.buffer, 0, res.uniforms);
+                break;
+            }
+        }
+        const metallicRoughness = material.resolvedMetallicRoughnessMap;
+        const occlusion = material.resolvedOcclusionMap;
+        const maps = res.maps;
+        if (
+            res.bindGroup === null ||
+            maps[0] !== material.albedoMap ||
+            maps[1] !== material.normalMap ||
+            maps[2] !== material.emissiveMap ||
+            maps[3] !== metallicRoughness ||
+            maps[4] !== material.heightMap ||
+            maps[5] !== occlusion
+        ) {
+            res.maps = [
+                material.albedoMap,
+                material.normalMap,
+                material.emissiveMap,
+                metallicRoughness,
+                material.heightMap,
+                occlusion,
+            ];
+            const white = this.defaultWhiteView;
+            res.bindGroup = this.device.createBindGroup({
+                label: "PBRMaterial",
+                layout: this.materialBindGroupLayout,
+                entries: [
+                    {binding: 0, resource: {buffer: res.buffer}},
+                    {binding: 1, resource: material.albedoMap?.srgbView ?? white},
+                    {binding: 2, resource: this.texSampler},
+                    {binding: 3, resource: material.normalMap?.view ?? this.defaultNormalView},
+                    {binding: 4, resource: material.emissiveMap?.srgbView ?? white},
+                    {binding: 5, resource: metallicRoughness?.view ?? white},
+                    {binding: 6, resource: material.heightMap?.view ?? white},
+                    {binding: 7, resource: occlusion?.view ?? white},
+                ],
+            });
+        }
+        return res.bindGroup;
+    }
+
+    /** Releases meshes, geometries and materials no frame has drawn for a while (removed from the scene). */
+    private evictUnused(): void {
+        const old = this.frame - EVICT_AFTER_FRAMES;
+        for (const [mesh, res] of this.meshCache) {
+            if (res.lastFrame < old) {
+                res.modelBuffer.destroy();
+                res.jointBuffer?.destroy();
+                this.meshCache.delete(mesh);
+            }
+        }
+        for (const [geometry, res] of this.geometryCache) {
+            if (res.lastFrame < old) {
+                destroyGeometryResources(res);
+                this.geometryCache.delete(geometry);
+            }
+        }
+        for (const [material, res] of this.materialCache) {
+            if (res.lastFrame < old) {
+                destroyMaterialResources(res);
+                this.materialCache.delete(material);
+            }
+        }
     }
 
     /** A skinned mesh's joint matrices for this frame (the buffer grows if its skin changed). */

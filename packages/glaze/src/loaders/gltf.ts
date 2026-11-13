@@ -38,7 +38,7 @@ export interface GltfModel {
     readonly animations: readonly AnimationClip[];
     /** The file's skins (skeletons), by index: their joints are entities in `nodes`. */
     readonly skins: readonly Skin[];
-    /** Frees the model's textures and material buffers. */
+    /** Frees the model's textures (renderers release meshes and materials they stop drawing on their own). */
     destroy(): void;
 }
 
@@ -277,10 +277,6 @@ async function buildModel(
         animations: readAnimations(json, buffers, nodes),
         skins,
         destroy() {
-            for (const material of materials) {
-                material.destroy();
-            }
-            fallbackMaterial?.destroy();
             for (const texture of textures) {
                 texture.destroy();
             }

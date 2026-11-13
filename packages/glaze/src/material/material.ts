@@ -6,9 +6,6 @@ import type {Texture} from "../texture";
 export abstract class Material {
     /** Unique type tag used for pipeline sharing. */
     abstract readonly type: string;
-
-    /** Release GPU resources. */
-    destroy(): void {}
 }
 
 // ─── PBRMaterial ──────────────────────────────────────────────────────────────
@@ -62,7 +59,7 @@ export type AlphaMode = "opaque" | "mask" | "blend";
  *   alphaCutoff:       f32        offset 52  ( 4 bytes)
  *   _pad:              vec2<f32>  offset 56  ( 8 bytes)
  */
-const MATERIAL_BUFFER_SIZE = 64;
+export const MATERIAL_BUFFER_SIZE = 64;
 
 /**
  * Pack the material's scalars into its uniform buffer layout (see above). GPU-free, exported for tests.
@@ -143,11 +140,6 @@ export class PBRMaterial extends Material {
     alphaCutoff: number;
     doubleSided: boolean;
 
-    private buffer: GPUBuffer | null = null;
-    private bindGroup: GPUBindGroup | null = null;
-    private _boundMaps: (Texture | null)[] = [];
-    private dirty = true;
-
     constructor({
         color = [1, 1, 1],
         roughness = 0.5,
@@ -184,71 +176,4 @@ export class PBRMaterial extends Material {
     get resolvedOcclusionMap(): Texture | null {
         return this.occlusionMap ?? this.ormMap;
     }
-
-    /** Call after changing any scalar property to force a buffer update on the next render. */
-    markDirty(): void {
-        this.dirty = true;
-    }
-
-    getOrCreateBindGroup(
-        device: GPUDevice,
-        bindGroupLayout: GPUBindGroupLayout,
-        defaultWhiteView: GPUTextureView,
-        defaultNormalView: GPUTextureView,
-        sampler: GPUSampler,
-    ): GPUBindGroup {
-        if (!this.buffer) {
-            this.buffer = device.createBuffer({
-                label: "PBRMaterial",
-                size: MATERIAL_BUFFER_SIZE,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            });
-            this.dirty = true;
-        }
-
-        if (this.dirty) {
-            device.queue.writeBuffer(this.buffer, 0, packMaterialUniforms(this));
-            this.dirty = false;
-        }
-
-        // Recreate bind group when any map changes.
-        const metallicRoughness = this.resolvedMetallicRoughnessMap;
-        const occlusion = this.resolvedOcclusionMap;
-        const maps = [this.albedoMap, this.normalMap, this.emissiveMap, metallicRoughness, this.heightMap, occlusion];
-        if (this._boundMaps.length !== maps.length || maps.some((map, i) => map !== this._boundMaps[i])) {
-            this.bindGroup = null;
-            this._boundMaps = maps;
-        }
-
-        if (!this.bindGroup) {
-            this.bindGroup = device.createBindGroup({
-                label: "PBRMaterial",
-                layout: bindGroupLayout,
-                entries: [
-                    {binding: 0, resource: {buffer: this.buffer}},
-                    {binding: 1, resource: this.albedoMap?.srgbView ?? defaultWhiteView},
-                    {binding: 2, resource: sampler},
-                    {binding: 3, resource: this.normalMap?.view ?? defaultNormalView},
-                    {binding: 4, resource: this.emissiveMap?.srgbView ?? defaultWhiteView},
-                    {binding: 5, resource: metallicRoughness?.view ?? defaultWhiteView},
-                    {binding: 6, resource: this.heightMap?.view ?? defaultWhiteView},
-                    {binding: 7, resource: occlusion?.view ?? defaultWhiteView},
-                ],
-            });
-        }
-
-        return this.bindGroup;
-    }
-
-    destroy(): void {
-        this.buffer?.destroy();
-        this.buffer = null;
-        this.bindGroup = null;
-        this._boundMaps = [];
-    }
 }
-
-/** @deprecated Use PBRMaterial */
-export const StandardMaterial = PBRMaterial;
-/** @deprecated Use PBRMaterialOptions */
-export type StandardMaterialOptions = PBRMaterialOptions;

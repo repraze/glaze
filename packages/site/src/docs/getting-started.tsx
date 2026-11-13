@@ -85,8 +85,7 @@ const stop = renderer.startAnimation(() => {
                 <Code
                     code={`new ResizeObserver(() => {
     canvas.width = canvas.clientWidth * devicePixelRatio;
-    canvas.height = canvas.clientHeight * devicePixelRatio;
-    renderer.resize(canvas.width, canvas.height);
+    canvas.height = canvas.clientHeight * devicePixelRatio; // the next frame renders at this size
 }).observe(canvas);
 
 // later

@@ -1,5 +1,5 @@
 import type {Pass, PassOutputSpec} from "./pass";
-import type {RenderGraph} from "./render-graph";
+import type {RenderGraph, RenderGraphNode} from "./render-graph";
 
 interface ManagedTexture {
     texture: GPUTexture;
@@ -28,24 +28,52 @@ export interface AnimationFrame {
     delta: number;
 }
 
+/** How long (in frames) a pass can go unused before the renderer releases the textures it made for it. */
+const EVICT_AFTER_FRAMES = 120;
+
+/** What the renderer keeps for each pass it has initialized. */
+interface PassState {
+    /** Managed output textures by slot name (canvas outputs have none). */
+    textures: Map<string, ManagedTexture>;
+    /** The canvas size its canvas-sized textures were made for. */
+    width: number;
+    height: number;
+    /** The size last given to `pass.resize`. */
+    passWidth: number;
+    passHeight: number;
+    /** The last frame it was rendered in. */
+    lastFrame: number;
+}
+
+export interface RendererOptions {
+    alphaMode?: GPUCanvasAlphaMode;
+}
+
 export class Renderer {
     readonly device: GPUDevice;
     readonly adapter: GPUAdapter;
     readonly context: GPUCanvasContext;
     readonly format: GPUTextureFormat;
 
+    /**
+     * Called once if the GPU device is lost (a driver reset, the GPU process crashing, too much memory...). The
+     * renderer stops drawing: every GPU resource belonged to that device, so recover by creating a new Renderer
+     * and new passes, materials and textures.
+     */
+    onDeviceLost: ((info: GPUDeviceLostInfo) => void) | null = null;
+
     private width: number;
     private height: number;
-    private animationId: number | null = null;
+    private isLost = false;
+    private frame = 0;
+    private warnedSize = false;
+    /** Stops for every running animation loop. */
+    private readonly loops = new Set<() => void>();
     /** Origin of the default frame clock (`renderFrame` without a time). */
     private readonly clockStart = performance.now();
 
-    /** Managed output textures keyed by "<nodeId>:<slotName>". */
-    private textureCache = new Map<string, ManagedTexture>();
-    /** Tracks which passes have been initialized (keyed by Pass instance). */
-    private initializedPasses = new Set<Pass>();
-    /** Current graph — needed to know which nodes/passes to resize. */
-    private currentGraph: RenderGraph | null = null;
+    /** Per initialized pass: its managed textures and sizes (keyed by the Pass instance, whatever graph has it). */
+    private readonly passes = new Map<Pass, PassState>();
 
     private constructor(
         adapter: GPUAdapter,
@@ -61,9 +89,17 @@ export class Renderer {
         this.format = format;
         this.width = width;
         this.height = height;
+        void device.lost.then((info) => {
+            this.isLost = true;
+            this.stopLoops();
+            if (info.reason !== "destroyed") {
+                console.error(`[glaze] GPU device lost (${info.reason}): ${info.message}`);
+                this.onDeviceLost?.(info);
+            }
+        });
     }
 
-    static async init(canvas: HTMLCanvasElement, options?: {alphaMode?: GPUCanvasAlphaMode}): Promise<Renderer> {
+    static async init(canvas: HTMLCanvasElement, options: RendererOptions = {}): Promise<Renderer> {
         if (!navigator.gpu) {
             throw new Error("WebGPU is not supported in this environment.");
         }
@@ -74,12 +110,6 @@ export class Renderer {
         }
 
         const device = await adapter.requestDevice();
-
-        void device.lost.then((info) => {
-            if (info.reason !== "destroyed") {
-                console.error(`[glaze] GPU device lost (${info.reason}): ${info.message}`);
-            }
-        });
         device.addEventListener("uncapturederror", (event) => {
             console.error("[glaze] uncaptured WebGPU error:", (event as GPUUncapturedErrorEvent).error);
         });
@@ -89,77 +119,58 @@ export class Renderer {
         }
 
         const format = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({device, format, alphaMode: options?.alphaMode ?? "opaque"});
+        context.configure({device, format, alphaMode: options.alphaMode ?? "opaque"});
 
         return new Renderer(adapter, device, context, format, canvas.width, canvas.height);
     }
 
-    resize(width: number, height: number): void {
-        if (this.width === width && this.height === height) {
-            return;
-        }
-        this.width = width;
-        this.height = height;
-
-        if (!this.currentGraph) {
-            return;
-        }
-
-        for (const node of this.currentGraph.getNodes()) {
-            let passW = width,
-                passH = height;
-
-            for (const slot of node.pass.outputSlots) {
-                if (slot.name === node.canvasSlot) {
-                    continue;
-                }
-                const key = `${node.id}:${slot.name}`;
-                const mt = this.textureCache.get(key);
-                if (!mt) {
-                    continue;
-                }
-
-                if (mt.fixed) {
-                    passW = mt.texture.width;
-                    passH = mt.texture.height;
-                } else {
-                    mt.texture.destroy();
-                    const fresh = this.createTexture(slot.spec, width, height);
-                    this.textureCache.set(key, fresh);
-                    passW = fresh.texture.width;
-                    passH = fresh.texture.height;
-                }
-            }
-
-            node.pass.resize(passW, passH);
-        }
+    /** True once the GPU device is lost (see `onDeviceLost`): frames are skipped from then on. */
+    get lost(): boolean {
+        return this.isLost;
     }
 
     /**
-     * Renders one frame of `graph`. `time` (seconds) is handed to every pass as `ctx.time`, which shader passes
+     * Renders one frame of `graph`, at the canvas's size: set `canvas.width` / `height` and render targets follow
+     * (passes get `resize` calls; fixed-size outputs keep theirs). `time` (seconds) is handed to every pass as `ctx.time`, which shader passes
      * expose as `globals.time`: pass your own clock to pause, freeze (reduced motion) or scrub animation. It
      * defaults to seconds since the renderer was created.
      */
     renderFrame(graph: RenderGraph, time: number = (performance.now() - this.clockStart) / 1000): void {
+        if (this.isLost) {
+            return;
+        }
         const canvas = this.context.canvas;
+        this.fitCanvas(canvas);
         if (canvas.width === 0 || canvas.height === 0) {
             return;
         }
+        // the canvas texture is the canvas's size: render targets follow it
+        this.width = canvas.width;
+        this.height = canvas.height;
+        this.frame++;
 
-        this.ensureGraph(graph);
+        const nodes = graph.getNodes();
+        for (const node of nodes) {
+            this.preparePass(node);
+        }
 
         const encoder = this.device.createCommandEncoder();
         const canvasView = this.context.getCurrentTexture().createView();
 
-        for (const node of graph.getNodes()) {
+        for (const node of nodes) {
             const {pass, inputs: inputHandles, canvasSlot} = node;
+            const state = this.passes.get(pass)!;
 
-            // Resolve named input views from the texture cache (use bindingView).
+            // Resolve named input views from the upstream passes' textures (use bindingView).
             const inputViews: Record<string, GPUTextureView> = {};
             for (const slot of pass.inputSlots) {
                 const handle = inputHandles[slot.name];
                 if (handle) {
-                    const mt = this.textureCache.get(`${handle._nodeId}:${handle._slot}`);
+                    const source = nodes[handle._nodeId];
+                    const mt =
+                        source?.id === handle._nodeId
+                            ? this.passes.get(source.pass)?.textures.get(handle._slot)
+                            : undefined;
                     if (mt) {
                         inputViews[slot.name] = mt.bindingView;
                     } else if (!slot.optional) {
@@ -172,17 +183,13 @@ export class Renderer {
 
             // Resolve named output views.
             const outputViews: Record<string, GPUTextureView> = {};
-            let passW = this.width,
-                passH = this.height;
             for (const slot of pass.outputSlots) {
                 if (slot.name === canvasSlot) {
                     outputViews[slot.name] = canvasView;
                 } else {
-                    const mt = this.textureCache.get(`${node.id}:${slot.name}`);
+                    const mt = state.textures.get(slot.name);
                     if (mt) {
                         outputViews[slot.name] = mt.view;
-                        passW = mt.texture.width;
-                        passH = mt.texture.height;
                     }
                 }
             }
@@ -197,90 +204,145 @@ export class Renderer {
                 encoder,
                 inputs: inputViews,
                 outputs: outputViews,
-                width: passW,
-                height: passH,
+                width: state.passWidth,
+                height: state.passHeight,
                 time,
             });
         }
 
         this.device.queue.submit([encoder.finish()]);
+        if (this.frame % 60 === 0) {
+            this.evictUnused();
+        }
     }
 
     /**
-     * Start an animation loop.
+     * Start an animation loop. Returns a function that stops it.
      *
      * @param graph - Either a fixed `RenderGraph` or a per-frame callback that
      *   returns the graph to render (useful for updating scene state each frame). The callback receives
-     *   `{time, delta}` in seconds since the loop started; the same `time` reaches every pass.
+     *   `{time, delta}` in seconds; the same `time` reaches every pass.
+     * @param options - `maxDelta` (default 0.1 s): the most time one frame can advance. After a pause (a hidden
+     *   tab, a breakpoint) animation resumes where it was instead of jumping ahead.
      */
-    startAnimation(graph: RenderGraph | ((frame: AnimationFrame) => RenderGraph)): () => void {
-        let stopped = false;
-        let start: number | null = null;
-        let last = 0;
+    startAnimation(
+        graph: RenderGraph | ((frame: AnimationFrame) => RenderGraph),
+        {maxDelta = 0.1}: {maxDelta?: number} = {},
+    ): () => void {
+        let id: number | null = null;
+        let last: number | null = null;
+        let time = 0;
 
-        const loop = (now: number) => {
-            if (stopped) {
-                return;
+        const stop = () => {
+            if (id !== null) {
+                cancelAnimationFrame(id);
+                id = null;
             }
-            start ??= now;
-            const time = (now - start) / 1000;
-            const delta = last === 0 ? 0 : time - last;
-            last = time;
+            this.loops.delete(stop);
+        };
+        const loop = (now: number) => {
+            id = requestAnimationFrame(loop); // first: a throwing callback doesn't end the loop silently later
+            const delta = last === null ? 0 : Math.min(Math.max((now - last) / 1000, 0), maxDelta);
+            last = now;
+            time += delta;
             const resolved = typeof graph === "function" ? graph({time, delta}) : graph;
             this.renderFrame(resolved, time);
-            this.animationId = requestAnimationFrame(loop);
         };
 
-        this.animationId = requestAnimationFrame(loop);
-
-        return () => {
-            stopped = true;
-            if (this.animationId !== null) {
-                cancelAnimationFrame(this.animationId);
-                this.animationId = null;
-            }
-        };
+        this.loops.add(stop);
+        id = requestAnimationFrame(loop);
+        return stop;
     }
 
+    /** Stops animation loops, then destroys every pass it initialized, their textures and the device. */
     destroy(): void {
-        if (this.animationId !== null) {
-            cancelAnimationFrame(this.animationId);
-        }
+        this.stopLoops();
         this.context.unconfigure();
-        for (const mt of this.textureCache.values()) {
-            mt.texture.destroy();
+        for (const [pass, state] of this.passes) {
+            for (const mt of state.textures.values()) {
+                mt.texture.destroy();
+            }
+            pass.destroy();
         }
-        this.textureCache.clear();
+        this.passes.clear();
         this.device.destroy();
     }
 
-    private ensureGraph(graph: RenderGraph): void {
-        if (this.currentGraph !== graph) {
-            this.currentGraph = graph;
+    private stopLoops(): void {
+        for (const stop of [...this.loops]) {
+            stop();
         }
+    }
 
-        for (const node of graph.getNodes()) {
-            if (this.initializedPasses.has(node.pass)) {
+    /** Keeps the canvas within the device's largest texture size (a 5K display at 2× DPR would exceed 8192). */
+    private fitCanvas(canvas: HTMLCanvasElement | OffscreenCanvas): void {
+        const max = this.device.limits.maxTextureDimension2D;
+        if (canvas.width <= max && canvas.height <= max) {
+            return;
+        }
+        const scale = max / Math.max(canvas.width, canvas.height);
+        canvas.width = Math.min(max, Math.floor(canvas.width * scale));
+        canvas.height = Math.min(max, Math.floor(canvas.height * scale));
+        if (!this.warnedSize) {
+            this.warnedSize = true;
+            console.warn(
+                `[glaze] canvas larger than the GPU allows (${max}px): rendering at ${canvas.width}×${canvas.height}`,
+            );
+        }
+    }
+
+    /** Initializes a pass the first time it shows up, and (re)makes its textures for this graph and size. */
+    private preparePass(node: RenderGraphNode): void {
+        const {pass} = node;
+        let state = this.passes.get(pass);
+        if (state === undefined) {
+            pass.initialize(this.device, this.format);
+            state = {textures: new Map(), width: 0, height: 0, passWidth: -1, passHeight: -1, lastFrame: 0};
+            this.passes.set(pass, state);
+        }
+        state.lastFrame = this.frame;
+
+        const resized = state.width !== this.width || state.height !== this.height;
+        state.width = this.width;
+        state.height = this.height;
+        let passW = this.width;
+        let passH = this.height;
+        for (const slot of pass.outputSlots) {
+            if (slot.name === node.canvasSlot) {
                 continue;
             }
-
-            node.pass.initialize(this.device, this.format);
-            this.initializedPasses.add(node.pass);
-
-            let passW = this.width,
-                passH = this.height;
-            for (const slot of node.pass.outputSlots) {
-                if (slot.name === node.canvasSlot) {
-                    continue;
-                }
-                const key = `${node.id}:${slot.name}`;
-                const mt = this.createTexture(slot.spec, this.width, this.height);
-                this.textureCache.set(key, mt);
-                passW = mt.texture.width;
-                passH = mt.texture.height;
+            let mt = state.textures.get(slot.name);
+            if (mt !== undefined && resized && !mt.fixed) {
+                mt.texture.destroy();
+                mt = undefined;
             }
+            if (mt === undefined) {
+                mt = this.createTexture(slot.spec, this.width, this.height);
+                state.textures.set(slot.name, mt);
+            }
+            passW = mt.texture.width;
+            passH = mt.texture.height;
+        }
+        if (passW !== state.passWidth || passH !== state.passHeight) {
+            state.passWidth = passW;
+            state.passHeight = passH;
+            pass.resize(passW, passH);
+        }
+    }
 
-            node.pass.resize(passW, passH);
+    /**
+     * Releases the textures of passes no graph has rendered for a while (a pass replaced by a new one, say). Such a
+     * pass is initialized again if it ever comes back.
+     */
+    private evictUnused(): void {
+        for (const [pass, state] of this.passes) {
+            if (this.frame - state.lastFrame > EVICT_AFTER_FRAMES) {
+                for (const mt of state.textures.values()) {
+                    mt.texture.destroy();
+                }
+                pass.destroy();
+                this.passes.delete(pass);
+            }
         }
     }
 

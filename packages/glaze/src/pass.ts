@@ -56,7 +56,10 @@ export abstract class Pass<Out extends string = string> {
     /** Named output texture slots this pass writes to. */
     abstract readonly outputSlots: PassOutputSlot<Out>[];
 
-    /** Called once when the GPU device is ready. */
+    /**
+     * Called when a renderer first uses the pass. A pass no graph has rendered for a while is destroyed (with
+     * its textures), and initialized again if it comes back.
+     */
     abstract initialize(device: GPUDevice, canvasFormat: GPUTextureFormat): void;
 
     /** Called whenever the canvas (or the pass's canvas-sized textures) change dimensions. */
@@ -65,5 +68,6 @@ export abstract class Pass<Out extends string = string> {
     /** Encode all GPU commands for one frame. */
     abstract render(ctx: PassRenderContext): void;
 
+    /** Releases the pass's GPU resources (the renderer calls it from `destroy`, or when the pass goes unused). */
     destroy(): void {}
 }

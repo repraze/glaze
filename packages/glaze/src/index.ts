@@ -50,8 +50,8 @@ export type {GltfLoadOptions, GltfModel} from "./loaders/gltf";
 export {loadGltf, parseGltf} from "./loaders/gltf";
 export {loadOBJFromURL, parseOBJ} from "./loaders/obj";
 export {loadSTLFromURL, parseSTL} from "./loaders/stl";
-export type {AlphaMode, PBRMaterialOptions, StandardMaterialOptions} from "./material/material";
-export {Material, PBRMaterial, StandardMaterial} from "./material/material";
+export type {AlphaMode, PBRMaterialOptions} from "./material/material";
+export {Material, PBRMaterial} from "./material/material";
 export {
     bounce,
     clamp,

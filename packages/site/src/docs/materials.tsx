@@ -150,8 +150,6 @@ export const doc = defineDoc({
                     description: "r height, for parallax occlusion.",
                 },
                 {name: "heightScale", type: "number", default: "0", description: "Parallax depth; 0 disables it."},
-                {name: "markDirty()", type: "void", description: "Upload changed scalars on the next frame."},
-                {name: "destroy()", type: "void", description: "Free the uniform buffer."},
             ],
         },
     ],
@@ -162,18 +160,17 @@ function Notes() {
         <section id="updating" className="flex scroll-mt-24 flex-col gap-3">
             <h2 className="font-mono text-xl font-semibold">Updating</h2>
             <p className="text-sm text-muted-foreground">
-                Scalars live in a uniform buffer: after changing them, call{" "}
-                <code className="font-mono text-foreground">markDirty()</code>. Assigning a map rebuilds the bind group
-                on its own. Each combination of normal and height maps compiles one G-buffer pipeline variant, shared by
-                every material that uses it.
+                Change any property and the next frame shows it: the pass compares each material&apos;s uniforms once a
+                frame and uploads what changed, and a new map rebuilds its bind group. A material is plain data, so the
+                same one can be drawn by several passes or renderers. Each combination of normal and height maps
+                compiles one G-buffer pipeline variant, shared by every material that uses it.
             </p>
             <Code
                 code={`const gold = palette.material(new PBRMaterial({roughness: 0.1, metallic: 1}), (c) => c.hues.yellow);
 gold.ormMap = Texture.fromPixels(device, ormPixels, 256, 256);
 
 // later, per frame
-gold.roughness = 0.1 + 0.4 * wear;
-gold.markDirty();`}
+gold.roughness = 0.1 + 0.4 * wear; // no upload call: the pass sees the change`}
             />
         </section>
     );
@@ -299,7 +296,6 @@ export function Inspector() {
                         material.ormMap = maps?.orm ?? null;
                         material.heightMap = maps?.height ?? null;
                         material.heightScale = cfg.heightScale;
-                        material.markDirty();
 
                         const env = environments.get(cfg.environment) ?? null;
                         scene.environmentMap = env;
@@ -601,7 +597,6 @@ export function Transparency() {
                             for (const material of glass) {
                                 material.alphaMode = cfg.glassMode;
                                 material.opacity = cfg.opacity;
-                                material.markDirty();
                             }
                         }
                         return graph;

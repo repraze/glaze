@@ -91,6 +91,12 @@ export const doc = defineDoc({
                     description: "4 per vertex (xyz + handedness), for normal maps.",
                 },
                 {
+                    name: "markChanged()",
+                    type: "void",
+                    description:
+                        "After editing the arrays in place: bounds are recomputed and renderers upload the data again.",
+                },
+                {
                     name: "computeTangents(positions, normals, uvs, indices, vertexCount)",
                     type: "Float32Array",
                     description: "Builds tangents (the OBJ loader does it for you).",

@@ -76,10 +76,9 @@ export function paintScene(scene: Scene, colors: SceneColors): void {
     setColorRgb(scene.ambientColor, colors.ambient);
 }
 
-/** Set a material's base color from a hex and flag it for upload. */
+/** Set a material's base color from a hex. */
 export function tint(material: PBRMaterial, hex: string): void {
     setColorRgb(material.color as ColorRgb, hex);
-    material.markDirty();
 }
 
 /** A palette hex as a WGSL vec3 literal, to bake into a ShaderPass (which has no uniforms). */
@@ -136,7 +135,6 @@ export function paletteBinder(colors: {current: SceneColors}) {
             material.emissiveIntensity = intensity;
             writes.push((c) => {
                 setColorRgb(material.emissive, pick(c));
-                material.markDirty();
             });
             return material;
         },

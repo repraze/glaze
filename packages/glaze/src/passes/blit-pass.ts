@@ -227,6 +227,10 @@ export class BlitPass extends Pass {
         this.pipelineFor(this.toneMapping);
     }
 
+    override destroy(): void {
+        this.uniformBuffer?.destroy();
+    }
+
     resize(_width: number, _height: number): void {}
 
     render(ctx: PassRenderContext): void {

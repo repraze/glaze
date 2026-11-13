@@ -52,23 +52,30 @@ export const doc = defineDoc({
                     name: "renderFrame(graph, time?)",
                     type: "void",
                     description:
-                        "Encodes every pass into one command buffer and submits it. time (seconds) reaches every pass; default: since init.",
+                        "Encodes every pass into one command buffer and submits it, at the canvas's current size. time (seconds) reaches every pass; default: since init.",
                 },
                 {
-                    name: "startAnimation(graph | ({time, delta}) => graph)",
+                    name: "startAnimation(graph | ({time, delta}) => graph, {maxDelta?})",
                     type: "() => void",
-                    description: "requestAnimationFrame loop; the callback form runs before each frame. Returns stop.",
+                    description:
+                        "requestAnimationFrame loop; the callback form runs before each frame. A frame advances at most maxDelta (0.1 s), so a hidden tab resumes where it was. Returns stop.",
                 },
                 {
-                    name: "resize(width, height)",
-                    type: "void",
+                    name: "onDeviceLost",
+                    type: "((info) => void) | null",
+                    default: "null",
                     description:
-                        "Recreates canvas-sized textures and tells each pass its new size. Fixed-size outputs keep theirs.",
+                        "Called if the GPU device is lost. Frames stop; recover with a new Renderer, passes, materials and textures.",
+                },
+                {
+                    name: "lost",
+                    type: "boolean",
+                    description: "True once the device is lost.",
                 },
                 {
                     name: "destroy()",
                     type: "void",
-                    description: "Stops the loop, frees the textures and destroys the device.",
+                    description: "Stops the loops, destroys the passes it initialized, their textures and the device.",
                 },
                 {
                     name: "device",
@@ -109,7 +116,7 @@ export function Resolution() {
                 label="A radial ripple drawn at a reduced resolution, so each pixel shows as a square"
                 maxPixelRatio={1}
                 pixelated
-                setup={({renderer, canvas}) => {
+                setup={({canvas}) => {
                     const ripple = (grid: number, c: SceneColors) => /* wgsl */ `
                         @fragment
                         fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
@@ -133,7 +140,6 @@ export function Resolution() {
                         if (canvas.width !== width || canvas.height !== height) {
                             canvas.width = width;
                             canvas.height = height;
-                            renderer.resize(width, height);
                         }
                         const graph = new RenderGraph();
                         const {withGrid, plain} = passesFor(colors.current);
@@ -211,18 +217,21 @@ function Notes() {
             <p className="text-sm text-muted-foreground">
                 The first time a graph contains a pass, the renderer calls its{" "}
                 <code className="font-mono text-foreground">initialize(device, format)</code>, allocates its output
-                textures and calls <code className="font-mono text-foreground">resize</code>. Textures are keyed by node
-                and slot, so a graph rebuilt every frame in the same order reuses them. Passes are shared objects:
-                create them once, outside the frame callback.
+                textures and calls <code className="font-mono text-foreground">resize</code>; when the canvas changes
+                size, canvas-sized textures follow. Textures belong to the pass, so a graph rebuilt every frame reuses
+                them, and a pass can move between graphs. A pass no graph has used for a couple of seconds is destroyed
+                with its textures (and initialized again if it returns). Passes are shared objects: create them once,
+                outside the frame callback.
             </p>
             <Code
                 code={`const renderer = await Renderer.init(canvas, {alphaMode: "premultiplied"});
 
 renderer.renderFrame(graph);               // one frame, e.g. a still or a test
 const stop = renderer.startAnimation(graph); // or a loop
-renderer.resize(width, height);            // after the canvas changed size
+canvas.width = 800;                        // the next frame renders at the new size
+renderer.onDeviceLost = () => restart();   // rare: a driver reset; everything GPU must be made again
 stop();
-renderer.destroy();                        // frees textures, destroys the device`}
+renderer.destroy();                        // destroys passes, textures and the device`}
             />
         </section>
     );

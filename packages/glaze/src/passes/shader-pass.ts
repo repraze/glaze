@@ -111,6 +111,10 @@ export class ShaderPass<const Out extends string = string> extends Pass<Out> {
         this.buildPipeline();
     }
 
+    override destroy(): void {
+        this.globalsBuffer?.destroy();
+    }
+
     resize(width: number, height: number): void {
         this.width = width;
         this.height = height;

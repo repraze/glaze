@@ -136,7 +136,6 @@ export function GlazeCanvas({
             if (canvas.width !== w || canvas.height !== h) {
                 canvas.width = w;
                 canvas.height = h;
-                renderer?.resize(w, h);
             }
         };
 
