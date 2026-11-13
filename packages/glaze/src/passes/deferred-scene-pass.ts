@@ -354,7 +354,8 @@ const MAX_SPOT = 4;
 
 const SHADOW_MAP_SIZE = 1024;
 const POINT_SHADOW_MAP_SIZE = 512;
-const SHADOW_BIAS = 0.002;
+/** Depth bias in the shadow map's 0-1 depth (back faces are stored, so it only has to cover precision). */
+const SHADOW_BIAS = 0.0005;
 /** Normal offset, in shadow texels at a grazing light (see shadowLookup). */
 const SHADOW_NORMAL_OFFSET = "1.5";
 /** Directional shadows cover ±DIRECTIONAL_SHADOW_EXTENT world units. */
@@ -1115,14 +1116,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     },
                 ],
             },
-            depthStencil: {
-                format: "depth32float",
-                depthWriteEnabled: true,
-                depthCompare: "less",
-                depthBias: 2,
-                depthBiasSlopeScale: 1.5,
-            },
-            primitive: {topology: "triangle-list", cullMode: "back"},
+            // no hardware bias: it would push the edge-on back faces at a silhouette behind what they shadow
+            depthStencil: {format: "depth32float", depthWriteEnabled: true, depthCompare: "less"},
+            // back faces: a lit face is compared with the far side of its own mesh, never with itself (which
+            // stair-steps across faces turning edge-on to the light); faces turned away get no direct light
+            primitive: {topology: "triangle-list", cullMode: "front"},
         });
     }
 
@@ -1136,14 +1134,18 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const key = alpha + (doubleSided ? "2" : "");
         let pipeline = this.shadowPipelines.get(key);
         if (pipeline === undefined) {
-            const depthStencil: GPUDepthStencilState = {
-                format: "depth32float",
-                depthWriteEnabled: true,
-                depthCompare: "less",
-                depthBias: 2,
-                depthBiasSlopeScale: 1.5,
-            };
-            const primitive: GPUPrimitiveState = {topology: "triangle-list", cullMode: doubleSided ? "none" : "back"};
+            // double-sided casters store the side facing the light, which needs a slope bias against self-shadowing;
+            // single-sided ones store back faces, which must not be pushed back (see the base shadow pipeline)
+            const depthStencil: GPUDepthStencilState = doubleSided
+                ? {
+                      format: "depth32float",
+                      depthWriteEnabled: true,
+                      depthCompare: "less",
+                      depthBias: 2,
+                      depthBiasSlopeScale: 1.5,
+                  }
+                : {format: "depth32float", depthWriteEnabled: true, depthCompare: "less"};
+            const primitive: GPUPrimitiveState = {topology: "triangle-list", cullMode: doubleSided ? "none" : "front"};
             if (alpha === "opaque") {
                 const module = this.device.createShaderModule({label: "Shadow", code: buildShadowShader()});
                 pipeline = this.device.createRenderPipeline({
