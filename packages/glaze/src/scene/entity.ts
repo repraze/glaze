@@ -60,10 +60,12 @@ export class Entity {
 
     /** Makes `child` a child of this entity (taking it from its previous parent). An ancestor can't be added. */
     add(child: Entity): this {
-        for (let e: Entity | null = this; e !== null; e = e.parent) {
-            if (e === child) {
-                throw new Error("Entity.add: an entity can't be added to itself or to one of its descendants");
-            }
+        let ancestor: Entity | null = this.parent;
+        while (child !== this && ancestor !== null && ancestor !== child) {
+            ancestor = ancestor.parent;
+        }
+        if (child === this || ancestor === child) {
+            throw new Error("Entity.add: an entity can't be added to itself or to one of its ancestors");
         }
         child.parent?.remove(child);
         child.parent = this;
