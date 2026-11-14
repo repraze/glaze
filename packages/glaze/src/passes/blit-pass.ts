@@ -52,7 +52,7 @@ fn fs_main(in: QuadInput) -> @location(0) vec4<f32> {
     // 8 bits a channel band smooth gradients: noise of about one step breaks the bands up
     if (blit.dither > 0.5) {
         let n = ign(in.pos.xy) + ign(in.pos.xy + vec2<f32>(17.0, 59.0)) - 1.0; // triangular, -1..1
-        encoded += vec3<f32>(n / 255.0);
+        encoded += vec3<f32>(n / 255.0) * color.a; // scaled by alpha: a clear pixel stays clear (premultiplied)
     }
     return vec4<f32>(encoded, color.a);`
             : `
@@ -150,7 +150,8 @@ fn applyToneMap(c: vec3<f32>) -> vec3<f32> {
  * - `"none"`: clip. Flat, graphic, exact: a color lit at 1 shows as itself, highlights burn out to the hue.
  * - `"neutral"`: Khronos PBR Neutral. As `"none"` below ~0.76, then highlights roll off: true colors, no clipping.
  * - `"agx"`: filmic, the Blender default. Wide latitude, bright colors desaturate to white like film; softer.
- * - `"aces"`: filmic with more contrast and saturation, highlights shift hue a little.
+ * - `"aces"`: filmic with more contrast and saturation, highlights shift hue a little (Narkowicz's fit, which is
+ *   brighter than three.js's ACESFilmic: that one is the Hill fit with exposure ÷ 0.6).
  * - `"reinhard"`: the simple `c / (c + 1)`, flat and greyish; mostly for comparison.
  *
  * The curve applies to the whole image, background included: only `"none"` shows `scene.backgroundColor` exactly.

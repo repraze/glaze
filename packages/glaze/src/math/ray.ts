@@ -164,7 +164,9 @@ export const ray = {
         const e2 = vec3.subtract(tmpE2, c, a);
         const p = vec3.cross(tmpP, r.direction, e2);
         const det = vec3.dot(e1, p);
-        if (cullBackFace ? det <= 1e-12 : Math.abs(det) <= 1e-12) {
+        // parallel to the triangle (or the triangle has no area), relative to its size: tiny triangles still hit
+        const eps = 1e-10 * Math.sqrt(vec3.squaredLength(e1) * vec3.squaredLength(e2));
+        if (cullBackFace ? det <= eps : Math.abs(det) <= eps) {
             return null;
         }
         const inv = 1 / det;

@@ -76,6 +76,13 @@ export const doc = defineDoc({
                     description: "Equirectangular map drawn behind.",
                 },
                 {
+                    name: "backgroundAlpha",
+                    type: "number",
+                    default: "1",
+                    description:
+                        'Below 1 the page shows through the background (with Renderer alphaMode "premultiplied").',
+                },
+                {
                     name: "environmentColor",
                     type: "vec3",
                     default: "[1, 1, 1]",

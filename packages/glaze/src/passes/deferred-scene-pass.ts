@@ -154,7 +154,10 @@ ${
         ? `    if (alpha < mat.alphaCutoff) { discard; }`
         : `    // 2×2 ordered threshold per shadow texel: the PCF's four ½-texel taps average it back to an even partial
     // shadow (noise, or any coarser pattern, would show through as dots on the receiver)
-    let p = vec2<u32>(in.pos.xy) & vec2<u32>(1u);
+    // shifted per mesh (model.flags.y, 0..3): stacked see-through casters don't share one set of texels, so two
+    // 50% panes shadow 75%, not 50%
+    let shift = u32(model.flags.y);
+    let p = (vec2<u32>(in.pos.xy) + vec2<u32>(shift & 1u, shift >> 1u)) & vec2<u32>(1u);
     let threshold = (f32((p.x * 2u) ^ (p.y * 3u)) + 0.5) / 4.0; // Bayer 2×2: [[0, 2], [3, 1]]
     if (alpha <= threshold) { discard; }`
 }
@@ -475,6 +478,12 @@ ${
     s.alpha     = alpha;
     s.normal    = shadingNormal;
     s.roughness = clamp(mr.g * mat.roughness, 0.0, 1.0);
+    // specular anti-aliasing (Kaplanyan & Tokuyoshi): where the normal turns within a pixel, widen the lobe by
+    // that spread, so dense or bumpy surfaces don't sparkle with highlights thinner than a pixel
+    let dndx      = dpdx(shadingNormal);
+    let dndy      = dpdy(shadingNormal);
+    let spread    = min(0.5 * (dot(dndx, dndx) + dot(dndy, dndy)), 0.18);
+    s.roughness = sqrt(min(s.roughness * s.roughness + spread, 1.0));
     s.metallic  = clamp(mr.b * mat.metallic,  0.0, 1.0);
     s.ao        = clamp(1.0 + mat.occlusionStrength * (occlusion - 1.0), 0.0, 1.0);
     s.emissive  = textureSample(emissiveMap, emissiveSampler, mapUv(2u, uv, input.uv1)).rgb * mat.emissive.rgb;
@@ -1038,8 +1047,8 @@ ${COVERAGE_AO_WGSL}
 ${LIGHT_STRUCTS_WGSL}
 
 // lit in linear light; encoded here only when this pass writes straight to the screen
-fn outputColor(c: vec3<f32>) -> vec4<f32> {
-    return vec4<f32>(${encode ? "linearToSrgb(c)" : "c"}, 1.0);
+fn outputColor(c: vec3<f32>, alpha: f32) -> vec4<f32> {
+    return vec4<f32>(${encode ? "linearToSrgb(c)" : "c"}, alpha);
 }
 
 @group(0) @binding(0) var albedoTex:         texture_2d<f32>;
@@ -1093,7 +1102,9 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
         );
         let wp4 = lighting.invViewProjection * vec4<f32>(ndc, 1.0, 1.0);
         let ray = normalize(wp4.xyz / wp4.w - lighting.cameraPosition.xyz);
-        return outputColor(sampleBgMap(ray) * lighting.backgroundColor.rgb);
+        // premultiplied: with a see-through background (scene.backgroundAlpha) the page shows behind
+        let bgAlpha = lighting.backgroundColor.a;
+        return outputColor(sampleBgMap(ray) * lighting.backgroundColor.rgb * bgAlpha, bgAlpha);
     }
     let normalSample   = textureLoad(normalTex, coord, 0);
     let posSample      = textureLoad(posTex, coord, 0);
@@ -1108,7 +1119,7 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
         emissiveSample.w,
         input.pos.xy,
     );
-    return outputColor(colour + emissiveSample.rgb);
+    return outputColor(colour + emissiveSample.rgb, 1.0);
 }
 `;
 }
@@ -1190,6 +1201,8 @@ interface MeshGPUResources {
     geometry: Geometry;
     /** The last frame it was drawn: unused entries are released. */
     lastFrame: number;
+    /** 0..3, spread over meshes: shifts a see-through caster's shadow dither. */
+    ditherShift: number;
     vertexBuffer: GPUBuffer;
     skinBuffer: GPUBuffer | null;
     extrasBuffer: GPUBuffer | null;
@@ -1381,6 +1394,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private readonly blendDraws: {mesh: Mesh; depth: number}[] = [];
     private readonly modelData = new Float32Array(MODEL_UNIFORMS_SIZE / 4);
     private morphPairs = new Float32Array(16);
+    private meshesCreated = 0;
     private readonly normalMatrix = mat4.create();
     private readonly tmpCenter = vec3.create();
     private readonly tmpEye = vec3.create();
@@ -2519,6 +2533,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         data.set(model, 0);
         data.set(normalMatrix, 16);
         data[32] = mesh.receiveShadow ? 1.0 : 0.0;
+        data[33] = res.ditherShift; // the shadow dither's shift for see-through casters
         // morph targets: the ones with a weight, as (index, weight) pairs; their count and the vertex count here
         let active = 0;
         if (res.morphWeightBuffer !== null) {
@@ -2654,7 +2669,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         f32[BACKGROUND_SLOT] = srgbToLinear(bg[0]);
         f32[BACKGROUND_SLOT + 1] = srgbToLinear(bg[1]);
         f32[BACKGROUND_SLOT + 2] = srgbToLinear(bg[2]);
-        f32[BACKGROUND_SLOT + 3] = 1.0;
+        f32[BACKGROUND_SLOT + 3] = Math.min(Math.max(this.scene.backgroundAlpha, 0), 1);
 
         // Reflections sample the environment map times environmentColor. Without a map the sampled texel is a white
         // placeholder: reflect the ambient color instead (a uniform environment), not a white sky, which would rim
@@ -2882,6 +2897,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         return {
             geometry: mesh.geometry,
             lastFrame: this.frame,
+            ditherShift: this.meshesCreated++ % 4,
             vertexBuffer: geo.vertexBuffer,
             skinBuffer: skinned ? geo.skinBuffer : null,
             extrasBuffer: geo.extrasBuffer,

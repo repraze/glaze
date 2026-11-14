@@ -21,6 +21,11 @@ export class Scene {
      */
     environmentColor: vec3 = vec3.fromValues(1.0, 1.0, 1.0);
     environmentMap: Texture | null = null;
+    /**
+     * How opaque the background is, 0..1 (default 1). Below 1 the page shows through where nothing is drawn: give
+     * `Renderer.init` `alphaMode: "premultiplied"`.
+     */
+    backgroundAlpha = 1;
     backgroundMap: Texture | null = null;
 
     add(entity: Entity): this {

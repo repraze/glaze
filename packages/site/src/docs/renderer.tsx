@@ -46,7 +46,8 @@ export const doc = defineDoc({
                     name: "options.alphaMode",
                     type: "GPUCanvasAlphaMode",
                     default: '"opaque"',
-                    description: '"premultiplied" lets the page show through transparent pixels.',
+                    description:
+                        '"premultiplied" lets the page show through transparent pixels (scene.backgroundAlpha).',
                 },
                 {
                     name: "renderFrame(graph, time?)",
