@@ -3,6 +3,9 @@ import {mat4, type ReadonlyMat4, type ReadonlyVec3, vec3, vec4} from "gl-matrix"
 /** Most cascades a directional light can split its shadow into. */
 export const MAX_CASCADES = 4;
 
+/** Texels a shadow lookup's filter reaches from its center, at most (the scene pass's PCSS radius, plus 2). */
+const FILTER_MARGIN_TEXELS = 34;
+
 /** One slice of the camera's view, with the shadow map that covers it. GPU-free. */
 export interface Cascade {
     /** World → shadow clip space (the light's orthographic view-projection for this slice). */
@@ -142,6 +145,9 @@ export function fitCascades(out: Cascade[], fit: CascadeFit): number {
         for (const p of slice) {
             radius = Math.max(radius, vec3.distance(p, centroid));
         }
+        // a margin for the widest filter (32 texels) and its bilinear taps: lookups near the slice's edge stay on
+        // the map instead of falling off it (lit) or reading clamped edge texels
+        radius *= fit.mapSize / Math.max(fit.mapSize - 2 * FILTER_MARGIN_TEXELS, fit.mapSize / 2);
         radius = Math.ceil(radius * 16) / 16; // no float jitter in the size
 
         // the center in light view space, snapped to whole texels
