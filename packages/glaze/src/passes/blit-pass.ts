@@ -166,6 +166,12 @@ export interface BlitPassOptions {
     /** Brightness in stops before tone mapping: +1 doubles the light, -1 halves it. Defaults to 0. */
     exposure?: number;
     /**
+     * How the input is read when its size differs from the canvas (Renderer.renderScale, or a smaller output):
+     * `"nearest"` (default) keeps hard pixels; `"linear"` blends them, and averages a supersampled input
+     * (renderScale 2) down to the canvas.
+     */
+    filter?: "nearest" | "linear";
+    /**
      * Adds a little noise after the sRGB encode (default true), so smooth gradients don't band in 8 bits. Only when
      * this pass does the encode (not for an `"srgb"` input or an `-srgb` canvas).
      */
@@ -193,6 +199,7 @@ export class BlitPass extends Pass {
     exposure: number;
     /** See {@link BlitPassOptions.dither}. */
     dither: boolean;
+    private readonly filter: "nearest" | "linear";
     private lastDither: boolean | null = null;
 
     private readonly inputName: string;
@@ -217,6 +224,7 @@ export class BlitPass extends Pass {
         this.toneMapping = options.toneMapping ?? "none";
         this.exposure = options.exposure ?? 0;
         this.dither = options.dither ?? true;
+        this.filter = options.filter ?? "nearest";
         this.inputColorSpace = options.inputColorSpace ?? "linear-srgb";
         this.inputSlots = [{name: this.inputName}];
     }
@@ -230,8 +238,8 @@ export class BlitPass extends Pass {
         this.lastExposure = NaN;
 
         this.sampler = device.createSampler({
-            magFilter: "nearest",
-            minFilter: "nearest",
+            magFilter: this.filter,
+            minFilter: this.filter,
             addressModeU: "clamp-to-edge",
             addressModeV: "clamp-to-edge",
         });

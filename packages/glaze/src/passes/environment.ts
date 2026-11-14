@@ -143,7 +143,7 @@ ${COMMON_WGSL}
  */
 export class EnvironmentPrefilter {
     private readonly device: GPUDevice;
-    private readonly cache = new WeakMap<Texture, PrefilteredEnvironment>();
+    private readonly cache = new WeakMap<Texture, {env: PrefilteredEnvironment; version: number}>();
     private readonly made = new Set<PrefilteredEnvironment>();
     private specularPipeline: GPURenderPipeline | null = null;
     private irradiancePipeline: GPURenderPipeline | null = null;
@@ -161,14 +161,20 @@ export class EnvironmentPrefilter {
         });
     }
 
-    /** The prefiltered maps for an equirectangular environment texture (made on first use). */
+    /** The prefiltered maps for an equirectangular environment texture (made on first use, redone after an update). */
     get(texture: Texture): PrefilteredEnvironment {
-        let env = this.cache.get(texture);
-        if (env === undefined) {
-            env = this.prefilter(texture);
-            this.cache.set(texture, env);
-            this.made.add(env);
+        const cached = this.cache.get(texture);
+        if (cached !== undefined && cached.version === texture.version) {
+            return cached.env;
         }
+        // first use, or the texture's pixels changed (Texture.update)
+        if (cached !== undefined) {
+            cached.env.destroy();
+            this.made.delete(cached.env);
+        }
+        const env = this.prefilter(texture);
+        this.cache.set(texture, {env, version: texture.version});
+        this.made.add(env);
         return env;
     }
 

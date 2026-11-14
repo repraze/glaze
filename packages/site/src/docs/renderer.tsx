@@ -62,6 +62,13 @@ export const doc = defineDoc({
                         "requestAnimationFrame loop; the callback form runs before each frame. A frame advances at most maxDelta (0.1 s), so a hidden tab resumes where it was. Returns stop.",
                 },
                 {
+                    name: "renderScale",
+                    type: "number",
+                    default: "1",
+                    description:
+                        'Render targets relative to the canvas: 0.5 renders at half (pixelated with BlitPass filter "nearest"), 2 supersamples (filter "linear"). Canvas outputs keep the canvas size.',
+                },
+                {
                     name: "onDeviceLost",
                     type: "((info) => void) | null",
                     default: "null",

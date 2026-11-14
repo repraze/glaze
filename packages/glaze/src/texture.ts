@@ -74,8 +74,9 @@ export class Texture {
     readonly hdr: boolean;
     private readonly tex: GPUTexture;
 
-    private constructor(tex: GPUTexture, colorSpace: ColorSpace) {
+    private constructor(tex: GPUTexture, colorSpace: ColorSpace, pixels: {version: number} = {version: 0}) {
         this.tex = tex;
+        this.pixels = pixels;
         this.width = tex.width;
         this.height = tex.height;
         this.hdr = tex.format === HDR_FORMAT;
@@ -88,6 +89,57 @@ export class Texture {
     /** The GPU texture (for passes that process it, like an environment's prefiltering). */
     get texture(): GPUTexture {
         return this.tex;
+    }
+
+    /** Bumped by `update` / `updateFrom`: what is derived from the pixels (a prefiltered environment) is redone. */
+    get version(): number {
+        return this.pixels.version;
+    }
+    /** Shared with every Texture made by withSettings: they read the same pixels. */
+    private readonly pixels: {version: number};
+
+    /**
+     * Replaces the pixels with `data` (same size: 4 bytes a pixel, or 4 floats for an HDR texture) and regenerates
+     * the mip levels. Every material and pass using the texture sees the new pixels on the next frame.
+     */
+    update(device: GPUDevice, data: Uint8Array | Float32Array): this {
+        if (this.hdr) {
+            const half = new Uint16Array(this.width * this.height * 4);
+            for (let i = 0; i < half.length; i++) {
+                half[i] = toHalf(data[i] ?? 0);
+            }
+            device.queue.writeTexture({texture: this.tex}, half, {bytesPerRow: this.width * 8}, this.size());
+        } else {
+            device.queue.writeTexture(
+                {texture: this.tex},
+                data as Uint8Array<ArrayBuffer>,
+                {bytesPerRow: this.width * 4},
+                this.size(),
+            );
+        }
+        return this.afterWrite(device);
+    }
+
+    /**
+     * Replaces the pixels with an image, canvas or video frame of the same size (a video texture: call it each
+     * frame), and regenerates the mip levels.
+     */
+    updateFrom(device: GPUDevice, source: GPUCopyExternalImageSource): this {
+        if (this.hdr) {
+            throw new Error("Texture.updateFrom: HDR textures take float data (update)");
+        }
+        device.queue.copyExternalImageToTexture({source}, {texture: this.tex}, this.size());
+        return this.afterWrite(device);
+    }
+
+    private size(): GPUExtent3DStrict {
+        return {width: this.width, height: this.height};
+    }
+
+    private afterWrite(device: GPUDevice): this {
+        generateMipmaps(device, this.tex, this.colorSpace);
+        this.pixels.version++;
+        return this;
     }
 
     get mipLevelCount(): number {
@@ -194,7 +246,7 @@ export class Texture {
         sampling?: Partial<TextureSampling>;
         transform?: Partial<UvTransform>;
     }): Texture {
-        const copy = new Texture(this.tex, this.colorSpace);
+        const copy = new Texture(this.tex, this.colorSpace, this.pixels);
         copy.sampling = {...this.sampling, ...sampling};
         copy.transform = {...this.transform, ...transform};
         return copy;

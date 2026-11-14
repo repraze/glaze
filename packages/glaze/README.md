@@ -78,18 +78,24 @@ Renderer               device, canvas context, frame loop, textures between pass
 const renderer = await Renderer.init(canvas, {alphaMode: "premultiplied"}); // alphaMode defaults to "opaque"
 renderer.renderFrame(graph); // one frame; renderFrame(graph, seconds) drives globals.time yourself
 const stop = renderer.startAnimation(graph); // or a loop; also accepts ({time, delta}) => graph
-renderer.resize(width, height); // after the canvas changed size
-renderer.destroy();
+canvas.width = 800; // frames render at the canvas's size: set it and the targets follow
+renderer.renderScale = 0.5; // render targets at half the canvas (pixelated with BlitPass filter "nearest"); 2 supersamples
+renderer.onDeviceLost = (info) => restart(); // rare (driver reset): every GPU resource must be made again
+renderer.destroy(); // stops loops, destroys the passes it initialized, their textures and the device
 ```
 
-`renderer.device`, `.adapter`, `.context` and `.format` are public for your own resources.
+`renderer.device`, `.adapter`, `.context` and `.format` are public for your own resources. `Renderer.init` raises
+the buffer and attachment limits to the adapter's and accepts `requiredFeatures` / `requiredLimits`.
+`startAnimation(graph, {maxDelta})` caps a frame's step (0.1 s), so a hidden tab resumes where it was.
 
 ### Passes and the render graph
 
 A `Pass` declares named `inputSlots` and `outputSlots` (`{name, spec: {format, width?, height?, widthDivisor?,
 heightDivisor?}}`) and implements `initialize(device, format)`, `resize(width, height)` and `render(ctx)`. The
-renderer creates each output texture (canvas-sized unless fixed, or divided), calls `initialize` the first time
-it sees the pass, and hands `render` the views of its inputs and outputs.
+renderer creates each output texture (canvas-sized times `renderScale` unless fixed, or divided), calls
+`initialize` the first time it sees the pass, and hands `render` the views of its inputs and outputs. Textures
+belong to the pass, so a pass can move between graphs; a pass no graph used for ~2 s is destroyed with its
+textures (and initialized again if it returns).
 
 `graph.addPass(pass, inputs?, {canvasSlot?})` returns one handle per output slot, typed by the pass's slot
 names. Wire handles into later passes by input name; the pass marked with `canvasSlot` writes to the swap chain.
@@ -142,7 +148,9 @@ alignment. The pass skips drawing until every `TextureUniform` has a texture.
 ### DeferredScenePass
 
 Shadow maps, then a G-buffer, then one fullscreen lighting pass (Cook-Torrance BRDF, image-based ambient and
-reflections from `scene.environmentMap`). Up to 4 directional, 8 point and 4 spot lights; any can cast shadows.
+reflections from `scene.environmentMap`, prefiltered by roughness on the GPU, with its diffuse irradiance). Up to
+4 directional, 8 point and 4 spot lights (the ones nearest the view when there are more); any can cast shadows.
+Meshes outside the camera's view are skipped (`mesh.frustumCulled`).
 
 | Output     | Format                        | Contents                            |
 | ---------- | ----------------------------- | ----------------------------------- |
@@ -160,10 +168,10 @@ Set `colorFormat: renderer.format` and `canvasSlot: "color"` to render straight 
 ## Scene graph
 
 ```
-Scene (root, activeCamera, backgroundColor, ambientColor, environmentMap, backgroundMap, environmentColor)
+Scene (root, activeCamera, backgroundColor, backgroundAlpha, ambientColor, environmentMap, backgroundMap, environmentColor)
  └─ Entity (position, quaternion, scale, enabled, children)
-      ├─ Mesh      geometry + material, castShadow, receiveShadow
-      ├─ Camera    PerspectiveCamera {fov, near, far} | OrthographicCamera {left, right, top, bottom, near, far}
+      ├─ Mesh      geometry + material, castShadow, receiveShadow, frustumCulled, morphWeights
+      ├─ Camera    PerspectiveCamera {fov, near, far} | OrthographicCamera {left, right, top, bottom, near, far, zoom}
       └─ Light     DirectionalLight | PointLight {range} | SpotLight {innerAngle, outerAngle, range}
 ```
 
@@ -172,13 +180,17 @@ Entities look down their local −Z with +Y up. `quaternion` is the rotation; `s
 and `lookAlong(direction, up?)` along a world direction (parent rotation included), and `getWorldPosition / getWorldQuaternion / getWorldScale / getWorldDirection()` read
 the world transform fresh from the parent chain.
 
-Lights take `{color, intensity, castShadow}`. Directional and spot lights shine along their −Z: the `direction`
+Lights take `{color, intensity, castShadow, shadow}`. Point and spot lights fall off with the square of the
+distance (intensity is the light at 1 unit, glTF's candela) and fade to 0 at `range` (default Infinity: where they
+drop below ~1/250). Directional and spot lights shine along their −Z: the `direction`
 option sets the initial aim, `lookAt` re-aims them, and a parent's rotation turns them. Children inherit their parent's transform; world matrices are
-updated by the scene pass each frame. Cameras must be in the tree.
+updated by the scene pass each frame. The active camera need not be in the tree.
 
 ## Geometry
 
-`Geometry({positions, normals, uvs, indices, tangents?})`, and factories that all take `flat?: boolean` (per-face
+`Geometry({positions, normals, uvs, indices, tangents?, colors?, uvs1?, joints?, weights?, morphTargets?})`
+(`colors`: linear RGBA vertex colors; `uvs1`: a second UV set). After editing its arrays in place, call
+`geometry.markChanged()`: bounds are recomputed and the data is uploaded again. Factories that all take `flat?: boolean` (per-face
 normals): `createCube`, `createPlane`, `createQuad`, `createSphere`, `createIcosphere`, `createCylinder`,
 `createCone`, `createTorus`. `computeTangents(positions, normals, uvs, indices, vertexCount)` for normal maps.
 
@@ -190,17 +202,22 @@ and v runs down. Normal maps are glTF's too: tangent-space +y points to the top 
 ```ts
 const gold = new PBRMaterial({color: colorRgb("#f0c040"), roughness: 0.1, metallic: 1, emissive: [0, 0, 0, 0]});
 gold.albedoMap = Texture.fromPixels(renderer.device, rgbaBytes, 256, 256); // also normalMap, emissiveMap, heightMap
-gold.roughness = 0.3;
-gold.markDirty(); // after changing scalars
+gold.roughness = 0.3; // no upload call: the pass compares each material's uniforms once a frame
 ```
 
-`Texture.fromPixels(device, data, w, h)`, `Texture.fromURL(device, url)`, `Texture.fromBlob(device, blob)`: each builds
-a mip chain on the GPU (`{mipmaps: false}` to skip), sampled trilinear with 8x anisotropy and repeat wrapping.
+`Texture.fromPixels(device, data, w, h)`, `Texture.fromURL(device, url)`, `Texture.fromBlob(device, blob)`, and HDR
+`Texture.fromFloat32(device, rgba, w, h)` / `Texture.fromHDR(device, url)` (Radiance .hdr): each builds a mip chain on
+the GPU (`{mipmaps: false}` to skip). `texture.sampling` (`wrapU`/`wrapV`: repeat, clamp, mirror; `magFilter` /
+`minFilter`: linear, nearest; `anisotropy`, default 8) and `texture.transform` (`offset`, `scale`, `rotation`, `uvSet`
+0 or 1) can change any time; `texture.withSettings({sampling?, transform?})` shares the pixels with other settings.
+`texture.update(device, data)` / `updateFrom(device, imageOrCanvasOrVideo)` replace the pixels (same size) and
+regenerate the mips.
 
 Alpha follows glTF: `opacity` multiplies the albedo map's alpha, and `alphaMode` is `"opaque"` (ignored), `"mask"`
-(cut below `alphaCutoff`, default 0.5: leaves, lace) or `"blend"` (see-through, dithered by the deferred pass: no
-sorting needed). `doubleSided: true` draws back faces too, lit from their own side.
-Meshes sharing a material share its GPU buffer and bind group. Emission is the rgb of `emissive` (alpha unused).
+(cut below `alphaCutoff`, default 0.5: leaves, lace) or `"blend"` (see-through: drawn after lighting, farthest
+first, casting partial shadows). `doubleSided: true` draws back faces too, lit from their own side.
+Meshes sharing a material share its GPU buffer and bind group; a material holds no GPU state, so several passes
+or renderers can draw it. `shadowSide` ("front", "back", "both") picks which faces cast. Emission is the rgb of `emissive` (alpha unused).
 
 Occlusion, roughness and metallic follow glTF: `ormMap` is a packed texture (r occlusion, g roughness, b metallic);
 `metallicRoughnessMap` (g, b) and `occlusionMap` (r) are separate textures that override its channels. Without an
@@ -209,10 +226,12 @@ occlusion source, occlusion is 1. `normalScale` and `occlusionStrength` scale th
 ## Loaders
 
 `loadGltf(device, url, {resolveUri?})` / `parseGltf(device, bytes)` → `GltfModel` `{root, nodes, meshes, materials,
-textures, destroy()}`: a `.glb` or `.gltf` (external or data-URI buffers and images) as an entity tree. Nodes keep
-their names (`root.find("Icing")`) and transforms; a one-primitive node is the `Mesh` itself, otherwise it holds a
-`Mesh` per primitive; geometry, materials and textures are shared across nodes. Normalized integer attributes are
-decoded. `computeWorldBounds(entity)` boxes a subtree to frame it.
+textures, animations, skins, lights, destroy()}`: a `.glb` or `.gltf` (external or data-URI buffers and images) as an
+entity tree. Nodes keep their names (`root.find("Icing")`) and transforms; a one-primitive node is the `Mesh` itself,
+otherwise it holds a `Mesh` per primitive; geometry, materials and textures are shared across nodes. Normalized and
+sparse attributes, vertex colors, two UV sets, samplers, KHR_texture_transform, KHR_lights_punctual,
+KHR_materials_emissive_strength, skins and morph targets are read; a file requiring another extension (Draco,
+meshopt, KTX2) is refused with an error naming it. `computeWorldBounds(entity)` boxes a subtree to frame it.
 
 `parseGLB(buffer)` / `loadGLBFromURL(url)` → `{geometry, material}[]` (flat, transforms baked), with
 `createPBRMaterialFromGltf(device, material, resolveUri?)` (the mapping itself, GPU-free, is
@@ -308,7 +327,9 @@ transformed box), `getCenter`, `getSize`, `containsPoint`, `intersectsBox`, `isE
 `fromValues`, `fromPositions`, `transformMat4`, `containsPoint`, `isEmpty`. `ray`: `create`, `fromValues`, `at`,
 `fromNdc`, `transformMat4` (keeps the direction unnormalised, so local-space `t` equals world-space `t`),
 `intersectBox`, `intersectSphere`, `intersectTriangle(r, a, b, c, cullBackFace?, barycentric?)`.
-`geometry.boundingBox` / `boundingSphere` are cached; call `geometry.updateBounds()` after editing positions.
+`geometry.boundingBox` / `boundingSphere` are cached; call `geometry.markChanged()` after editing positions.
+`sphere.inFrustum(center, radius, viewProjection)` culls; `decompose(m, position, rotation, scale)` and `isMirrored(m)`
+handle mirroring matrices.
 
 ## Helpers
 

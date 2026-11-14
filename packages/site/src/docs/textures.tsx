@@ -89,6 +89,12 @@ export const doc = defineDoc({
                         "Where materials sample it: UV set 0 or 1 (geometry.uvs1), scaled, rotated, offset (KHR_texture_transform). Live.",
                 },
                 {
+                    name: "update(device, data) / updateFrom(device, source)",
+                    type: "this",
+                    description:
+                        "Replace the pixels (same size; an image, canvas or video frame for updateFrom) and regenerate the mips.",
+                },
+                {
                     name: "withSettings({sampling?, transform?})",
                     type: "Texture",
                     description: "Another Texture on the same pixels with its own sampling and transform.",

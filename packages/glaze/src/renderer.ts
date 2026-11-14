@@ -75,6 +75,14 @@ export class Renderer {
      */
     onDeviceLost: ((info: GPUDeviceLostInfo) => void) | null = null;
 
+    /**
+     * Size of the render targets relative to the canvas (default 1). 0.5 renders the scene at half the canvas's
+     * resolution, for speed or a pixelated look (with a BlitPass filter of "nearest"); 2 renders at twice and lets
+     * a BlitPass with filter "linear" average it down (supersampling). Passes drawing to the canvas keep its size.
+     * Fixed-size outputs keep theirs; widthDivisor / heightDivisor apply on top.
+     */
+    renderScale = 1;
+
     private width: number;
     private height: number;
     private isLost = false;
@@ -325,9 +333,13 @@ export class Renderer {
         }
         state.lastFrame = this.frame;
 
-        const resized = state.width !== this.width || state.height !== this.height;
-        state.width = this.width;
-        state.height = this.height;
+        // render targets follow the canvas times renderScale; passes drawing to the canvas get its own size
+        const scale = this.renderScale > 0 && Number.isFinite(this.renderScale) ? this.renderScale : 1;
+        const targetW = Math.max(1, Math.round(this.width * scale));
+        const targetH = Math.max(1, Math.round(this.height * scale));
+        const resized = state.width !== targetW || state.height !== targetH;
+        state.width = targetW;
+        state.height = targetH;
         let passW = this.width;
         let passH = this.height;
         for (const slot of pass.outputSlots) {
@@ -340,7 +352,7 @@ export class Renderer {
                 mt = undefined;
             }
             if (mt === undefined) {
-                mt = this.createTexture(slot.spec, this.width, this.height);
+                mt = this.createTexture(slot.spec, targetW, targetH);
                 state.textures.set(slot.name, mt);
             }
             passW = mt.texture.width;

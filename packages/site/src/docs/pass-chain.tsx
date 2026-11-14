@@ -130,6 +130,13 @@ export const doc = defineDoc({
                     description: "Stops before tone mapping: +1 doubles the light. A property too.",
                 },
                 {
+                    name: "filter",
+                    type: '"nearest" | "linear"',
+                    default: '"nearest"',
+                    description:
+                        "How a smaller or larger input (renderScale) reaches the canvas: hard pixels, or blended (averages a supersampled input).",
+                },
+                {
                     name: "dither",
                     type: "boolean",
                     default: "true",
