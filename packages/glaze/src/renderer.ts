@@ -51,6 +51,12 @@ export interface RendererOptions {
     requiredFeatures?: GPUFeatureName[];
     /** Device limits to require, over the ones Glaze raises on its own. */
     requiredLimits?: Record<string, number>;
+    /**
+     * After a device loss, get a new device and carry on (default true): passes are initialized again, meshes and
+     * materials uploaded again, and Textures made again from what they were made from. Animation loops keep
+     * running; frames are skipped until the new device is ready.
+     */
+    recover?: boolean;
 }
 
 /**
@@ -63,17 +69,21 @@ const RAISED_LIMITS = ["maxBufferSize", "maxStorageBufferBindingSize", "maxColor
 const OPTIONAL_FEATURES: GPUFeatureName[] = ["float32-filterable"];
 
 export class Renderer {
-    readonly device: GPUDevice;
-    readonly adapter: GPUAdapter;
     readonly context: GPUCanvasContext;
     readonly format: GPUTextureFormat;
 
     /**
-     * Called once if the GPU device is lost (a driver reset, the GPU process crashing, too much memory...). The
-     * renderer stops drawing: every GPU resource belonged to that device, so recover by creating a new Renderer
-     * and new passes, materials and textures.
+     * Called when the GPU device is lost (a driver reset, the GPU process crashing, too much memory...). With
+     * `recover` (the default) a new device follows (see `onDeviceRestored`); without, the renderer stops drawing.
      */
     onDeviceLost: ((info: GPUDeviceLostInfo) => void) | null = null;
+
+    /**
+     * Called once a new device replaces a lost one, before the next frame. Glaze's own objects carry over; remake
+     * what you made on the old device yourself (GPU buffers or textures of your own, an EffectPass's
+     * TextureUniform, a Texture from `fromGPUTexture`).
+     */
+    onDeviceRestored: ((device: GPUDevice) => void) | null = null;
 
     /**
      * Size of the render targets relative to the canvas (default 1). 0.5 renders the scene at half the canvas's
@@ -83,9 +93,13 @@ export class Renderer {
      */
     renderScale = 1;
 
+    private currentDevice: GPUDevice;
+    private currentAdapter: GPUAdapter;
+    private readonly options: RendererOptions;
     private width: number;
     private height: number;
     private isLost = false;
+    private destroyed = false;
     private frame = 0;
     private warnedSize = false;
     /** Stops for every running animation loop. */
@@ -103,28 +117,42 @@ export class Renderer {
         format: GPUTextureFormat,
         width: number,
         height: number,
+        options: RendererOptions,
     ) {
-        this.adapter = adapter;
-        this.device = device;
+        this.currentAdapter = adapter;
+        this.currentDevice = device;
         this.context = context;
         this.format = format;
         this.width = width;
         this.height = height;
-        void device.lost.then((info) => {
-            this.isLost = true;
-            this.stopLoops();
-            if (info.reason !== "destroyed") {
-                console.error(`[glaze] GPU device lost (${info.reason}): ${info.message}`);
-                this.onDeviceLost?.(info);
-            }
-        });
+        this.options = options;
+        this.watch(device);
+    }
+
+    /** The GPU device: a new one after a recovered device loss. */
+    get device(): GPUDevice {
+        return this.currentDevice;
+    }
+
+    get adapter(): GPUAdapter {
+        return this.currentAdapter;
     }
 
     static async init(canvas: HTMLCanvasElement, options: RendererOptions = {}): Promise<Renderer> {
         if (!navigator.gpu) {
             throw new Error("WebGPU is not supported in this environment.");
         }
+        const context = canvas.getContext("webgpu");
+        if (!context) {
+            throw new Error("Failed to obtain WebGPU context from canvas.");
+        }
+        const {adapter, device} = await Renderer.requestDevice(options);
+        const format = navigator.gpu.getPreferredCanvasFormat();
+        context.configure({device, format, alphaMode: options.alphaMode ?? "opaque"});
+        return new Renderer(adapter, device, context, format, canvas.width, canvas.height, options);
+    }
 
+    private static async requestDevice(options: RendererOptions): Promise<{adapter: GPUAdapter; device: GPUDevice}> {
         const adapter = await navigator.gpu.requestAdapter();
         if (!adapter) {
             throw new Error("No suitable GPU adapter found.");
@@ -144,18 +172,60 @@ export class Renderer {
         device.addEventListener("uncapturederror", (event) => {
             console.error("[glaze] uncaptured WebGPU error:", (event as GPUUncapturedErrorEvent).error);
         });
-        const context = canvas.getContext("webgpu");
-        if (!context) {
-            throw new Error("Failed to obtain WebGPU context from canvas.");
-        }
-
-        const format = navigator.gpu.getPreferredCanvasFormat();
-        context.configure({device, format, alphaMode: options.alphaMode ?? "opaque"});
-
-        return new Renderer(adapter, device, context, format, canvas.width, canvas.height);
+        return {adapter, device};
     }
 
-    /** True once the GPU device is lost (see `onDeviceLost`): frames are skipped from then on. */
+    private watch(device: GPUDevice): void {
+        void device.lost.then((info) => this.deviceLost(device, info));
+    }
+
+    /** A device was lost: stop drawing, then (with `recover`) carry on with a new one. */
+    private async deviceLost(device: GPUDevice, info: GPUDeviceLostInfo): Promise<void> {
+        if (device !== this.currentDevice) {
+            return; // a device already replaced
+        }
+        this.isLost = true;
+        if (info.reason === "destroyed") {
+            return; // renderer.destroy()
+        }
+        console.error(`[glaze] GPU device lost (${info.reason}): ${info.message}`);
+        this.onDeviceLost?.(info);
+        if (this.options.recover === false) {
+            this.stopLoops();
+            return;
+        }
+        // what each pass made belonged to the old device: they start over on the new one
+        this.releasePasses();
+        try {
+            const {adapter, device: next} = await Renderer.requestDevice(this.options);
+            if (this.destroyed) {
+                next.destroy();
+                return;
+            }
+            this.currentAdapter = adapter;
+            this.currentDevice = next;
+            this.context.configure({device: next, format: this.format, alphaMode: this.options.alphaMode ?? "opaque"});
+            this.watch(next);
+            this.isLost = false;
+            this.onDeviceRestored?.(next);
+        } catch (error) {
+            console.error("[glaze] could not get a new GPU device:", error);
+            this.stopLoops();
+        }
+    }
+
+    /** Destroys every pass this renderer initialized, and their textures; they initialize again if used. */
+    private releasePasses(): void {
+        for (const [pass, state] of this.passes) {
+            for (const mt of state.textures.values()) {
+                mt.texture.destroy();
+            }
+            pass.destroy();
+        }
+        this.passes.clear();
+    }
+
+    /** True while there is no device to draw with (see `onDeviceLost`): frames are skipped. */
     get lost(): boolean {
         return this.isLost;
     }
@@ -287,15 +357,10 @@ export class Renderer {
 
     /** Stops animation loops, then destroys every pass it initialized, their textures and the device. */
     destroy(): void {
+        this.destroyed = true;
         this.stopLoops();
         this.context.unconfigure();
-        for (const [pass, state] of this.passes) {
-            for (const mt of state.textures.values()) {
-                mt.texture.destroy();
-            }
-            pass.destroy();
-        }
-        this.passes.clear();
+        this.releasePasses();
         this.device.destroy();
     }
 

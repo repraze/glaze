@@ -95,6 +95,18 @@ export const doc = defineDoc({
                         "Replace the pixels (same size; an image, canvas or video frame for updateFrom) and regenerate the mips.",
                 },
                 {
+                    name: "restore(device)",
+                    type: "Promise<void>",
+                    description:
+                        "Makes the pixels again on a new device after a device loss, from what the texture was made from (its bytes, image file, or last updateFrom source). Passes call it on their own.",
+                },
+                {
+                    name: "Texture.fromGPUTexture(device, texture, colorSpace?)",
+                    type: "Texture",
+                    description:
+                        "Wraps a GPU texture of your own (rgba8unorm with an sRGB view format, or rgba16float). Not restored after a device loss.",
+                },
+                {
                     name: "withSettings({sampling?, transform?})",
                     type: "Texture",
                     description: "Another Texture on the same pixels with its own sampling and transform.",

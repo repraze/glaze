@@ -1193,6 +1193,8 @@ interface MaterialGPUResources {
     /** The maps the bind group was built with, and their samplers' keys. */
     maps: (Texture | null)[];
     samplerKeys: number[];
+    /** Each map's version when bound (a texture restored after a device loss has a new one). */
+    versions: number[];
     bindGroup: GPUBindGroup | null;
     lastFrame: number;
 }
@@ -1387,6 +1389,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private envPrefilter: EnvironmentPrefilter | null = null;
     /** Material samplers by their settings' key (see samplerKey). */
     private readonly samplers = new Map<number, GPUSampler>();
+    private warnedRestore = false;
 
     // Shadow pass: opaque casters write depth only; alpha casters (mask / blend) get a variant reading albedo alpha
     private shadowPipeline!: GPURenderPipeline;
@@ -1619,6 +1622,17 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         for (const b of this.pointShadowFaceBuffers) {
             b.destroy();
         }
+        // initialize starts over (after an eviction, or on a new device after a device loss)
+        this.dirShadowLightBuffers = [];
+        this.dirShadowLightBGs = [];
+        this.spotShadowLightBuffers = [];
+        this.spotShadowLightBGs = [];
+        this.pointShadowFaceBuffers = [];
+        this.pointShadowFaceBGs = [];
+        this.shadowBindGroup = null;
+        this.modelLayouts.clear();
+        this.pipelineLayouts.clear();
+        this.samplers.clear();
         this.meshCache.forEach(destroyMeshResources);
         this.meshCache.clear();
         this.materialCache.forEach(destroyMaterialResources);
@@ -2439,7 +2453,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
         // Build lighting bind group each frame so G-buffer views are always current.
         const env = this.environment();
-        const bgView = this.scene.backgroundMap?.srgbView ?? this.defaultWhiteView;
+        const bgView = this.usable(this.scene.backgroundMap)?.srgbView ?? this.defaultWhiteView;
         const lightingBG = this.device.createBindGroup({
             label: "DeferredScene:lightingBindGroup",
             layout: this.lightingBindGroupLayout,
@@ -2470,8 +2484,25 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     }
 
     /** The scene's environment as image-based lighting reads it (white placeholders without one). */
+    /**
+     * The texture if its pixels are on this pass's device; else null (draw without it) while it is made again on
+     * this device, after a device loss.
+     */
+    private usable(texture: Texture | null): Texture | null {
+        if (texture === null || texture.device === this.device) {
+            return texture;
+        }
+        texture.restore(this.device).catch((error: unknown) => {
+            if (!this.warnedRestore) {
+                this.warnedRestore = true;
+                console.warn("[glaze] a texture could not be made again on the new device:", error);
+            }
+        });
+        return null;
+    }
+
     private environment(): {specular: GPUTextureView; irradiance: GPUTextureView} {
-        const map = this.scene.environmentMap;
+        const map = this.usable(this.scene.environmentMap);
         if (map === null) {
             return {specular: this.defaultWhiteView, irradiance: this.defaultWhiteView};
         }
@@ -2723,11 +2754,13 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         // placeholder: reflect the ambient color instead (a uniform environment), not a white sky, which would rim
         // every object with a light outline at grazing angles.
         const env = this.scene.environmentColor;
-        const sky = this.scene.environmentMap === null ? this.scene.ambientColor : null;
+        // a map still being made again on this device (after a device loss) counts as none for now
+        const hasMap = this.scene.environmentMap?.device === this.device;
+        const sky = hasMap ? null : this.scene.ambientColor;
         f32[ENVIRONMENT_SLOT] = srgbToLinear(env[0]) * srgbToLinear(sky?.[0] ?? 1);
         f32[ENVIRONMENT_SLOT + 1] = srgbToLinear(env[1]) * srgbToLinear(sky?.[1] ?? 1);
         f32[ENVIRONMENT_SLOT + 2] = srgbToLinear(env[2]) * srgbToLinear(sky?.[2] ?? 1);
-        f32[ENVIRONMENT_SLOT + 3] = this.scene.environmentMap !== null ? 1.0 : 0.0; // its irradiance counts
+        f32[ENVIRONMENT_SLOT + 3] = hasMap ? 1.0 : 0.0; // its irradiance counts
 
         f32.set(this.currentInvVP, INV_VP_SLOT);
         if (cam) {
@@ -2977,6 +3010,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 uniforms: new Float32Array(MATERIAL_BUFFER_SIZE / 4).fill(Number.NaN),
                 maps: [null, null, null, null, null, null],
                 samplerKeys: [-1, -1, -1, -1, -1, -1],
+                versions: [-1, -1, -1, -1, -1, -1],
                 bindGroup: null,
                 lastFrame: -1,
             };
@@ -2997,11 +3031,13 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         // rebuilt when a map, or how one is sampled, changed
         let changed = res.bindGroup === null;
         for (let m = 0; m < 6; m++) {
-            const map = materialMap(material, m);
+            const map = this.usable(materialMap(material, m));
             const key = samplerKey(map);
-            if (res.maps[m] !== map || res.samplerKeys[m] !== key) {
+            const version = map?.version ?? -1;
+            if (res.maps[m] !== map || res.samplerKeys[m] !== key || res.versions[m] !== version) {
                 res.maps[m] = map;
                 res.samplerKeys[m] = key;
+                res.versions[m] = version;
                 changed = true;
             }
         }

@@ -69,16 +69,30 @@ export const doc = defineDoc({
                         'Render targets relative to the canvas: 0.5 renders at half (pixelated with BlitPass filter "nearest"), 2 supersamples (filter "linear"). Canvas outputs keep the canvas size.',
                 },
                 {
+                    name: "options.recover",
+                    type: "boolean",
+                    default: "true",
+                    description:
+                        "After a device loss, get a new device and carry on: passes initialize again, meshes and materials upload again, Textures are made again from their source. Loops keep running.",
+                },
+                {
                     name: "onDeviceLost",
                     type: "((info) => void) | null",
                     default: "null",
                     description:
-                        "Called if the GPU device is lost. Frames stop; recover with a new Renderer, passes, materials and textures.",
+                        "Called when the GPU device is lost (a driver reset, the GPU process crashing). Without recover, frames stop there.",
+                },
+                {
+                    name: "onDeviceRestored",
+                    type: "((device) => void) | null",
+                    default: "null",
+                    description:
+                        "Called once a new device replaces the lost one. Remake what you made on the old device yourself (your own buffers, GPU textures).",
                 },
                 {
                     name: "lost",
                     type: "boolean",
-                    description: "True once the device is lost.",
+                    description: "True while there is no device to draw with.",
                 },
                 {
                     name: "destroy()",
@@ -237,7 +251,7 @@ function Notes() {
 renderer.renderFrame(graph);               // one frame, e.g. a still or a test
 const stop = renderer.startAnimation(graph); // or a loop
 canvas.width = 800;                        // the next frame renders at the new size
-renderer.onDeviceLost = () => restart();   // rare: a driver reset; everything GPU must be made again
+renderer.onDeviceRestored = (device) => remakeMine(device); // after a driver reset: Glaze's own objects carry over
 stop();
 renderer.destroy();                        // destroys passes, textures and the device`}
             />

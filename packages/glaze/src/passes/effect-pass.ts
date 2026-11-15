@@ -1,6 +1,7 @@
 import {COLOR_WGSL} from "../color";
 import type {PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
+import {Texture} from "../texture";
 import type {TextureUniform, Uniform} from "../uniform";
 
 // ─── WGSL boilerplate ─────────────────────────────────────────────────────────
@@ -112,7 +113,10 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
 
     private textureSamplers: GPUSampler[] = [];
     private textureBindGroup: GPUBindGroup | null = null;
-    private lastTextureRefs: (GPUTexture | null)[] = [];
+    private lastTextureRefs: (GPUTexture | Texture | null)[] = [];
+    /** A Texture's version when bound: restored on a new device or updated, it is bound again. */
+    private lastTextureVersions: number[] = [];
+    private warnedRestore = false;
 
     private width = 1;
     private height = 1;
@@ -162,6 +166,8 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
             }),
         );
         this.lastTextureRefs = this.textureEntries.map(() => null);
+        this.lastTextureVersions = this.textureEntries.map(() => -1);
+        this.textureBindGroup = null;
 
         this.buildPipeline();
     }
@@ -184,11 +190,13 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
         }
 
         if (this.textureEntries.length > 0) {
-            let dirty = false;
+            let dirty = this.textureBindGroup === null; // still waiting on one
             for (let i = 0; i < this.textureEntries.length; i++) {
                 const tex = this.textureEntries[i]![1].texture;
-                if (tex !== this.lastTextureRefs[i]) {
+                const version = tex instanceof Texture ? tex.version : -1;
+                if (tex !== this.lastTextureRefs[i] || version !== this.lastTextureVersions[i]) {
                     this.lastTextureRefs[i] = tex;
+                    this.lastTextureVersions[i] = version;
                     dirty = true;
                 }
             }
@@ -381,18 +389,42 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
     }
 
     private buildTextureBindGroup(): GPUBindGroup | null {
+        // wait until every texture is loaded (and on this device)
+        const views: GPUTextureView[] = [];
         for (const [, u] of this.textureEntries) {
-            if (!u.texture) {
+            const view = this.textureView(u.texture);
+            if (view === null) {
                 return null;
-            } // wait until all textures are loaded
+            }
+            views.push(view);
         }
         const layout = this.pipeline.getBindGroupLayout(this.texturesGroup);
         const entries: GPUBindGroupEntry[] = [];
         for (let i = 0; i < this.textureEntries.length; i++) {
             entries.push({binding: i * 2, resource: this.textureSamplers[i]!});
-            entries.push({binding: i * 2 + 1, resource: this.textureEntries[i]![1].texture!.createView()});
+            entries.push({binding: i * 2 + 1, resource: views[i]!});
         }
         return this.device.createBindGroup({layout, entries});
+    }
+
+    /** A texture's view; null while it is missing, or being made again on this device after a device loss. */
+    private textureView(texture: GPUTexture | Texture | null): GPUTextureView | null {
+        if (texture === null) {
+            return null;
+        }
+        if (!(texture instanceof Texture)) {
+            return texture.createView();
+        }
+        if (texture.device !== this.device) {
+            texture.restore(this.device).catch((error: unknown) => {
+                if (!this.warnedRestore) {
+                    this.warnedRestore = true;
+                    console.warn("[glaze] EffectPass: a texture could not be made again on the new device:", error);
+                }
+            });
+            return null;
+        }
+        return texture.view;
     }
 
     private inputViewsMatch(views: GPUTextureView[]): boolean {

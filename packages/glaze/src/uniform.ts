@@ -1,3 +1,5 @@
+import type {Texture} from "./texture";
+
 // ─── Uniform interface (type namespace) ───────────────────────────────────────
 
 /**
@@ -177,13 +179,13 @@ export const Uniform = {
 // ─── TextureUniform ───────────────────────────────────────────────────────────
 
 /**
- * An externally-provided GPU texture for use with EffectPass.
- * Set .texture after async loading; EffectPass detects changes each frame.
+ * A texture for an EffectPass: a Texture (made again on a new device after a device loss) or a GPUTexture of your
+ * own. Set .texture after async loading; EffectPass detects changes each frame.
  */
 export class TextureUniform {
-    texture: GPUTexture | null;
+    texture: GPUTexture | Texture | null;
     filter: "nearest" | "linear";
-    constructor(filter: "nearest" | "linear" = "nearest", texture: GPUTexture | null = null) {
+    constructor(filter: "nearest" | "linear" = "nearest", texture: GPUTexture | Texture | null = null) {
         this.filter = filter;
         this.texture = texture;
     }

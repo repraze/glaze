@@ -49,14 +49,33 @@ export function mipLevelCount(width: number, height: number): number {
     return Math.floor(Math.log2(Math.max(width, height, 1))) + 1;
 }
 
+/** How a texture's pixels are made again on a new device, after the old one was lost. */
+type PixelSource =
+    | {kind: "bytes"; data: Uint8Array}
+    | {kind: "half"; data: Uint16Array}
+    | {kind: "blob"; blob: Blob}
+    | {kind: "image"; source: GPUCopyExternalImageSource};
+
+/** The GPU side of a texture, shared by the Textures withSettings makes. */
+interface SharedPixels {
+    version: number;
+    tex: GPUTexture;
+    view: GPUTextureView;
+    srgbView: GPUTextureView;
+    device: GPUDevice;
+    source: PixelSource | null;
+    mipmaps: boolean;
+    restoring: Promise<void> | null;
+}
+
 /**
- * An RGBA8 texture for materials and environments, uploaded once. Mip levels are generated on the GPU.
+ * An RGBA8 (or half-float HDR) texture for materials and environments. Mip levels are generated on the GPU.
+ *
+ * A texture remembers what it was made from (its bytes, its image file, or the source of its last updateFrom),
+ * so that after a GPU device loss it can be made again on the new device: passes call {@link Texture.restore}
+ * on their own when they meet a texture from another device.
  */
 export class Texture {
-    /** The stored values (data maps). */
-    readonly view: GPUTextureView;
-    /** The same pixels decoded from sRGB to linear light as they are sampled (albedo, emissive, environments). */
-    readonly srgbView: GPUTextureView;
     readonly width: number;
     readonly height: number;
     readonly colorSpace: ColorSpace;
@@ -72,80 +91,156 @@ export class Texture {
     transform: UvTransform = {offset: [0, 0], scale: [1, 1], rotation: 0, uvSet: 0};
     /** Half-float pixels (from `fromFloat32` / `fromHDR`): values above 1, already linear light. */
     readonly hdr: boolean;
-    private readonly tex: GPUTexture;
+    /** Shared with every Texture made by withSettings: they read the same pixels. */
+    private readonly pixels: SharedPixels;
 
-    private constructor(tex: GPUTexture, colorSpace: ColorSpace, pixels: {version: number} = {version: 0}) {
-        this.tex = tex;
-        this.pixels = pixels;
+    private constructor(
+        device: GPUDevice,
+        tex: GPUTexture,
+        colorSpace: ColorSpace,
+        source: PixelSource | null,
+        shared?: SharedPixels,
+    ) {
         this.width = tex.width;
         this.height = tex.height;
         this.hdr = tex.format === HDR_FORMAT;
         this.colorSpace = this.hdr ? "linear-srgb" : colorSpace;
-        this.view = tex.createView();
-        // half floats hold linear light already: both views read them as they are
-        this.srgbView = this.hdr ? this.view : tex.createView({format: SRGB_FORMAT});
+        this.pixels = shared ?? {
+            version: 0,
+            tex,
+            ...views(tex),
+            device,
+            source,
+            mipmaps: tex.mipLevelCount > 1,
+            restoring: null,
+        };
+    }
+
+    /** The stored values (data maps). */
+    get view(): GPUTextureView {
+        return this.pixels.view;
+    }
+
+    /** The same pixels decoded from sRGB to linear light as they are sampled (albedo, emissive, environments). */
+    get srgbView(): GPUTextureView {
+        return this.pixels.srgbView;
     }
 
     /** The GPU texture (for passes that process it, like an environment's prefiltering). */
     get texture(): GPUTexture {
-        return this.tex;
+        return this.pixels.tex;
     }
 
-    /** Bumped by `update` / `updateFrom`: what is derived from the pixels (a prefiltered environment) is redone. */
+    /** The device the pixels are on. */
+    get device(): GPUDevice {
+        return this.pixels.device;
+    }
+
+    /**
+     * Bumped by `update` / `updateFrom` / `restore`: what is derived from the pixels (a prefiltered environment,
+     * a bind group) is redone.
+     */
     get version(): number {
         return this.pixels.version;
     }
-    /** Shared with every Texture made by withSettings: they read the same pixels. */
-    private readonly pixels: {version: number};
+
+    get mipLevelCount(): number {
+        return this.pixels.tex.mipLevelCount;
+    }
 
     /**
      * Replaces the pixels with `data` (same size: 4 bytes a pixel, or 4 floats for an HDR texture) and regenerates
-     * the mip levels. Every material and pass using the texture sees the new pixels on the next frame.
+     * the mip levels. Every material and pass using the texture sees the new pixels on the next frame. The data is
+     * kept (as half floats for HDR) to make the texture again after a device loss.
      */
     update(device: GPUDevice, data: Uint8Array | Float32Array): this {
-        if (this.hdr) {
-            const half = new Uint16Array(this.width * this.height * 4);
-            for (let i = 0; i < half.length; i++) {
-                half[i] = toHalf(data[i] ?? 0);
-            }
-            device.queue.writeTexture({texture: this.tex}, half, {bytesPerRow: this.width * 8}, this.size());
-        } else {
-            device.queue.writeTexture(
-                {texture: this.tex},
-                data as Uint8Array<ArrayBuffer>,
-                {bytesPerRow: this.width * 4},
-                this.size(),
-            );
-        }
-        return this.afterWrite(device);
+        const source: PixelSource = this.hdr
+            ? {kind: "half", data: halfPixels(data, this.width * this.height * 4)}
+            : {kind: "bytes", data: data as Uint8Array};
+        this.write(device, source);
+        return this;
     }
 
     /**
      * Replaces the pixels with an image, canvas or video frame of the same size (a video texture: call it each
-     * frame), and regenerates the mip levels.
+     * frame), and regenerates the mip levels. After a device loss, the texture is made again from this source as
+     * it is then (an ImageBitmap must stay open for that).
      */
     updateFrom(device: GPUDevice, source: GPUCopyExternalImageSource): this {
         if (this.hdr) {
             throw new Error("Texture.updateFrom: HDR textures take float data (update)");
         }
-        device.queue.copyExternalImageToTexture({source}, {texture: this.tex}, this.size());
-        return this.afterWrite(device);
-    }
-
-    private size(): GPUExtent3DStrict {
-        return {width: this.width, height: this.height};
-    }
-
-    private afterWrite(device: GPUDevice): this {
-        generateMipmaps(device, this.tex, this.colorSpace);
-        this.pixels.version++;
+        this.write(device, {kind: "image", source});
         return this;
     }
 
-    get mipLevelCount(): number {
-        return this.tex.mipLevelCount;
+    /**
+     * Makes the pixels again on `device` from what the texture was made from (after the device it was on was
+     * lost). Passes call it on their own when they meet a texture from another device, drawing without it until
+     * it resolves. A texture with nothing to make it from (made with `fromGPUTexture`) stays as it was.
+     */
+    restore(device: GPUDevice): Promise<void> {
+        const px = this.pixels;
+        if (px.device === device) {
+            return Promise.resolve();
+        }
+        if (px.source === null) {
+            return Promise.reject(new Error("Texture.restore: nothing to make this texture from"));
+        }
+        if (px.restoring === null) {
+            const source = px.source;
+            px.restoring = (async () => {
+                try {
+                    if (source.kind === "blob") {
+                        const bitmap = await decode(source.blob, this.width, this.height);
+                        this.write(device, {kind: "image", source: bitmap}, source);
+                        bitmap.close();
+                    } else {
+                        this.write(device, source);
+                    }
+                } finally {
+                    px.restoring = null;
+                }
+            })();
+        }
+        return px.restoring;
     }
 
+    /** Uploads `source` (on `device`, a new GPU texture if it differs), regenerates mips, and keeps `keep`. */
+    private write(device: GPUDevice, source: PixelSource, keep: PixelSource = source): void {
+        const px = this.pixels;
+        if (px.device !== device) {
+            px.tex.destroy();
+            px.tex = this.hdr
+                ? createHalfTexture(device, this.width, this.height, px.mipmaps)
+                : createTexture(device, this.width, this.height, {mipmaps: px.mipmaps});
+            Object.assign(px, views(px.tex));
+            px.device = device;
+        }
+        const size = {width: this.width, height: this.height};
+        if (source.kind === "image") {
+            device.queue.copyExternalImageToTexture({source: source.source}, {texture: px.tex}, size);
+        } else if (source.kind === "half") {
+            device.queue.writeTexture(
+                {texture: px.tex},
+                source.data as Uint16Array<ArrayBuffer>,
+                {bytesPerRow: this.width * 8},
+                size,
+            );
+        } else if (source.kind === "bytes") {
+            device.queue.writeTexture(
+                {texture: px.tex},
+                source.data as Uint8Array<ArrayBuffer>,
+                {bytesPerRow: this.width * 4},
+                size,
+            );
+        }
+        generateMipmaps(device, px.tex, this.colorSpace);
+        px.source = keep;
+        px.version++;
+    }
+
+    /** The bytes are kept (not copied) to make the texture again after a device loss: don't reuse the array. */
     static fromPixels(
         device: GPUDevice,
         data: Uint8Array,
@@ -154,9 +249,14 @@ export class Texture {
         options: TextureOptions = {},
     ): Texture {
         const tex = createTexture(device, width, height, options);
-        device.queue.writeTexture({texture: tex}, data, {bytesPerRow: width * 4}, {width, height});
+        device.queue.writeTexture(
+            {texture: tex},
+            data as Uint8Array<ArrayBuffer>,
+            {bytesPerRow: width * 4},
+            {width, height},
+        );
         generateMipmaps(device, tex, options.colorSpace);
-        return new Texture(tex, options.colorSpace ?? "srgb");
+        return new Texture(device, tex, options.colorSpace ?? "srgb", {kind: "bytes", data});
     }
 
     /**
@@ -170,19 +270,11 @@ export class Texture {
         height: number,
         {mipmaps = true}: Pick<TextureOptions, "mipmaps"> = {},
     ): Texture {
-        const tex = device.createTexture({
-            size: {width, height},
-            format: HDR_FORMAT,
-            mipLevelCount: mipmaps ? mipLevelCount(width, height) : 1,
-            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-        });
-        const half = new Uint16Array(width * height * 4);
-        for (let i = 0; i < half.length; i++) {
-            half[i] = toHalf(data[i] ?? 0);
-        }
+        const tex = createHalfTexture(device, width, height, mipmaps);
+        const half = halfPixels(data, width * height * 4);
         device.queue.writeTexture({texture: tex}, half, {bytesPerRow: width * 8}, {width, height});
         generateMipmaps(device, tex, "linear-srgb");
-        return new Texture(tex, "linear-srgb");
+        return new Texture(device, tex, "linear-srgb", {kind: "half", data: half});
     }
 
     /** A Radiance `.hdr` (RGBE) image as an HDR texture: the usual format for environment maps. */
@@ -207,20 +299,19 @@ export class Texture {
         return Texture.fromBlob(device, await response.blob(), options);
     }
 
+    /** The (compressed) blob is kept to decode again after a device loss. */
     static async fromBlob(device: GPUDevice, blob: Blob, options: TextureOptions = {}): Promise<Texture> {
         // Pixels as stored: no color-space conversion or premultiplication (normal and ORM maps are data). An image
         // larger than the GPU allows is scaled down to fit.
         const max = device.limits.maxTextureDimension2D;
-        let bitmap = await createImageBitmap(blob, {colorSpaceConversion: "none", premultiplyAlpha: "none"});
+        let bitmap = await decode(blob);
         if (bitmap.width > max || bitmap.height > max) {
             const scale = max / Math.max(bitmap.width, bitmap.height);
-            const resized = await createImageBitmap(bitmap, {
-                colorSpaceConversion: "none",
-                premultiplyAlpha: "none",
-                resizeWidth: Math.max(1, Math.floor(bitmap.width * scale)),
-                resizeHeight: Math.max(1, Math.floor(bitmap.height * scale)),
-                resizeQuality: "high",
-            });
+            const resized = await decode(
+                bitmap,
+                Math.max(1, Math.floor(bitmap.width * scale)),
+                Math.max(1, Math.floor(bitmap.height * scale)),
+            );
             bitmap.close();
             bitmap = resized;
         }
@@ -232,7 +323,15 @@ export class Texture {
         );
         bitmap.close();
         generateMipmaps(device, tex, options.colorSpace);
-        return new Texture(tex, options.colorSpace ?? "srgb");
+        return new Texture(device, tex, options.colorSpace ?? "srgb", {kind: "blob", blob});
+    }
+
+    /**
+     * Wraps a GPU texture you made (rgba8unorm with an rgba8unorm-srgb view format, or rgba16float). Glaze can't
+     * make it again after a device loss: restore it yourself in `renderer.onDeviceRestored`.
+     */
+    static fromGPUTexture(device: GPUDevice, texture: GPUTexture, colorSpace: ColorSpace = "srgb"): Texture {
+        return new Texture(device, texture, colorSpace, null);
     }
 
     /**
@@ -246,15 +345,49 @@ export class Texture {
         sampling?: Partial<TextureSampling>;
         transform?: Partial<UvTransform>;
     }): Texture {
-        const copy = new Texture(this.tex, this.colorSpace, this.pixels);
+        const px = this.pixels;
+        const copy = new Texture(px.device, px.tex, this.colorSpace, px.source, px);
         copy.sampling = {...this.sampling, ...sampling};
         copy.transform = {...this.transform, ...transform};
         return copy;
     }
 
     destroy(): void {
-        this.tex.destroy();
+        this.pixels.tex.destroy();
     }
+}
+
+function views(tex: GPUTexture): {view: GPUTextureView; srgbView: GPUTextureView} {
+    const view = tex.createView();
+    // half floats hold linear light already: both views read them as they are
+    return {view, srgbView: tex.format === HDR_FORMAT ? view : tex.createView({format: SRGB_FORMAT})};
+}
+
+function decode(source: ImageBitmapSource, width?: number, height?: number): Promise<ImageBitmap> {
+    return createImageBitmap(source, {
+        colorSpaceConversion: "none",
+        premultiplyAlpha: "none",
+        ...(width !== undefined && height !== undefined
+            ? {resizeWidth: width, resizeHeight: height, resizeQuality: "high" as const}
+            : {}),
+    });
+}
+
+function halfPixels(data: ArrayLike<number>, count: number): Uint16Array<ArrayBuffer> {
+    const half = new Uint16Array(count);
+    for (let i = 0; i < count; i++) {
+        half[i] = toHalf(data[i] ?? 0);
+    }
+    return half;
+}
+
+function createHalfTexture(device: GPUDevice, width: number, height: number, mipmaps: boolean): GPUTexture {
+    return device.createTexture({
+        size: {width, height},
+        format: HDR_FORMAT,
+        mipLevelCount: mipmaps ? mipLevelCount(width, height) : 1,
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
 }
 
 const SRGB_FORMAT = "rgba8unorm-srgb";

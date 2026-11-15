@@ -80,11 +80,15 @@ renderer.renderFrame(graph); // one frame; renderFrame(graph, seconds) drives gl
 const stop = renderer.startAnimation(graph); // or a loop; also accepts ({time, delta}) => graph
 canvas.width = 800; // frames render at the canvas's size: set it and the targets follow
 renderer.renderScale = 0.5; // render targets at half the canvas (pixelated with BlitPass filter "nearest"); 2 supersamples
-renderer.onDeviceLost = (info) => restart(); // rare (driver reset): every GPU resource must be made again
+renderer.onDeviceRestored = (device) => remakeMine(device); // after a device loss, a new device carries on
 renderer.destroy(); // stops loops, destroys the passes it initialized, their textures and the device
 ```
 
-`renderer.device`, `.adapter`, `.context` and `.format` are public for your own resources. `Renderer.init` raises
+`renderer.device`, `.adapter`, `.context` and `.format` are public for your own resources. When the device is lost (a
+driver reset, the GPU process crashing), the renderer gets a new one and carries on (`recover: false` to stop
+instead): passes initialize again, meshes and materials upload again, and Textures are made again from what they
+were made from (their bytes, image file, or the source of their last `updateFrom`). `renderer.device` is then the
+new device; remake your own GPU objects in `onDeviceRestored`. `Renderer.init` raises
 the buffer and attachment limits to the adapter's and accepts `requiredFeatures` / `requiredLimits`.
 `startAnimation(graph, {maxDelta})` caps a frame's step (0.1 s), so a hidden tab resumes where it was.
 
@@ -215,7 +219,10 @@ the GPU (`{mipmaps: false}` to skip). `texture.sampling` (`wrapU`/`wrapV`: repea
 `minFilter`: linear, nearest; `anisotropy`, default 8) and `texture.transform` (`offset`, `scale`, `rotation`, `uvSet`
 0 or 1) can change any time; `texture.withSettings({sampling?, transform?})` shares the pixels with other settings.
 `texture.update(device, data)` / `updateFrom(device, imageOrCanvasOrVideo)` replace the pixels (same size) and
-regenerate the mips.
+regenerate the mips. A texture keeps its source (bytes, the image file, its last `updateFrom` source) and is made
+again on a new device after a device loss (`texture.restore(device)`, which passes call on their own).
+`Texture.fromGPUTexture(device, gpuTexture)` wraps a texture of your own. An EffectPass `TextureUniform` takes a
+Texture or a GPUTexture.
 
 Alpha follows glTF: `opacity` multiplies the albedo map's alpha, and `alphaMode` is `"opaque"` (ignored), `"mask"`
 (cut below `alphaCutoff`, default 0.5: leaves, lace) or `"blend"` (see-through: drawn after lighting, farthest
