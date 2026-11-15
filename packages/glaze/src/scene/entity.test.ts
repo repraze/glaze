@@ -149,6 +149,8 @@ describe("Entity names", () => {
         });
         assert.deepEqual(seen, ["root", "a", "b"]);
         assert.equal(root.find("nope"), null);
+        assert.deepEqual(root.findAll("b"), [deep, b]);
+        assert.deepEqual(root.findAll("nope"), []);
     });
 });
 

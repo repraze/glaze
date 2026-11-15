@@ -42,7 +42,7 @@ export const doc = defineDoc({
         {
             title: "Straight to the canvas",
             description:
-                "With colorFormat set to the canvas format, colorSpace 'srgb' and canvasSlot 'color', the pass is the whole graph: it encodes for the screen itself, no blit, no tone mapping (values above 1 clip).",
+                "With colorFormat set to the canvas format, colorSpace 'srgb' and canvasSlot 'color', the pass is the whole graph: it encodes for the screen itself, no blit, no tone mapping (values above 1 clip), and blend materials mix encoded values rather than linear light.",
             component: Direct,
             layout: "full",
         },
@@ -69,7 +69,7 @@ export const doc = defineDoc({
                     type: '"linear-srgb" | "srgb"',
                     default: '"linear-srgb"',
                     description:
-                        "What 'color' holds: linear light for a BlitPass to tone map and encode, or 'srgb' encoded for the screen (straight to the canvas).",
+                        "What 'color' holds: linear light for a BlitPass to tone map and encode, or 'srgb' encoded for the screen (straight to the canvas). With 'srgb', blend materials mix encoded values, so see-through edges look darker than through a BlitPass.",
                 },
                 {
                     name: "shadowMapSize",

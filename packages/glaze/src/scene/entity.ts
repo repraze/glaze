@@ -110,6 +110,20 @@ export class Entity {
         return found;
     }
 
+    /**
+     * Every entity named `name` in this subtree (this one included), depth first. Names need not be unique: a glTF
+     * mesh used by several nodes gives each instance the same part names, so look up from the instance or use this.
+     */
+    findAll(name: string): Entity[] {
+        const found: Entity[] = [];
+        this.traverse((e) => {
+            if (e.name === name) {
+                found.push(e);
+            }
+        });
+        return found;
+    }
+
     // ─── Rotation ─────────────────────────────────────────────────────────────
 
     /** Sets the rotation from Euler angles in radians (gl-matrix's default order, as `quat.fromEuler`). */

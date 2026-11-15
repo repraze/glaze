@@ -227,7 +227,7 @@ occlusion source, occlusion is 1. `normalScale` and `occlusionStrength` scale th
 
 `loadGltf(device, url, {resolveUri?})` / `parseGltf(device, bytes)` → `GltfModel` `{root, nodes, meshes, materials,
 textures, animations, skins, lights, destroy()}`: a `.glb` or `.gltf` (external or data-URI buffers and images) as an
-entity tree. Nodes keep their names (`root.find("Icing")`) and transforms; a one-primitive node is the `Mesh` itself,
+entity tree. Nodes keep their names (`root.find("Icing")`, or `findAll` when several share one) and transforms; a one-primitive node is the `Mesh` itself,
 otherwise it holds a `Mesh` per primitive; geometry, materials and textures are shared across nodes. Normalized and
 sparse attributes, vertex colors, two UV sets, samplers, KHR_texture_transform, KHR_lights_punctual,
 KHR_materials_emissive_strength, skins and morph targets are read; a file requiring another extension (Draco,

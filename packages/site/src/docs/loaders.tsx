@@ -76,7 +76,10 @@ export const doc = defineDoc({
                     type: "Box3",
                     description: "World box around a subtree's meshes: frame or centre a model.",
                 },
-                {name: "entity.name / find(name) / traverse(fn)", type: "string / Entity | null / void"},
+                {
+                    name: "entity.name / find(name) / findAll(name) / traverse(fn)",
+                    type: "string / Entity | null / Entity[] / void",
+                },
                 {name: "parseGLB(buffer)", type: "GLBPrimitive[]", description: "One entry per mesh primitive."},
                 {
                     name: "loadGLBFromURL(url)",

@@ -1269,7 +1269,9 @@ export interface DeferredScenePassOptions {
     colorFormat?: GPUTextureFormat;
     /**
      * What the 'color' output holds. `"linear-srgb"` (default): linear light, for a BlitPass (or your own pass) to
-     * tone map and encode. `"srgb"`: encoded for the screen, when this pass renders straight to the canvas.
+     * tone map and encode. `"srgb"`: encoded for the screen, when this pass renders straight to the canvas. Blend materials
+     * then mix encoded values (gamma-space blending): edges of see-through surfaces look darker than through a
+     * BlitPass, which blends in linear light and encodes after.
      */
     colorSpace?: ColorSpace;
     /**
