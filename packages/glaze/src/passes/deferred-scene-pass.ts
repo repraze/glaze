@@ -863,21 +863,26 @@ fn pcf(map: texture_depth_2d_array, layer: i32, uv: vec2<f32>, depth: f32, radiu
 }
 
 // The blockers between a point and the light, within 'radius' texels: x = their mean stored depth, y = how many.
-// Depth is reversed: a blocker, nearer the light, stores more than the point's own depth.
+// Depth is reversed: a blocker, nearer the light, stores more than the point's own depth. Each tap reads the
+// 2×2 block around it: a see-through caster fills one texel of each 2×2 by its pattern, so a single texel per
+// tap can miss it everywhere (a fully lit speck inside its soft shadow).
 fn findBlockers(map: texture_depth_2d_array, layer: i32, uv: vec2<f32>, depth: f32, radius: f32, samples: u32, size: f32, rotation: f32) -> vec2<f32> {
-    let n = min(samples, 16u);
+    let n = max(min(samples, 16u) / 2u, 1u);
     var sum = 0.0;
     var count = 0.0;
-    let maxCoord = vec2<i32>(i32(size) - 1);
+    let maxCoord = vec2<i32>(i32(size) - 2);
     for (var i = 0u; i < n; i++) {
         let r = sqrt((f32(i) + 0.5) / f32(n)) * radius;
         let a = f32(i) * 2.39996323 + rotation;
-        let coord = clamp(vec2<i32>(floor(uv * size + vec2<f32>(cos(a), sin(a)) * r)), vec2<i32>(0), maxCoord);
-        let d = textureLoad(map, coord, layer, 0);
-        if (d > depth) {
-            sum += d;
-            count += 1.0;
-        }
+        let base = clamp(vec2<i32>(floor(uv * size + vec2<f32>(cos(a), sin(a)) * r - 0.5)), vec2<i32>(0), maxCoord);
+        let d = vec4<f32>(
+            textureLoad(map, base, layer, 0),
+            textureLoad(map, base + vec2<i32>(1, 0), layer, 0),
+            textureLoad(map, base + vec2<i32>(0, 1), layer, 0),
+            textureLoad(map, base + vec2<i32>(1, 1), layer, 0));
+        let hit = select(vec4<f32>(0.0), vec4<f32>(1.0), d > vec4<f32>(depth));
+        sum += dot(d, hit);
+        count += dot(hit, vec4<f32>(1.0));
     }
     return vec2<f32>(sum / max(count, 1.0), count);
 }
