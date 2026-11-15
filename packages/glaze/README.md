@@ -152,14 +152,18 @@ reflections from `scene.environmentMap`, prefiltered by roughness on the GPU, wi
 4 directional, 8 point and 4 spot lights (the ones nearest the view when there are more); any can cast shadows.
 Meshes outside the camera's view are skipped (`mesh.frustumCulled`).
 
-| Output     | Format                        | Contents                            |
-| ---------- | ----------------------------- | ----------------------------------- |
-| `color`    | `colorFormat` (`rgba16float`) | the lit scene                       |
-| `albedo`   | `rgba8unorm`                  | rgb base color, a ambient occlusion |
-| `normal`   | `rgba16float`                 | rgb world normal, a roughness       |
-| `worldPos` | `rgba16float`                 | rgb world position, a metallic      |
-| `emissive` | `rgba16float`                 | rgb emission, a receives shadow     |
-| `depth`    | `depth24plus`                 | depth                               |
+| Output     | Format                        | Contents                                     |
+| ---------- | ----------------------------- | -------------------------------------------- |
+| `color`    | `colorFormat` (`rgba16float`) | the lit scene                                |
+| `albedo`   | `rgba8unorm`                  | rgb base color, a ambient occlusion          |
+| `normal`   | `rgba16float`                 | rgb world normal, a roughness                |
+| `material` | `rgba8unorm`                  | rg geometric normal (octahedral), b metallic |
+| `emissive` | `rgba16float`                 | rgb emission, a receives shadow              |
+| `depth`    | `depth24plus`                 | depth                                        |
+
+World positions are not stored: rebuild them from depth with the camera's inverse view-projection,
+`p = invViewProjection · (ndc.xy, depth, 1)` then `p.xyz / p.w`. The geometric normal (the vertex normal, before
+normal maps) is what shadow lookups offset along.
 
 Set `colorFormat: renderer.format` and `canvasSlot: "color"` to render straight to the canvas.
 

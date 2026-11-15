@@ -265,16 +265,16 @@ function GBufferSlide() {
         );
         scene.add(mesh);
         const graph = new RenderGraph();
-        const {albedo, normal, worldPos, emissive} = graph.addPass(new DeferredScenePass({scene}));
+        const {albedo, normal, material, emissive} = graph.addPass(new DeferredScenePass({scene}));
         const split = new SplitViewPass({
             slots: [
                 {input: "albedo", rect: {x: 0, y: 0, w: 0.5, h: 0.5}, colorSpace: "linear-srgb"},
                 {input: "normal", rect: {x: 0.5, y: 0, w: 0.5, h: 0.5}},
-                {input: "worldPos", rect: {x: 0, y: 0.5, w: 0.5, h: 0.5}},
+                {input: "material", rect: {x: 0, y: 0.5, w: 0.5, h: 0.5}},
                 {input: "emissive", rect: {x: 0.5, y: 0.5, w: 0.5, h: 0.5}, colorSpace: "linear-srgb"},
             ],
         });
-        graph.addPass(split, {albedo, normal, worldPos, emissive}, {canvasSlot: "canvas"});
+        graph.addPass(split, {albedo, normal, material, emissive}, {canvasSlot: "canvas"});
         return ({time}) => {
             palette.apply();
             orbit(camera, {distance: 3.4, elevation: 25, azimuth: time * 20});
@@ -286,10 +286,10 @@ function GBufferSlide() {
         <Slide
             icon={Grid2x2Icon}
             title="The G-buffer"
-            description="Albedo, normals, positions and emission, as outputs."
+            description="Albedo, normals, material and emission, as outputs."
         >
             <GlazeCanvas
-                label="Four views of a torus: base color, normals, world positions and emission"
+                label="Four views of a torus: base color, normals, surface material and emission"
                 setup={setup}
             />
         </Slide>

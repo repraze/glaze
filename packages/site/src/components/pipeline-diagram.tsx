@@ -17,7 +17,7 @@ const STAGES: {id: PipelineStage; title: string; caption: string; items: string[
         id: "deferred",
         title: "DeferredScenePass",
         caption: "G-buffer, shadows, then lighting",
-        items: ["albedo", "normal", "worldPos", "emissive", "depth"],
+        items: ["albedo", "normal", "material", "emissive", "depth"],
         edge: "color",
     },
     {

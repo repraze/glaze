@@ -97,7 +97,7 @@ export const doc = defineDoc({
                 {name: "color", type: "colorFormat", description: "The lit scene (HDR by default)."},
                 {name: "albedo", type: "rgba8unorm", description: "rgb base color, a ambient occlusion."},
                 {name: "normal", type: "rgba16float", description: "rgb world normal, a roughness."},
-                {name: "worldPos", type: "rgba16float", description: "rgb world position, a metallic."},
+                {name: "material", type: "rgba8unorm", description: "rg geometric normal (octahedral), b metallic."},
                 {name: "emissive", type: "rgba16float", description: "rgb emission, a receives shadow."},
                 {name: "depth", type: "depth24plus", description: "Bind with {depth: true} in a ShaderPass input."},
             ],
@@ -125,8 +125,8 @@ function Notes() {
                 <ol className="flex list-decimal flex-col gap-1.5 pl-5 text-sm text-muted-foreground">
                     <li>Shadow maps for every light with castShadow, from meshes with castShadow.</li>
                     <li>
-                        G-buffer: each mesh writes albedo, normal, position, emission and material scalars. Normal maps
-                        and parallax occlusion pick a compiled pipeline variant per material.
+                        G-buffer: each mesh writes albedo, normal, material and emission; positions come back from
+                        depth. Normal maps and parallax occlusion pick a compiled pipeline variant per material.
                     </li>
                     <li>
                         Lighting: one fullscreen pass reads the G-buffer and sums Cook-Torrance BRDF contributions from

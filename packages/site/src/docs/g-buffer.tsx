@@ -22,14 +22,14 @@ export const doc = defineDoc({
     title: "G-buffer",
     category: "Pipeline",
     description:
-        "The deferred pass first writes what every pixel is made of (base color, normal, position, emission, material scalars, depth) into textures, then lights from those. Each texture is an output slot: read it for debugging, SSAO, outlines or any effect of your own.",
+        "The deferred pass first writes what every pixel is made of (base color, normal, material, emission, depth) into textures, then lights from those. Each texture is an output slot: read it for debugging, SSAO, outlines or any effect of your own.",
     engineFile: "passes/deferred-scene-pass.ts",
     order: 5,
     demos: [
         {
             title: "G-buffer viewer",
             description:
-                "Ported from the repraze.com lab: SplitViewPass draws four G-buffer outputs into the four quarters of the canvas (albedo, normal, world position, emission).",
+                "Ported from the repraze.com lab: SplitViewPass draws four G-buffer outputs into the four quarters of the canvas (albedo, normal, material, emission).",
             component: Viewer,
             layout: "full",
         },
@@ -57,13 +57,23 @@ export const doc = defineDoc({
                     type: "rgba16float",
                     description: "rgb: world-space normal (normal map applied) · a: roughness.",
                 },
-                {name: "worldPos", type: "rgba16float", description: "rgb: world-space position · a: metallic."},
+                {
+                    name: "material",
+                    type: "rgba8unorm",
+                    description:
+                        "rg: geometric normal, before normal maps (octahedral: decode to a unit vector) · b: metallic. Shadow lookups offset along it.",
+                },
                 {
                     name: "emissive",
                     type: "rgba16float",
                     description: "rgb: emission × intensity · a: receives shadow (0/1).",
                 },
-                {name: "depth", type: "depth24plus", description: "Hardware depth; sample it as texture_depth_2d."},
+                {
+                    name: "depth",
+                    type: "depth24plus",
+                    description:
+                        "Hardware depth; sample it as texture_depth_2d. World positions come back from it (see below).",
+                },
             ],
         },
         {
@@ -99,6 +109,18 @@ const outline = new ShaderPass({
 });
 graph.addPass(outline, {color, normal, depth}, {canvasSlot: "canvas"});`}
             />
+            <p className="text-sm text-muted-foreground">
+                World positions are not stored: depth holds them more precisely than a half-float texture would far from
+                the origin. Pass the inverse of camera.getViewProjectionMatrix(aspect) as a uniform (an EffectPass) and
+                rebuild them:
+            </p>
+            <Code
+                code={`fn worldPosition(pixel: vec2<i32>, size: vec2<f32>) -> vec3<f32> {
+    let ndc = vec2<f32>((f32(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (f32(pixel.y) + 0.5) / size.y * 2.0);
+    let p = params.invViewProjection * vec4<f32>(ndc, textureLoad(depthTex, pixel, 0), 1.0);
+    return p.xyz / p.w;
+}`}
+            />
         </section>
     );
 }
@@ -118,7 +140,7 @@ export function Viewer() {
             }
         >
             <GlazeCanvas
-                label="Four views of one shape: its base color, its normals, its world positions and its emission"
+                label="Four views of one shape: its base color, its normals, its material and its emission"
                 setup={({orbitControls}) => {
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
@@ -146,16 +168,25 @@ export function Viewer() {
                     const scenePass = new DeferredScenePass({scene});
                     const split = new SplitViewPass({
                         slots: [
-                            // albedo and emissive are light (encoded for the screen), normals and positions data
+                            // albedo and emissive are light (encoded for the screen), normals and material data
                             {input: "albedo", rect: {x: 0, y: 0, w: 0.5, h: 0.5}, colorSpace: "linear-srgb"},
                             {input: "normal", rect: {x: 0.5, y: 0, w: 0.5, h: 0.5}},
-                            {input: "worldPos", rect: {x: 0, y: 0.5, w: 0.5, h: 0.5}},
+                            {input: "material", rect: {x: 0, y: 0.5, w: 0.5, h: 0.5}},
                             {input: "emissive", rect: {x: 0.5, y: 0.5, w: 0.5, h: 0.5}, colorSpace: "linear-srgb"},
                         ],
                     });
                     const graph = new RenderGraph();
-                    const {albedo, normal, worldPos, emissive} = graph.addPass(scenePass);
-                    graph.addPass(split, {albedo, normal, worldPos, emissive}, {canvasSlot: "canvas"});
+                    const gbuffer = graph.addPass(scenePass);
+                    graph.addPass(
+                        split,
+                        {
+                            albedo: gbuffer.albedo,
+                            normal: gbuffer.normal,
+                            material: gbuffer.material,
+                            emissive: gbuffer.emissive,
+                        },
+                        {canvasSlot: "canvas"},
+                    );
 
                     return ({time}) => {
                         palette.apply();
@@ -212,7 +243,7 @@ export function OneChannel() {
                     scene.add(mesh);
 
                     const scenePass = new DeferredScenePass({scene});
-                    // light is tone mapped and encoded; normals and positions are shown as stored
+                    // light is tone mapped and encoded; normals and material are shown as stored
                     const lightBlit = new BlitPass({input: "source", toneMapping: "aces"});
                     const dataBlit = new BlitPass({input: "source", inputColorSpace: "srgb"});
                     return ({time}) => {
@@ -220,7 +251,7 @@ export function OneChannel() {
                         mesh.setEuler(time * 0.3, time * 0.5, 0);
                         const graph = new RenderGraph();
                         const outputs = graph.addPass(scenePass);
-                        const data = live.current === "normal" || live.current === "worldPos";
+                        const data = live.current === "normal" || live.current === "material";
                         graph.addPass(
                             data ? dataBlit : lightBlit,
                             {source: outputs[live.current]},
@@ -234,11 +265,11 @@ export function OneChannel() {
     );
 }
 
-type Channel = "color" | "albedo" | "normal" | "worldPos";
+type Channel = "color" | "albedo" | "normal" | "material";
 
 const CHANNELS: {value: Channel; label: string}[] = [
     {value: "color", label: "Lit"},
     {value: "albedo", label: "Albedo"},
     {value: "normal", label: "Normal"},
-    {value: "worldPos", label: "Position"},
+    {value: "material", label: "Material"},
 ];

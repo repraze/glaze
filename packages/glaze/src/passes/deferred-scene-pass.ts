@@ -406,6 +406,8 @@ struct Surface {
     albedo:    vec3<f32>,
     alpha:     f32,
     normal:    vec3<f32>,
+    // the interpolated vertex normal (facing the viewer), before normal mapping: shadow lookups move along it
+    geometricNormal: vec3<f32>,
     roughness: f32,
     metallic:  f32,
     ao:        f32,
@@ -477,6 +479,7 @@ ${
     s.albedo    = texAlbedo4.rgb * mat.albedo.rgb * input.color.rgb;
     s.alpha     = alpha;
     s.normal    = shadingNormal;
+    s.geometricNormal = N;
     s.roughness = clamp(mr.g * mat.roughness, 0.0, 1.0);
     // specular anti-aliasing (Kaplanyan & Tokuyoshi): where the normal turns within a pixel, widen the lobe by
     // that spread, so dense or bumpy surfaces don't sparkle with highlights thinner than a pixel
@@ -492,15 +495,34 @@ ${
 `;
 }
 
+/** Unit vectors folded onto an octahedron, as two 0..1 values (Cigolle et al. 2014): a normal in two channels. */
+const OCTAHEDRAL_WGSL = /* wgsl */ `
+fn octEncode(n: vec3<f32>) -> vec2<f32> {
+    let p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    let signs = select(vec2<f32>(-1.0), vec2<f32>(1.0), p >= vec2<f32>(0.0));
+    return select(p, (1.0 - abs(p.yx)) * signs, n.z < 0.0) * 0.5 + 0.5;
+}
+
+fn octDecode(e: vec2<f32>) -> vec3<f32> {
+    let f = e * 2.0 - 1.0;
+    var n = vec3<f32>(f, 1.0 - abs(f.x) - abs(f.y));
+    let t = max(-n.z, 0.0);
+    n.x += select(t, -t, n.x >= 0.0);
+    n.y += select(t, -t, n.y >= 0.0);
+    return normalize(n);
+}
+`;
+
 function buildGBufferShader(f: GBufferFeatures): string {
     return /* wgsl */ `
 ${buildSurfaceWgsl(f)}
 ${COVERAGE_AO_WGSL}
+${OCTAHEDRAL_WGSL}
 
 struct GBufferOutput {
     @location(0) albedo:   vec4<f32>,
     @location(1) normal:   vec4<f32>,
-    @location(2) worldPos: vec4<f32>,
+    @location(2) material: vec4<f32>,
     @location(3) emissive: vec4<f32>,
 };
 
@@ -510,7 +532,7 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> GBu
     var out: GBufferOutput;
     out.albedo   = vec4<f32>(s.albedo, encodeCoverageAo(s.ao));
     out.normal   = vec4<f32>(s.normal, s.roughness);
-    out.worldPos = vec4<f32>(input.worldPos, s.metallic);
+    out.material = vec4<f32>(octEncode(s.geometricNormal), s.metallic, 1.0);
     out.emissive = vec4<f32>(s.emissive, model.flags.x);
     return out;
 }
@@ -542,7 +564,7 @@ ${shadeWgsl(sizes)}
 @fragment
 fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4<f32> {
     let s = surface(input, frontFacing);
-    let lit = shade(s.albedo, s.ao, s.normal, s.roughness, s.metallic, input.worldPos, model.flags.x, input.clipPos.xy) + s.emissive;
+    let lit = shade(s.albedo, s.ao, s.normal, s.geometricNormal, s.roughness, s.metallic, input.worldPos, model.flags.x, input.clipPos.xy) + s.emissive;
     let c = ${encode ? "linearToSrgb(lit)" : "lit"};
     return vec4<f32>(c * s.alpha, s.alpha); // premultiplied: blend one, one-minus-src-alpha
 }
@@ -790,6 +812,12 @@ fn shadowNoise(pixel: vec2<f32>) -> f32 {
 
 // Where a point is looked up in a shadow map: off the surface along its normal (more at grazing light, where a
 // face would otherwise shadow itself) and toward the light, both in shadow texels of world size 'texel'.
+// How much a surface faces a shadow-casting light, by its geometric normal: a normal map can tilt bumps toward a
+// light the surface itself faces away from, but the surface is still in its own shadow there.
+fn facingLight(Ng: vec3<f32>, L: vec3<f32>) -> f32 {
+    return smoothstep(0.0, 0.05, dot(Ng, L));
+}
+
 fn shadowLookup(worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>, texel: f32, bias: vec4<f32>) -> vec3<f32> {
     let NdotL    = clamp(dot(N, L), 0.0, 1.0);
     let sinTheta = sqrt(1.0 - NdotL * NdotL);
@@ -935,7 +963,7 @@ fn perspectiveShadow(map: texture_depth_2d_array, layer: i32, lsMatrix: mat4x4<f
     return pcf(map, layer, wide.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5), wide.z, radius, samples, size, rotation);
 }
 
-fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f32, worldPos: vec3<f32>, receiveShadow: f32, pixel: vec2<f32>) -> vec3<f32> {
+fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, Ng: vec3<f32>, roughnessIn: f32, metallic: f32, worldPos: vec3<f32>, receiveShadow: f32, pixel: vec2<f32>) -> vec3<f32> {
     let roughness = clamp(roughnessIn, 0.05, 1.0);
     let V     = normalize(lighting.cameraPosition.xyz - worldPos);
     let NdotV = max(dot(N, V), 0.001);
@@ -966,7 +994,12 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let L  = normalize(-dl.direction.xyz);
         var shadow = 1.0;
         if (dl.direction.w > 0.0 && receiveShadow > 0.0 && dot(N, L) > 0.0) {
-            shadow = mix(1.0, directionalShadow(i, worldPos, N, L, rotation), receiveShadow * dl.direction.w);
+            let facing = facingLight(Ng, L);
+            var raw = 0.0;
+            if (facing > 0.0) {
+                raw = facing * directionalShadow(i, worldPos, Ng, L, rotation);
+            }
+            shadow = mix(1.0, raw, receiveShadow * dl.direction.w);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV, energy)
                   * dl.colorIntensity.rgb * dl.colorIntensity.w * shadow;
@@ -980,22 +1013,26 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let attn    = falloff(dist, pl.position.w);
         var shadow  = 1.0;
         if (pl.flags.x > 0.0 && receiveShadow > 0.0 && attn > 0.0 && dot(N, L) > 0.0) {
-            // the face is chosen by where the lookup lands (off the surface), not by the surface point itself
-            let lf    = shadowLookup(worldPos, N, L, 2.0 * dist * ${pointFaceScale(sizes.point).toFixed(6)} / f32(${sizes.point}), pl.shadowBias) - pl.position.xyz;
-            let absLF = abs(lf);
-            var faceIdx: i32;
-            if (absLF.x >= absLF.y && absLF.x >= absLF.z) {
-                faceIdx = select(1, 0, lf.x > 0.0);
-            } else if (absLF.y >= absLF.z) {
-                faceIdx = select(3, 2, lf.y > 0.0);
-            } else {
-                faceIdx = select(5, 4, lf.z > 0.0);
+            let facing = facingLight(Ng, L);
+            var raw = 0.0;
+            if (facing > 0.0) {
+                // the face is chosen by where the lookup lands (off the surface), not by the surface point itself
+                let lf    = shadowLookup(worldPos, Ng, L, 2.0 * dist * ${pointFaceScale(sizes.point).toFixed(6)} / f32(${sizes.point}), pl.shadowBias) - pl.position.xyz;
+                let absLF = abs(lf);
+                var faceIdx: i32;
+                if (absLF.x >= absLF.y && absLF.x >= absLF.z) {
+                    faceIdx = select(1, 0, lf.x > 0.0);
+                } else if (absLF.y >= absLF.z) {
+                    faceIdx = select(3, 2, lf.y > 0.0);
+                } else {
+                    faceIdx = select(5, 4, lf.z > 0.0);
+                }
+                let layer = i32(i) * 6 + faceIdx;
+                // a face a little over 90° wide: a texel spans 2 · scale · depth / size, the depth being the largest axis
+                let texel = 2.0 * ${pointFaceScale(sizes.point).toFixed(6)} * max(absLF.x, max(absLF.y, absLF.z)) / f32(${sizes.point});
+                raw = facing * perspectiveShadow(pointShadowMaps, layer, pointShadowMatrices.matrices[layer], worldPos, Ng, L, texel, pl.shadow, pl.shadowBias, f32(${sizes.point}), rotation);
             }
-            let layer = i32(i) * 6 + faceIdx;
-            // a face a little over 90° wide: a texel spans 2 · scale · depth / size, the depth being the largest axis
-            let texel = 2.0 * ${pointFaceScale(sizes.point).toFixed(6)} * max(absLF.x, max(absLF.y, absLF.z)) / f32(${sizes.point});
-            let raw   = perspectiveShadow(pointShadowMaps, layer, pointShadowMatrices.matrices[layer], worldPos, N, L, texel, pl.shadow, pl.shadowBias, f32(${sizes.point}), rotation);
-            shadow    = mix(1.0, raw, receiveShadow * pl.flags.x);
+            shadow = mix(1.0, raw, receiveShadow * pl.flags.x);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV, energy)
                   * pl.colorIntensity.rgb * (pl.colorIntensity.w * attn * shadow);
@@ -1011,11 +1048,15 @@ fn shade(albedo: vec3<f32>, ao: f32, N: vec3<f32>, roughnessIn: f32, metallic: f
         let spotAttn = smoothstep(sl.angles.y, sl.angles.x, theta);
         var shadow = 1.0;
         if (sl.direction.w > 0.0 && receiveShadow > 0.0 && attn * spotAttn > 0.0 && dot(N, L) > 0.0) {
-            // the cone spans 2 · tan(outer) · depth over the map
-            let cosOuter = max(sl.angles.y, 0.01);
-            let depth    = dot(-toLight, normalize(sl.direction.xyz));
-            let texel    = 2.0 * depth * sqrt(1.0 - cosOuter * cosOuter) / cosOuter / f32(${sizes.spot});
-            let raw = perspectiveShadow(spotShadowMaps, i32(i), sl.lightSpaceMatrix, worldPos, N, L, texel, sl.shadow, sl.shadowBias, f32(${sizes.spot}), rotation);
+            let facing = facingLight(Ng, L);
+            var raw = 0.0;
+            if (facing > 0.0) {
+                // the cone spans 2 · tan(outer) · depth over the map
+                let cosOuter = max(sl.angles.y, 0.01);
+                let depth    = dot(-toLight, normalize(sl.direction.xyz));
+                let texel    = 2.0 * depth * sqrt(1.0 - cosOuter * cosOuter) / cosOuter / f32(${sizes.spot});
+                raw = facing * perspectiveShadow(spotShadowMaps, i32(i), sl.lightSpaceMatrix, worldPos, Ng, L, texel, sl.shadow, sl.shadowBias, f32(${sizes.spot}), rotation);
+            }
             shadow = mix(1.0, raw, receiveShadow * sl.direction.w);
         }
         colour += brdf_direct(N, V, L, albedo, roughness, metallic, F0, NdotV, energy)
@@ -1044,6 +1085,7 @@ function buildLightingShader(encode: boolean, sizes: ShadowSizes): string {
     return /* wgsl */ `
 ${COLOR_WGSL}
 ${COVERAGE_AO_WGSL}
+${OCTAHEDRAL_WGSL}
 ${LIGHT_STRUCTS_WGSL}
 
 // lit in linear light; encoded here only when this pass writes straight to the screen
@@ -1053,7 +1095,8 @@ fn outputColor(c: vec3<f32>, alpha: f32) -> vec4<f32> {
 
 @group(0) @binding(0) var albedoTex:         texture_2d<f32>;
 @group(0) @binding(1) var normalTex:         texture_2d<f32>;
-@group(0) @binding(2) var posTex:            texture_2d<f32>;
+@group(0) @binding(2) var materialTex:       texture_2d<f32>;
+@group(0) @binding(9) var depthTex:          texture_depth_2d;
 @group(0) @binding(3) var<uniform> lighting: LightingUniforms;
 @group(0) @binding(4) var emissiveTex:       texture_2d<f32>;
 @group(0) @binding(5) var environmentMap:    texture_2d<f32>; // prefiltered by roughness
@@ -1094,12 +1137,9 @@ fn sampleBgMap(dir: vec3<f32>) -> vec3<f32> {
 fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
     let coord   = vec2<i32>(i32(input.pos.x), i32(input.pos.y));
     let albedo4 = textureLoad(albedoTex, coord, 0);
+    let dims    = vec2<f32>(textureDimensions(albedoTex));
+    let ndc     = vec2<f32>(input.pos.x / dims.x * 2.0 - 1.0, 1.0 - input.pos.y / dims.y * 2.0);
     if (albedo4.a < AO_FLOOR * 0.5) {
-        let dims = vec2<f32>(textureDimensions(albedoTex));
-        let ndc  = vec2<f32>(
-            input.pos.x / dims.x * 2.0 - 1.0,
-            1.0 - input.pos.y / dims.y * 2.0,
-        );
         let wp4 = lighting.invViewProjection * vec4<f32>(ndc, 1.0, 1.0);
         let ray = normalize(wp4.xyz / wp4.w - lighting.cameraPosition.xyz);
         // premultiplied: with a see-through background (scene.backgroundAlpha) the page shows behind
@@ -1107,15 +1147,18 @@ fn fs_main(input: QuadInput) -> @location(0) vec4<f32> {
         return outputColor(sampleBgMap(ray) * lighting.backgroundColor.rgb * bgAlpha, bgAlpha);
     }
     let normalSample   = textureLoad(normalTex, coord, 0);
-    let posSample      = textureLoad(posTex, coord, 0);
+    let materialSample = textureLoad(materialTex, coord, 0);
     let emissiveSample = textureLoad(emissiveTex, coord, 0);
+    // the world position, back from depth: exact where a stored half float would lose precision far from the origin
+    let wp4 = lighting.invViewProjection * vec4<f32>(ndc, textureLoad(depthTex, coord, 0), 1.0);
     let colour = shade(
         albedo4.rgb,
         decodeCoverageAo(albedo4.a),
         normalize(normalSample.xyz),
+        octDecode(materialSample.xy),
         normalSample.w,
-        clamp(posSample.w, 0.0, 1.0),
-        posSample.xyz,
+        materialSample.z,
+        wp4.xyz / wp4.w,
         emissiveSample.w,
         input.pos.xy,
     );
@@ -1290,12 +1333,13 @@ export interface DeferredScenePassOptions {
  *   color    — final lit scene (colorFormat, default rgba16float)
  *   albedo   — rgba8unorm-srgb, rgb=albedo (linear when sampled), a=ambient occlusion
  *   normal   — rgba16float, rgb=world normal, a=roughness
- *   worldPos — rgba16float, rgb=world position, a=metallic
+ *   material — rgba8unorm, rg=geometric normal (octahedral), b=metallic
+ *       (world positions come back from depth: invViewProjection · (ndc.xy, depth, 1))
  *   emissive — rgba16float, rgb=emissive, a=receiveShadow
  *   depth    — depth24plus
  */
 /** The G-buffer and lit outputs a DeferredScenePass exposes to the graph. */
-export type DeferredSceneOutput = "color" | "albedo" | "normal" | "worldPos" | "emissive" | "depth";
+export type DeferredSceneOutput = "color" | "albedo" | "normal" | "material" | "emissive" | "depth";
 
 export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     readonly inputSlots: PassInputSlot[] = [];
@@ -1430,7 +1474,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             {name: "color", spec: {format: colorFormat}},
             {name: "albedo", spec: {format: "rgba8unorm-srgb"}}, // linear albedo, sRGB-encoded storage keeps darks
             {name: "normal", spec: {format: "rgba16float"}},
-            {name: "worldPos", spec: {format: "rgba16float"}},
+            {name: "material", spec: {format: "rgba8unorm"}},
             {name: "emissive", spec: {format: "rgba16float"}},
             {name: "depth", spec: {format: "depth24plus"}},
         ];
@@ -1683,6 +1727,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 {binding: 6, visibility: GPUShaderStage.FRAGMENT, sampler: {type: "filtering"}},
                 {binding: 7, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
                 {binding: 8, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "float"}},
+                {binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "depth"}},
             ],
         });
 
@@ -1976,7 +2021,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                     targets: [
                         {format: "rgba8unorm-srgb"},
                         {format: "rgba16float"},
-                        {format: "rgba16float"},
+                        {format: "rgba8unorm"},
                         {format: "rgba16float"},
                     ],
                 },
@@ -2353,7 +2398,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             colorAttachments: [
                 {view: outputs["albedo"]!, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
                 {view: outputs["normal"]!, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
-                {view: outputs["worldPos"]!, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
+                {view: outputs["material"]!, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
                 {view: outputs["emissive"]!, clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store"},
             ],
             depthStencilAttachment: {
@@ -2401,13 +2446,14 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             entries: [
                 {binding: 0, resource: outputs["albedo"]!},
                 {binding: 1, resource: outputs["normal"]!},
-                {binding: 2, resource: outputs["worldPos"]!},
+                {binding: 2, resource: outputs["material"]!},
                 {binding: 3, resource: {buffer: this.lightingBuffer}},
                 {binding: 4, resource: outputs["emissive"]!},
                 {binding: 5, resource: env.specular},
                 {binding: 6, resource: this.envSampler},
                 {binding: 7, resource: bgView},
                 {binding: 8, resource: env.irradiance},
+                {binding: 9, resource: outputs["depth"]!},
             ],
         });
 
