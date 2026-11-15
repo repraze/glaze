@@ -1,5 +1,7 @@
 import {mat4, type ReadonlyMat4, type ReadonlyVec3, vec3, vec4} from "gl-matrix";
 
+import {reverseDepth} from "../math/transform";
+
 /** Most cascades a directional light can split its shadow into. */
 export const MAX_CASCADES = 4;
 
@@ -161,6 +163,7 @@ export function fitCascades(out: Cascade[], fit: CascadeFit): number {
         const near = Math.min(centerAlong - radius, fit.casterStart) - 0.5;
         const farAlong = centerAlong + radius + 0.5;
         mat4.orthoZO(proj, lc[0] - radius, lc[0] + radius, lc[1] - radius, lc[1] + radius, near, farAlong);
+        reverseDepth(proj); // as every shadow map: 1 at the near plane
         mat4.multiply(cascade.matrix, proj, view);
         cascade.far = to;
         cascade.texel = texel;

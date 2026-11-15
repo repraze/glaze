@@ -45,3 +45,14 @@ export function decompose(m: ReadonlyMat4, position: vec3 | null, rotation: quat
         quat.normalize(rotation, rotation);
     }
 }
+
+/**
+ * Turns a projection's depth around in place: depth d becomes 1 - d (near plane at 1, far at 0). With float
+ * depth this spreads precision evenly over distance instead of crowding it near the far plane.
+ */
+export function reverseDepth(projection: mat4): mat4 {
+    for (let c = 0; c < 4; c++) {
+        projection[c * 4 + 2] = projection[c * 4 + 3]! - projection[c * 4 + 2]!;
+    }
+    return projection;
+}

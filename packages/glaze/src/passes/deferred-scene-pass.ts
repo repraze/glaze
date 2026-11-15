@@ -4,7 +4,7 @@ import {COLOR_WGSL, type ColorSpace, srgbToLinear} from "../color";
 import type {Geometry} from "../geometry/geometry";
 import {MATERIAL_BUFFER_SIZE, materialMap, packMaterialUniforms, PBRMaterial} from "../material/material";
 import {sphere} from "../math/bounds";
-import {isMirrored} from "../math/transform";
+import {isMirrored, reverseDepth} from "../math/transform";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
 import type {Camera} from "../scene/camera";
@@ -614,13 +614,17 @@ const CUBE_FACE_DIRS: {dir: [number, number, number]; up: [number, number, numbe
     {dir: [0, 0, -1], up: [0, -1, 0]},
 ];
 
-/** Shadow casters write depth pushed back along their slope, so a lit face doesn't compare against itself. */
+/**
+ * Shadow maps store reversed depth (1 at the light's near plane, 0 at its far one): float depth then keeps its
+ * precision far from a point or spot light, where perspective depth would crowd toward 1. Casters write depth
+ * pushed back (toward 0) along their slope, so a lit face doesn't compare against itself.
+ */
 const SHADOW_DEPTH_STATE: GPUDepthStencilState = {
     format: "depth32float",
     depthWriteEnabled: true,
-    depthCompare: "less",
-    depthBias: 2,
-    depthBiasSlopeScale: 1.5,
+    depthCompare: "greater",
+    depthBias: -2,
+    depthBiasSlopeScale: -1.5,
 };
 
 /** Near plane of the spot and point shadow projections. */
@@ -859,6 +863,7 @@ fn pcf(map: texture_depth_2d_array, layer: i32, uv: vec2<f32>, depth: f32, radiu
 }
 
 // The blockers between a point and the light, within 'radius' texels: x = their mean stored depth, y = how many.
+// Depth is reversed: a blocker, nearer the light, stores more than the point's own depth.
 fn findBlockers(map: texture_depth_2d_array, layer: i32, uv: vec2<f32>, depth: f32, radius: f32, samples: u32, size: f32, rotation: f32) -> vec2<f32> {
     let n = min(samples, 16u);
     var sum = 0.0;
@@ -869,7 +874,7 @@ fn findBlockers(map: texture_depth_2d_array, layer: i32, uv: vec2<f32>, depth: f
         let a = f32(i) * 2.39996323 + rotation;
         let coord = clamp(vec2<i32>(floor(uv * size + vec2<f32>(cos(a), sin(a)) * r)), vec2<i32>(0), maxCoord);
         let d = textureLoad(map, coord, layer, 0);
-        if (d < depth) {
+        if (d > depth) {
             sum += d;
             count += 1.0;
         }
@@ -885,7 +890,7 @@ fn cascadeShadow(i: u32, c: u32, worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>
     let p     = shadowLookup(worldPos, N, L, texel, dl.shadowBias);
     let ndc   = (dl.matrices[c] * vec4<f32>(p, 1.0)).xyz;
     let uv    = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
-    if (ndc.z > 1.0 || any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { return 1.0; }
+    if (ndc.z < 0.0 || any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { return 1.0; }
     let layer   = i32(dl.shadow.x) + i32(c);
     let tanHalf = dl.shadow.z;
     let samples = u32(dl.shadow.w);
@@ -895,10 +900,10 @@ fn cascadeShadow(i: u32, c: u32, worldPos: vec3<f32>, N: vec3<f32>, L: vec3<f32>
     }
     let range    = dl.depthRanges[c];
     // a blocker can sit anywhere up the light: search as wide as the farthest one would blur
-    let search   = clamp(tanHalf * ndc.z * range / texel, 1.0, 24.0);
+    let search   = clamp(tanHalf * (1.0 - ndc.z) * range / texel, 1.0, 24.0);
     let blockers = findBlockers(dirShadowMaps, layer, uv, ndc.z, search, samples, size, rotation);
     if (blockers.y == 0.0) { return 1.0; }
-    let penumbra = (ndc.z - blockers.x) * range * 2.0 * tanHalf; // world width
+    let penumbra = (blockers.x - ndc.z) * range * 2.0 * tanHalf; // world width
     let radius   = clamp(0.5 * penumbra / texel + 1.0, 1.0, 32.0);
     // a wide filter reaches across the surface's own slope: move off it by as much
     let wide = (dl.matrices[c] * vec4<f32>(widenLookup(p, N, L, texel, radius), 1.0)).xyz;
@@ -954,7 +959,7 @@ fn perspectiveShadow(map: texture_depth_2d_array, layer: i32, lsMatrix: mat4x4<f
     let search   = clamp(lightRadius / texel, 1.0, 24.0);
     let blockers = findBlockers(map, layer, uv, ndc.z, search, samples, size, rotation);
     if (blockers.y == 0.0) { return 1.0; }
-    let blocker  = near * far / (far - blockers.x * (far - near));
+    let blocker  = near * far / (near + blockers.x * (far - near)); // reversed depth back to distance
     let penumbra = 2.0 * lightRadius * max(receiver - blocker, 0.0) / max(blocker, near);
     let radius   = clamp(0.5 * penumbra / texel + 1.0, 1.0, 32.0);
     // a wide filter reaches across the surface's own slope: move off it by as much
@@ -2086,7 +2091,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
         this.shadowSampler = device.createSampler({
             label: "DeferredScene:shadowSampler",
-            compare: "less",
+            compare: "greater", // lit where the lookup is nearer the light (larger, in reversed depth) than the map
             magFilter: "linear",
             minFilter: "linear",
             addressModeU: "clamp-to-edge",
@@ -2332,7 +2337,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                             baseArrayLayer: layer,
                             arrayLayerCount: 1,
                         }),
-                        depthClearValue: 1.0,
+                        depthClearValue: 0.0, // reversed depth: far
                         depthLoadOp: "clear",
                         depthStoreOp: "store",
                     },
@@ -2368,7 +2373,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                             baseArrayLayer: slot,
                             arrayLayerCount: 1,
                         }),
-                        depthClearValue: 1.0,
+                        depthClearValue: 0.0, // reversed depth: far
                         depthLoadOp: "clear",
                         depthStoreOp: "store",
                     },
@@ -2393,7 +2398,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 colorAttachments: [],
                 depthStencilAttachment: {
                     view: this.spotShadowTex.createView({dimension: "2d", baseArrayLayer: i, arrayLayerCount: 1}),
-                    depthClearValue: 1.0,
+                    depthClearValue: 0.0,
                     depthLoadOp: "clear",
                     depthStoreOp: "store",
                 },
@@ -2799,6 +2804,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
         const proj = mat4.create();
         mat4.perspectiveZO(proj, spotCone(light).outer * 2, 1.0, shadowNear(light), shadowFar(light));
+        reverseDepth(proj);
 
         const lsMatrix = mat4.create();
         mat4.multiply(lsMatrix, proj, view);
@@ -2821,6 +2827,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 shadowNear(light),
                 shadowFar(light),
             );
+            reverseDepth(proj);
             const vp = mat4.create();
             mat4.multiply(vp, proj, view);
             return vp;
