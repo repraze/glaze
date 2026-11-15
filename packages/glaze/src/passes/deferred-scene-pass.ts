@@ -165,6 +165,7 @@ ${
 `;
 }
 
+/** What picks a G-buffer pipeline variant: one compiled pipeline per combination (see precompile). */
 export interface GBufferFeatures {
     parallaxMapping: boolean; // heightMap is assigned
     normalMapping: boolean; // normalMap is assigned
@@ -1364,6 +1365,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private readonly outputColorSpace: ColorSpace;
 
     private device!: GPUDevice;
+    /** Between initialize and destroy: the device is live and the caches can fill. */
+    private ready = false;
+    /** Feature sets passed to precompile, compiled on every initialize. */
+    private readonly precompiled: GBufferFeatures[] = [];
 
     // G-buffer pipeline cache (one compiled variant per GBufferFeatures combination)
     private gbufferPipelineLayout!: GPUPipelineLayout;
@@ -1516,6 +1521,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         this.buildPipelines();
         this.buildShadowPipeline();
         this.initShadowMaps();
+        this.ready = true;
+        for (const f of this.precompiled) {
+            this.getOrCreateGBufferPipeline(f);
+        }
     }
 
     resize(_width: number, _height: number): void {
@@ -1615,6 +1624,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     }
 
     destroy(): void {
+        this.ready = false;
         this.gbufferPipelineCache.clear();
         this.forwardPipelineCache.clear();
         this.shadowPipelines.clear();
@@ -2070,6 +2080,11 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         return pipeline;
     }
 
+    /**
+     * Compiles G-buffer pipelines ahead of their first draw, so a material that needs a new variant does not
+     * stall the frame it appears in. Without arguments: normal and parallax mapping, each on or off. Before
+     * the pass is initialized (its first frame) the sets wait for it; they compile again on a new device.
+     */
     precompile(featureSets?: GBufferFeatures[]): void {
         const sets = featureSets ?? [
             {parallaxMapping: false, normalMapping: false},
@@ -2078,7 +2093,10 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             {parallaxMapping: true, normalMapping: true},
         ];
         for (const f of sets) {
-            this.getOrCreateGBufferPipeline(f);
+            this.precompiled.push(f);
+            if (this.ready) {
+                this.getOrCreateGBufferPipeline(f);
+            }
         }
     }
 
