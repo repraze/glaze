@@ -3,7 +3,7 @@ import {
     DeferredScenePass,
     DirectionalLight,
     Mesh,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
@@ -158,7 +158,7 @@ export function Viewer() {
                     );
 
                     const material = palette.emissive(
-                        palette.material(new PBRMaterial({roughness: 0.4, metallic: 0.3}), (c) => c.hues.red),
+                        palette.material(new PbrMaterial({roughness: 0.4, metallic: 0.3}), (c) => c.hues.red),
                         (c) => c.hues.purple,
                         0.4,
                     );
@@ -235,7 +235,7 @@ export function OneChannel() {
                     const mesh = new Mesh(
                         makeShape("icosphere", true),
                         palette.emissive(
-                            palette.material(new PBRMaterial({roughness: 0.6}), (c) => c.accent),
+                            palette.material(new PbrMaterial({roughness: 0.6}), (c) => c.accent),
                             (c) => c.accentFill,
                             0.3,
                         ),

@@ -8,7 +8,7 @@ import {
     EffectPass,
     linearToSrgb,
     Mesh,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
@@ -132,10 +132,10 @@ function Notes() {
                     </li>
                 </ul>
                 <Code
-                    code={`const material = new PBRMaterial({color: colorRgb("#ff9243")}); // as picked
+                    code={`const material = new PbrMaterial({color: colorRgb("#ff9243")}); // as picked
 setColorRgb(scene.backgroundColor, "#0c0c10");                      // per frame, no allocation
-const brick = await Texture.fromURL(device, "/brick.jpg");           // color: sRGB (default)
-const normals = await Texture.fromURL(device, "/brick-n.png", {colorSpace: "linear-srgb"}); // data
+const brick = await Texture.fromUrl(device, "/brick.jpg");           // color: sRGB (default)
+const normals = await Texture.fromUrl(device, "/brick-n.png", {colorSpace: "linear-srgb"}); // data
 
 graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas"}); // tone map, encode`}
                 />
@@ -325,7 +325,7 @@ export function ViewTransforms() {
                     scene.add(
                         new Mesh(
                             createPlane({width: 14, height: 14}),
-                            palette.material(new PBRMaterial({roughness: 0.9}), (c) => c.floor),
+                            palette.material(new PbrMaterial({roughness: 0.9}), (c) => c.floor),
                         ),
                     );
                     const ball = createIcosphere({radius: 0.55, subdivisions: 3});
@@ -336,13 +336,13 @@ export function ViewTransforms() {
                         (c) => c.hues.blue,
                     ];
                     paints.forEach((pick, i) => {
-                        const mesh = new Mesh(ball, palette.material(new PBRMaterial({roughness: 0.35}), pick));
+                        const mesh = new Mesh(ball, palette.material(new PbrMaterial({roughness: 0.35}), pick));
                         vec3.set(mesh.position, (i - 2) * 1.4, 0.55, 0);
                         scene.add(mesh);
                     });
                     const glow = new Mesh(
                         ball,
-                        palette.emissive(new PBRMaterial({color: [0, 0, 0]}), (c) => c.accentFill, 6),
+                        palette.emissive(new PbrMaterial({color: [0, 0, 0]}), (c) => c.accentFill, 6),
                     );
                     vec3.set(glow.position, 2 * 1.4, 0.55, 0);
                     scene.add(glow);

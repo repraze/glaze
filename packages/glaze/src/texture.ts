@@ -89,7 +89,7 @@ export class Texture {
     };
     /** Which UV set and how it is transformed (default: the first set, untransformed). */
     transform: UvTransform = {offset: [0, 0], scale: [1, 1], rotation: 0, uvSet: 0};
-    /** Half-float pixels (from `fromFloat32` / `fromHDR`): values above 1, already linear light. */
+    /** Half-float pixels (from `fromFloat32` / `fromHdr`): values above 1, already linear light. */
     readonly hdr: boolean;
     /** Shared with every Texture made by withSettings: they read the same pixels. */
     private readonly pixels: SharedPixels;
@@ -177,7 +177,7 @@ export class Texture {
     /**
      * Makes the pixels again on `device` from what the texture was made from (after the device it was on was
      * lost). Passes call it on their own when they meet a texture from another device, drawing without it until
-     * it resolves. A texture with nothing to make it from (made with `fromGPUTexture`) stays as it was.
+     * it resolves. A texture with nothing to make it from (made with `fromGpuTexture`) stays as it was.
      */
     restore(device: GPUDevice): Promise<void> {
         const px = this.pixels;
@@ -278,7 +278,7 @@ export class Texture {
     }
 
     /** A Radiance `.hdr` (RGBE) image as an HDR texture: the usual format for environment maps. */
-    static async fromHDR(
+    static async fromHdr(
         device: GPUDevice,
         url: string,
         options: Pick<TextureOptions, "mipmaps"> = {},
@@ -287,11 +287,11 @@ export class Texture {
         if (!response.ok) {
             throw new Error(`Texture: failed to fetch '${url}' (${response.status})`);
         }
-        const {data, width, height} = parseRGBE(await response.arrayBuffer());
+        const {data, width, height} = parseRgbe(await response.arrayBuffer());
         return Texture.fromFloat32(device, data, width, height, options);
     }
 
-    static async fromURL(device: GPUDevice, url: string, options: TextureOptions = {}): Promise<Texture> {
+    static async fromUrl(device: GPUDevice, url: string, options: TextureOptions = {}): Promise<Texture> {
         const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`Texture: failed to fetch '${url}' (${response.status})`);
@@ -330,7 +330,7 @@ export class Texture {
      * Wraps a GPU texture you made (rgba8unorm with an rgba8unorm-srgb view format, or rgba16float). Glaze can't
      * make it again after a device loss: restore it yourself in `renderer.onDeviceRestored`.
      */
-    static fromGPUTexture(device: GPUDevice, texture: GPUTexture, colorSpace: ColorSpace = "srgb"): Texture {
+    static fromGpuTexture(device: GPUDevice, texture: GPUTexture, colorSpace: ColorSpace = "srgb"): Texture {
         return new Texture(device, texture, colorSpace, null);
     }
 
@@ -422,7 +422,7 @@ export function toHalf(value: number): number {
 }
 
 /** Decodes a Radiance .hdr file (RGBE, flat or run-length encoded scanlines) to linear float RGBA, top row first. */
-export function parseRGBE(buffer: ArrayBuffer): {data: Float32Array; width: number; height: number} {
+export function parseRgbe(buffer: ArrayBuffer): {data: Float32Array; width: number; height: number} {
     const bytes = new Uint8Array(buffer);
     let pos = 0;
     const line = (): string => {

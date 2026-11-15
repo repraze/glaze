@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {describe, test} from "node:test";
 
-import {parseRGBE, toHalf} from "./texture";
+import {parseRgbe, toHalf} from "./texture";
 
 describe("toHalf", () => {
     test("exact values, rounding, overflow and tiny numbers", () => {
@@ -17,7 +17,7 @@ describe("toHalf", () => {
     });
 });
 
-describe("parseRGBE", () => {
+describe("parseRgbe", () => {
     const header = (w: number, h: number) =>
         new TextEncoder().encode(`#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y ${h} +X ${w}\n`);
     test("flat scanlines", () => {
@@ -25,7 +25,7 @@ describe("parseRGBE", () => {
         const bytes = new Uint8Array(head.length + 8);
         bytes.set(head);
         bytes.set([128, 64, 0, 129, 255, 255, 255, 0], head.length); // (128,64,0)·2^(1-8), then black
-        const {data, width, height} = parseRGBE(bytes.buffer);
+        const {data, width, height} = parseRgbe(bytes.buffer);
         assert.equal(width, 2);
         assert.equal(height, 1);
         assert.deepEqual(Array.from(data), [1, 0.5, 0, 1, 0, 0, 0, 1]);
@@ -38,7 +38,7 @@ describe("parseRGBE", () => {
         const bytes = new Uint8Array(head.length + body.length);
         bytes.set(head);
         bytes.set(body, head.length);
-        const {data} = parseRGBE(bytes.buffer);
+        const {data} = parseRgbe(bytes.buffer);
         for (let x = 0; x < 8; x++) {
             assert.deepEqual(Array.from(data.subarray(x * 4, x * 4 + 4)), [1, 1, 0, 1]);
         }

@@ -4,7 +4,7 @@ import {
     DirectionalLight,
     Geometry,
     Mesh,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
@@ -172,7 +172,7 @@ export function Shapes() {
                         ),
                     );
 
-                    const material = palette.material(new PBRMaterial({roughness: 0.35}), (c) => c.accent);
+                    const material = palette.material(new PbrMaterial({roughness: 0.35}), (c) => c.accent);
                     const cache = new Map<string, Mesh>();
                     let shown: Mesh | null = null;
 
@@ -261,7 +261,7 @@ export function Custom() {
                     );
                     const mesh = new Mesh(
                         geometry,
-                        palette.material(new PBRMaterial({roughness: 0.4}), (c) => c.hues.cyan),
+                        palette.material(new PbrMaterial({roughness: 0.4}), (c) => c.hues.cyan),
                     );
                     scene.add(mesh);
 

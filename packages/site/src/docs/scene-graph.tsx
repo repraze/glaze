@@ -7,7 +7,7 @@ import {
     DirectionalLight,
     Entity,
     Mesh,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     PointLight,
     RenderGraph,
@@ -67,7 +67,7 @@ export const doc = defineDoc({
                     type: "Texture | null",
                     default: "null",
                     description:
-                        "Equirectangular map for image-based light: prefiltered once on the GPU, so reflections blur with roughness and diffuse surfaces take its light too. HDR (Texture.fromHDR) for a sky brighter than 1.",
+                        "Equirectangular map for image-based light: prefiltered once on the GPU, so reflections blur with roughness and diffuse surfaces take its light too. HDR (Texture.fromHdr) for a sky brighter than 1.",
                 },
                 {
                     name: "backgroundMap",
@@ -214,7 +214,7 @@ export function Hierarchy() {
                     const sun = new Mesh(
                         createSphere({radius: 0.8, widthSegments: 32, heightSegments: 16}),
                         // black albedo on purpose: the sun only emits (× 1.2), in the accent's fill tier
-                        palette.emissive(new PBRMaterial({color: [0, 0, 0]}), (c) => c.accentFill, 1.2),
+                        palette.emissive(new PbrMaterial({color: [0, 0, 0]}), (c) => c.accentFill, 1.2),
                     );
                     sun.castShadow = false;
                     sun.add(palette.light(new PointLight({intensity: 160, range: 12}), (c) => c.accentFill));
@@ -225,13 +225,13 @@ export function Hierarchy() {
                     sun.add(planetPivot);
                     const planet = new Mesh(
                         createIcosphere({radius: 0.4, subdivisions: 3}),
-                        palette.material(new PBRMaterial({roughness: 0.6}), (c) => c.hues.cyan),
+                        palette.material(new PbrMaterial({roughness: 0.6}), (c) => c.hues.cyan),
                     );
                     vec3.set(planet.position, 3, 0, 0);
                     planetPivot.add(planet);
                     const ring = new Mesh(
                         createTorus({radius: 0.65, tube: 0.04, radialSegments: 8, tubularSegments: 64}),
-                        palette.material(new PBRMaterial({roughness: 0.3}), (c) => c.hues.purple),
+                        palette.material(new PbrMaterial({roughness: 0.3}), (c) => c.hues.purple),
                     );
                     ring.setEuler(Math.PI / 2.4, 0, 0);
                     planet.add(ring);
@@ -241,7 +241,7 @@ export function Hierarchy() {
                     planet.add(moonPivot);
                     const moon = new Mesh(
                         createIcosphere({radius: 0.15, subdivisions: 2}),
-                        palette.material(new PBRMaterial({roughness: 0.9}), (c) => c.neutral),
+                        palette.material(new PbrMaterial({roughness: 0.9}), (c) => c.neutral),
                     );
                     vec3.set(moon.position, 1.1, 0.2, 0);
                     moonPivot.add(moon);

@@ -8,9 +8,9 @@ export abstract class Material {
     abstract readonly type: string;
 }
 
-// ─── PBRMaterial ──────────────────────────────────────────────────────────────
+// ─── PbrMaterial ──────────────────────────────────────────────────────────────
 
-export interface PBRMaterialOptions {
+export interface PbrMaterialOptions {
     color?: ColorRgb;
     roughness?: number;
     metallic?: number;
@@ -22,7 +22,7 @@ export interface PBRMaterialOptions {
     normalScale?: number;
     /** How much the occlusion map darkens ambient light, 0..1 (glTF `occlusionTexture.strength`). Default 1. */
     occlusionStrength?: number;
-    /** Multiplies the albedo map's alpha (glTF baseColorFactor alpha). Default 1. */
+    /** Multiplies the color map's alpha (glTF baseColorFactor alpha). Default 1. */
     opacity?: number;
     /** How alpha is used. Default "opaque". */
     alphaMode?: AlphaMode;
@@ -42,7 +42,7 @@ export interface PBRMaterialOptions {
 export type ShadowSide = "front" | "back" | "both";
 
 /**
- * How a material's alpha (albedo map alpha × opacity) is used, after glTF's alphaMode:
+ * How a material's alpha (color map alpha × opacity) is used, after glTF's alphaMode:
  * - "opaque": ignored.
  * - "mask": a cutout: below alphaCutoff the surface is absent (leaves, lace, fences).
  * - "blend": see-through (glass, fades, ghosts). Drawn after the lit scene, farthest mesh first, with the same
@@ -76,10 +76,10 @@ export const MATERIAL_BUFFER_SIZE = 256;
 export const MATERIAL_MAP_ORDER = ["albedo", "normal", "emissive", "metallicRoughness", "height", "occlusion"] as const;
 
 /** A material's map number `i` in {@link MATERIAL_MAP_ORDER}, resolving the ORM fallbacks. */
-export function materialMap(mat: PBRMaterial, i: number): Texture | null {
+export function materialMap(mat: PbrMaterial, i: number): Texture | null {
     switch (i) {
         case 0:
-            return mat.albedoMap;
+            return mat.colorMap;
         case 1:
             return mat.normalMap;
         case 2:
@@ -97,7 +97,7 @@ export function materialMap(mat: PBRMaterial, i: number): Texture | null {
  * Pack the material's scalars into its uniform buffer layout (see above). GPU-free, exported for tests.
  * @internal
  */
-export function packMaterialUniforms(mat: PBRMaterial, out = new Float32Array(MATERIAL_BUFFER_SIZE / 4)): Float32Array {
+export function packMaterialUniforms(mat: PbrMaterial, out = new Float32Array(MATERIAL_BUFFER_SIZE / 4)): Float32Array {
     // colors are set in sRGB, lit in linear light
     out[0] = srgbToLinear(mat.color[0]);
     out[1] = srgbToLinear(mat.color[1]);
@@ -136,7 +136,7 @@ export function packMaterialUniforms(mat: PBRMaterial, out = new Float32Array(MA
 /**
  * Bind group bindings:
  *   0: uniform buffer (MaterialUniforms)
- *   1: albedoMap      texture_2d<f32>
+ *   1: colorMap      texture_2d<f32>
  *   2: matSampler     sampler         (shared for all maps)
  *   3: normalMap      texture_2d<f32>
  *   4: emissiveMap    texture_2d<f32>
@@ -145,14 +145,14 @@ export function packMaterialUniforms(mat: PBRMaterial, out = new Float32Array(MA
  *   7: occlusion      texture_2d<f32>  (R=occlusion):                occlusionMap ?? ormMap
  *
  * All maps fall back to a neutral 1×1 default when null:
- *   albedoMap    → white  (multiplier 1, uses mat albedo as-is)
+ *   colorMap    → white  (multiplier 1, uses mat albedo as-is)
  *   emissiveMap  → white  (multiplier 1, uses mat emissive as-is)
  *   metallic-roughness → white (roughness scale=1, metallic scale=1)
  *   occlusion    → white  (AO=1)
  *   normalMap    → flat   [128,128,255,255] → (0,0,1) in tangent space
  *   heightMap    → white  (heightScale=0 guard disables POM when no map set)
  */
-export class PBRMaterial extends Material {
+export class PbrMaterial extends Material {
     readonly type = "pbr";
 
     color: ColorRgb;
@@ -161,7 +161,7 @@ export class PBRMaterial extends Material {
     emissive: ColorRgb;
     emissiveIntensity: number;
 
-    albedoMap: Texture | null = null;
+    colorMap: Texture | null = null;
     normalMap: Texture | null = null;
     emissiveMap: Texture | null = null;
     /**
@@ -183,7 +183,7 @@ export class PBRMaterial extends Material {
     /** R=height (0=low, 1=high). Used for parallax occlusion mapping when heightScale > 0. */
     heightMap: Texture | null = null;
     heightScale: number = 0;
-    /** Multiplies the albedo map's alpha. */
+    /** Multiplies the color map's alpha. */
     opacity: number;
     alphaMode: AlphaMode;
     alphaCutoff: number;
@@ -204,7 +204,7 @@ export class PBRMaterial extends Material {
         alphaCutoff = 0.5,
         doubleSided = false,
         shadowSide,
-    }: PBRMaterialOptions = {}) {
+    }: PbrMaterialOptions = {}) {
         super();
         this.color = color;
         this.roughness = roughness;

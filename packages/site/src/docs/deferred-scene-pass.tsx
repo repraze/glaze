@@ -8,7 +8,7 @@ import {
     DeferredScenePass,
     DirectionalLight,
     Mesh,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     PointLight,
     RenderGraph,
@@ -203,7 +203,7 @@ export function LitScene() {
 
                     const floor = new Mesh(
                         createPlane({width: 12, height: 12}),
-                        palette.material(new PBRMaterial({roughness: 0.85}), (c) => c.floor),
+                        palette.material(new PbrMaterial({roughness: 0.85}), (c) => c.floor),
                     );
                     floor.castShadow = false;
                     scene.add(floor);
@@ -211,28 +211,28 @@ export function LitScene() {
                         [
                             new Mesh(
                                 createTorus({radius: 0.55, tube: 0.22, radialSegments: 32, tubularSegments: 64}),
-                                palette.material(new PBRMaterial({roughness: 0.25}), (c) => c.accent),
+                                palette.material(new PbrMaterial({roughness: 0.25}), (c) => c.accent),
                             ),
                             [-1.4, 0.75, 0],
                         ],
                         [
                             new Mesh(
                                 createCube({size: 1}),
-                                palette.material(new PBRMaterial({roughness: 0.15, metallic: 1}), (c) => c.neutral),
+                                palette.material(new PbrMaterial({roughness: 0.15, metallic: 1}), (c) => c.neutral),
                             ),
                             [0, 0.5, -0.8],
                         ],
                         [
                             new Mesh(
                                 createCone({radius: 0.5, height: 1.2, radialSegments: 32}),
-                                palette.material(new PBRMaterial({roughness: 0.5}), (c) => c.hues.purple),
+                                palette.material(new PbrMaterial({roughness: 0.5}), (c) => c.hues.purple),
                             ),
                             [1.4, 0.6, 0],
                         ],
                         [
                             new Mesh(
                                 createSphere({radius: 0.45, widthSegments: 32, heightSegments: 16}),
-                                palette.material(new PBRMaterial({roughness: 0.1, metallic: 1}), (c) => c.hues.yellow),
+                                palette.material(new PbrMaterial({roughness: 0.1, metallic: 1}), (c) => c.hues.yellow),
                             ),
                             [0.2, 0.45, 1],
                         ],
@@ -288,7 +288,7 @@ export function Direct() {
                     );
                     const torus = new Mesh(
                         createTorus({radius: 0.8, tube: 0.3, radialSegments: 48, tubularSegments: 96}),
-                        palette.material(new PBRMaterial({roughness: 0.3, metallic: 0.6}), (c) => c.accent),
+                        palette.material(new PbrMaterial({roughness: 0.3, metallic: 0.6}), (c) => c.accent),
                     );
                     scene.add(torus);
 

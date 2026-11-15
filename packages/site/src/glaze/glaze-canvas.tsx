@@ -223,7 +223,7 @@ export function GlazeCanvas({
             intersection.disconnect();
             size.disconnect();
             cancelAnimationFrame(raf);
-            input?.dispose();
+            input?.destroy();
             renderer?.destroy();
         };
     }, [maxPixelRatio, alphaMode]);

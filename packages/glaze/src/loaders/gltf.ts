@@ -3,7 +3,7 @@ import {quat, vec3} from "gl-matrix";
 import {AnimationClip, type AnimationTrack} from "../animation/clip";
 import {type ColorRgb, linearToSrgb} from "../color";
 import {computeTangents, Geometry} from "../geometry/geometry";
-import {PBRMaterial} from "../material/material";
+import {PbrMaterial} from "../material/material";
 import {decompose} from "../math/transform";
 import {Entity} from "../scene/entity";
 import {DirectionalLight, type Light, PointLight, SpotLight} from "../scene/light";
@@ -12,7 +12,7 @@ import {Skin, SkinnedMesh} from "../scene/skin";
 import type {Texture} from "../texture";
 import {
     checkRequiredExtensions,
-    createPBRMaterialFromGltf,
+    createPbrMaterialFromGltf,
     decodeDataUri,
     extractMaterial,
     type GltfJson,
@@ -34,7 +34,7 @@ export interface GltfModel {
     /** Every Mesh in the model. A glTF mesh used by several nodes shares its Geometry between them. */
     readonly meshes: readonly Mesh[];
     /** One material per glTF material, shared by every primitive that uses it. */
-    readonly materials: readonly PBRMaterial[];
+    readonly materials: readonly PbrMaterial[];
     /** Every GPU texture the model loaded (one per image). */
     readonly textures: readonly Texture[];
     /** The file's animations, targeting the entities in `nodes`: play them with an AnimationMixer. */
@@ -139,15 +139,15 @@ async function buildModel(
     const textureCache = new Map<GltfTextureSource, Promise<Texture>>();
     const materials = await Promise.all(
         (json.materials ?? []).map((_, i) =>
-            createPBRMaterialFromGltf(device, extractMaterial(json, buffers, i, imageCache), resolveUri, textureCache),
+            createPbrMaterialFromGltf(device, extractMaterial(json, buffers, i, imageCache), resolveUri, textureCache),
         ),
     );
     const textures = await Promise.all(textureCache.values());
     // a primitive without a material gets the glTF default: fully metallic and rough
-    let fallbackMaterial: PBRMaterial | null = null;
-    const materialFor = (index: number | undefined): PBRMaterial =>
+    let fallbackMaterial: PbrMaterial | null = null;
+    const materialFor = (index: number | undefined): PbrMaterial =>
         (index !== undefined ? materials[index] : undefined) ??
-        (fallbackMaterial ??= new PBRMaterial({metallic: 1, roughness: 1}));
+        (fallbackMaterial ??= new PbrMaterial({metallic: 1, roughness: 1}));
 
     // Geometry once per (mesh, primitive).
     const geometries = new Map<string, Geometry | null>();
@@ -190,10 +190,10 @@ async function buildModel(
         const gltfMesh = node.mesh !== undefined ? json.meshes?.[node.mesh] : undefined;
         const prims = (gltfMesh?.primitives ?? [])
             .map((prim, i) => ({geometry: geometryFor(node.mesh!, i), material: materialFor(prim.material)}))
-            .filter((p): p is {geometry: Geometry; material: PBRMaterial} => p.geometry !== null);
+            .filter((p): p is {geometry: Geometry; material: PbrMaterial} => p.geometry !== null);
 
         // a node with a skin draws its skinned primitives as SkinnedMeshes (the skin is attached below)
-        const makeMesh = (geometry: Geometry, material: PBRMaterial): Mesh =>
+        const makeMesh = (geometry: Geometry, material: PbrMaterial): Mesh =>
             node.skin !== undefined && geometry.skinned
                 ? new SkinnedMesh(geometry, material)
                 : new Mesh(geometry, material);
@@ -301,6 +301,9 @@ async function buildModel(
     };
 }
 
+/** glTF sampler interpolation names to ours. */
+const GLTF_INTERPOLATION = {LINEAR: "linear", STEP: "step", CUBICSPLINE: "cubic"} as const;
+
 /**
  * glTF animations as clips. Node translation / rotation / scale channels become tracks on the node's entity;
  * morph target weights become `weights` tracks on the node (driving the mesh, or the meshes under it).
@@ -320,7 +323,7 @@ function readAnimations(json: GltfJson, buffers: ArrayBuffer[], nodes: Entity[])
                 path,
                 times: Float32Array.from(readAccessor(json, buffers, sampler.input)),
                 values: Float32Array.from(readAccessor(json, buffers, sampler.output)),
-                interpolation: sampler.interpolation ?? "LINEAR",
+                interpolation: GLTF_INTERPOLATION[sampler.interpolation ?? "LINEAR"] ?? "linear",
             });
         }
         return new AnimationClip(animation.name ?? `animation${index}`, tracks);

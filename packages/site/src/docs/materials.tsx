@@ -7,7 +7,7 @@ import {
     DeferredScenePass,
     DirectionalLight,
     Mesh,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
@@ -44,7 +44,7 @@ export const doc = defineDoc({
     title: "Materials & PBR",
     category: "Scene",
     description:
-        "PBRMaterial is the metallic-roughness model: a base color, roughness, metallic and emission, each optionally driven by a texture, plus normal and parallax height maps. Meshes that share a material share its GPU buffer and bind group.",
+        "PbrMaterial is the metallic-roughness model: a base color, roughness, metallic and emission, each optionally driven by a texture, plus normal and parallax height maps. Meshes that share a material share its GPU buffer and bind group.",
     engineFile: "material/material.ts",
     order: 3,
     demos: [
@@ -74,13 +74,13 @@ export const doc = defineDoc({
     sections: [{id: "updating", title: "Updating"}],
     props: [
         {
-            component: "PBRMaterialOptions",
+            component: "PbrMaterialOptions",
             rows: [
                 {
                     name: "color",
                     type: "ColorRgb",
                     default: "[1, 1, 1]",
-                    description: "Base color, multiplied by albedoMap.",
+                    description: "Base color, multiplied by colorMap.",
                 },
                 {
                     name: "roughness",
@@ -122,9 +122,9 @@ export const doc = defineDoc({
             ],
         },
         {
-            component: "PBRMaterial",
+            component: "PbrMaterial",
             rows: [
-                {name: "albedoMap", type: "Texture | null", default: "null", description: "sRGB-looking base color."},
+                {name: "colorMap", type: "Texture | null", default: "null", description: "sRGB-looking base color."},
                 {
                     name: "normalMap",
                     type: "Texture | null",
@@ -173,7 +173,7 @@ function Notes() {
                 compiles one G-buffer pipeline variant, shared by every material that uses it.
             </p>
             <Code
-                code={`const gold = palette.material(new PBRMaterial({roughness: 0.1, metallic: 1}), (c) => c.hues.yellow);
+                code={`const gold = palette.material(new PbrMaterial({roughness: 0.1, metallic: 1}), (c) => c.hues.yellow);
 gold.ormMap = Texture.fromPixels(device, ormPixels, 256, 256);
 
 // later, per frame
@@ -269,7 +269,7 @@ export function Inspector() {
                         ),
                     );
 
-                    const material = new PBRMaterial();
+                    const material = new PbrMaterial();
                     let kind: ShapeKind | null = null;
                     let mesh: Mesh | null = null;
 
@@ -298,7 +298,7 @@ export function Inspector() {
                         setColorRgb(material.emissive, preset.emissive(c));
                         material.emissiveIntensity = cfg.emission;
                         const maps = sets.get(cfg.textures);
-                        material.albedoMap = maps?.albedo ?? null;
+                        material.colorMap = maps?.albedo ?? null;
                         material.normalMap = maps?.normal ?? null;
                         material.ormMap = maps?.orm ?? null;
                         material.heightMap = maps?.height ?? null;
@@ -455,7 +455,7 @@ export function PbrGrid() {
                     for (let row = 0; row < 5; row++) {
                         for (let col = 0; col < 5; col++) {
                             const material = palette.material(
-                                new PBRMaterial({roughness: row / 4, metallic: col / 4}),
+                                new PbrMaterial({roughness: row / 4, metallic: col / 4}),
                                 (c) => c.neutral,
                             );
                             const mesh = new Mesh(sphere, material);
@@ -545,20 +545,20 @@ export function Transparency() {
                     scene.add(
                         new Mesh(
                             createPlane({width: 16, height: 16}),
-                            palette.material(new PBRMaterial({roughness: 0.9}), (c) => c.floor),
+                            palette.material(new PbrMaterial({roughness: 0.9}), (c) => c.floor),
                         ),
                     );
 
                     const ball = new Mesh(
                         createIcosphere({radius: 0.7, subdivisions: 3}),
-                        palette.material(new PBRMaterial({roughness: 0.35}), (c) => c.accent),
+                        palette.material(new PbrMaterial({roughness: 0.35}), (c) => c.accent),
                     );
                     vec3.set(ball.position, 0, 0.7, -0.6);
                     scene.add(ball);
 
                     // the mask: lace, cut where its texture's alpha is below alphaCutoff, both sides visible
-                    const lace = new PBRMaterial({alphaMode: "mask", doubleSided: true, roughness: 0.7});
-                    lace.albedoMap = Texture.fromPixels(renderer.device, makeLace(), 128, 128);
+                    const lace = new PbrMaterial({alphaMode: "mask", doubleSided: true, roughness: 0.7});
+                    lace.colorMap = Texture.fromPixels(renderer.device, makeLace(), 128, 128);
                     palette.material(lace, (c) => c.neutral);
                     const lacePanel = new Mesh(createPlane({width: 1.8, height: 1.8}), lace);
                     lacePanel.setEuler(Math.PI / 2, Math.PI / 2, 0);
@@ -566,7 +566,7 @@ export function Transparency() {
                     scene.add(lacePanel);
 
                     // the blend: three overlapping panes and a ball of tinted glass
-                    const glass: PBRMaterial[] = [];
+                    const glass: PbrMaterial[] = [];
                     const pane = createPlane({width: 1.2, height: 1.6});
                     const tints: ((c: SceneColors) => string)[] = [
                         (c) => c.hues.cyan,
@@ -574,14 +574,14 @@ export function Transparency() {
                         (c) => c.hues.green,
                     ];
                     tints.forEach((pick, i) => {
-                        const material = palette.material(new PBRMaterial({roughness: 0.08, doubleSided: true}), pick);
+                        const material = palette.material(new PbrMaterial({roughness: 0.08, doubleSided: true}), pick);
                         glass.push(material);
                         const mesh = new Mesh(pane, material);
                         mesh.setEuler(Math.PI / 2, 0, 0);
                         vec3.set(mesh.position, (i - 1) * 0.75, 0.82, 0.6 + i * 0.45);
                         scene.add(mesh);
                     });
-                    const bubbleMaterial = palette.material(new PBRMaterial({roughness: 0.05}), (c) => c.hues.blue);
+                    const bubbleMaterial = palette.material(new PbrMaterial({roughness: 0.05}), (c) => c.hues.blue);
                     glass.push(bubbleMaterial);
                     const bubble = new Mesh(
                         createSphere({radius: 0.65, widthSegments: 48, heightSegments: 24}),

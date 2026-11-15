@@ -149,7 +149,7 @@ export class OrbitControls implements PointerConsumer {
         this.distance = Math.max(vec3.length(offset), EPSILON);
         this.azimuth = Math.atan2(offset[0], offset[2]);
         this.polar = Math.acos(Math.min(1, Math.max(-1, offset[1] / this.distance)));
-        this.stop();
+        this.halt();
         this.apply();
         return this;
     }
@@ -159,13 +159,13 @@ export class OrbitControls implements PointerConsumer {
         this.distance = distance;
         this.azimuth = azimuth;
         this.polar = polar;
-        this.stop();
+        this.halt();
         this.apply();
         return this;
     }
 
     /** Drops any motion still easing out. */
-    stop(): this {
+    halt(): this {
         this.pendingAzimuth = 0;
         this.pendingPolar = 0;
         this.pendingZoom = 1;
@@ -230,7 +230,7 @@ export class OrbitControls implements PointerConsumer {
         this.pendingZoom /= zoom;
         vec3.scale(this.pendingPan, this.pendingPan, 1 - k);
         if (!moving) {
-            this.stop();
+            this.halt();
         }
         this.apply();
         return moving || (this.autoRotate !== 0 && this.idle >= this.autoRotateDelay);

@@ -5,7 +5,7 @@ import {vec3} from "gl-matrix";
 
 import {Geometry} from "../geometry/geometry";
 import {createCube, createPlane, createSphere} from "../geometry/shapes";
-import {PBRMaterial} from "../material/material";
+import {PbrMaterial} from "../material/material";
 import {ray} from "../math/ray";
 import {PerspectiveCamera} from "./camera";
 import {boxCollider, geometryCollider, sphereCollider} from "./collider";
@@ -17,7 +17,7 @@ import {Scene} from "./scene";
 const near = (a: ArrayLike<number>, b: ArrayLike<number>, eps = 1e-4) =>
     a.length === b.length && Array.from(a).every((v, i) => Math.abs(v - b[i]!) < eps);
 
-const material = new PBRMaterial();
+const material = new PbrMaterial();
 const cube = (z: number, size = 1) => {
     const m = new Mesh(createCube({size}), material);
     vec3.set(m.position, 0, 0, z);
@@ -165,7 +165,7 @@ describe("raycast morphed and double-sided meshes", () => {
         }
         const geometry = new Geometry({...plane, morphTargets: [{positions: lifted}]});
         const scene = new Scene();
-        const mesh = new Mesh(geometry, new PBRMaterial());
+        const mesh = new Mesh(geometry, new PbrMaterial());
         scene.add(mesh);
         const down = ray.fromValues([0, 5, 0], [0, -1, 0]);
         assert.ok(Math.abs(raycast(scene, down)[0]!.distance - 5) < 1e-6);
@@ -175,11 +175,11 @@ describe("raycast morphed and double-sided meshes", () => {
 
     test("a double-sided mesh is hit from behind; a single-sided one isn't", () => {
         const scene = new Scene();
-        const mesh = new Mesh(createPlane({width: 2, height: 2}), new PBRMaterial({doubleSided: true}));
+        const mesh = new Mesh(createPlane({width: 2, height: 2}), new PbrMaterial({doubleSided: true}));
         scene.add(mesh);
         const up = ray.fromValues([0, -5, 0], [0, 1, 0]);
         assert.equal(raycast(scene, up).length, 1);
-        (mesh.material as PBRMaterial).doubleSided = false;
+        (mesh.material as PbrMaterial).doubleSided = false;
         assert.equal(raycast(scene, up).length, 0);
     });
 });

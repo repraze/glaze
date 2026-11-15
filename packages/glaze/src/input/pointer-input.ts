@@ -132,7 +132,7 @@ const LINE_HEIGHT = 16;
  * const input = new PointerInput(canvas, {scene});
  * input.on(button, "click", (e) => toggle());
  * const controls = new OrbitControls(camera).attach(input);
- * // later: input.dispose()
+ * // later: input.destroy()
  * ```
  *
  * Handlers attach to any entity (meshes, groups, invisible colliders): a hit bubbles from the entity hit up its
@@ -238,7 +238,7 @@ export class PointerInput {
     }
 
     /** Removes the DOM listeners and every consumer and handler. */
-    dispose(): void {
+    destroy(): void {
         for (const [type, listener, options] of this.listeners) {
             this.element.removeEventListener(type, listener, options);
         }

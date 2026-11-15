@@ -1,7 +1,7 @@
 import {mat3, mat4, type ReadonlyMat4, vec2, vec3} from "gl-matrix";
 
 import type {Geometry} from "../geometry/geometry";
-import {PBRMaterial} from "../material/material";
+import {PbrMaterial} from "../material/material";
 import {type Ray, ray, type ReadonlyRay} from "../math/ray";
 import type {Collider} from "./collider";
 import type {Entity} from "./entity";
@@ -123,7 +123,7 @@ function intersectCollider(
             // like the renderer: a double-sided surface can be hit from behind
             const cull =
                 collider.cullBackFace ??
-                !(entity instanceof Mesh && entity.material instanceof PBRMaterial && entity.material.doubleSided);
+                !(entity instanceof Mesh && entity.material instanceof PbrMaterial && entity.material.doubleSided);
             // a mesh's own geometry is hit in its current blend shape (morph weights), as drawn
             const weights =
                 collider.geometry === undefined && entity instanceof Mesh && geometry.morphTargets !== undefined

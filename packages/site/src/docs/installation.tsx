@@ -51,7 +51,7 @@ export const doc = defineDoc({
                     type: "Geometry · create*",
                     description: "Meshes and shape factories.",
                 },
-                {name: "/material", type: "PBRMaterial", description: "The PBR material and its texture maps."},
+                {name: "/material", type: "PbrMaterial", description: "The PBR material and its texture maps."},
                 {name: "/texture, /uniform", type: "Texture · Uniform · TextureUniform", description: "GPU inputs."},
                 {name: "/loaders/*", type: "glb · obj · stl", description: "Model parsers and URL loaders."},
                 {name: "/color, /math/animation", type: "colorRgb · lerp · oscillate…", description: "Helpers."},

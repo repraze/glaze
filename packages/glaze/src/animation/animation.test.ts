@@ -15,7 +15,7 @@ function track(
     path: AnimationTrack["path"],
     times: number[],
     values: number[],
-    interpolation: AnimationTrack["interpolation"] = "LINEAR",
+    interpolation: AnimationTrack["interpolation"] = "linear",
 ): AnimationTrack {
     return {target, path, times: Float32Array.from(times), values: Float32Array.from(values), interpolation};
 }
@@ -43,7 +43,7 @@ describe("sampleTrack", () => {
         close(out, [1, 2, 3]);
         sampleTrack(t, 5, out);
         close(out, [2, 4, 6]);
-        sampleTrack({...t, interpolation: "STEP"}, 1.9, out);
+        sampleTrack({...t, interpolation: "step"}, 1.9, out);
         close(out, [0, 0, 0]);
     });
 
@@ -63,7 +63,7 @@ describe("sampleTrack", () => {
     test("cubic spline: hits the keys, uses tangents scaled by the interval", () => {
         // one component per key: [in, value, out] ×3 for vec3; flat tangents → smoothstep between 0 and 1
         const keys = [0, 0, 0, /*v*/ 0, 0, 0, 0, 0, 0, /**/ 0, 0, 0, /*v*/ 1, 1, 1, 0, 0, 0];
-        const t = track(e, "translation", [0, 2], keys, "CUBICSPLINE");
+        const t = track(e, "translation", [0, 2], keys, "cubic");
         const out = [0, 0, 0];
         sampleTrack(t, 0, out);
         close(out, [0, 0, 0]);
@@ -73,7 +73,7 @@ describe("sampleTrack", () => {
         close(out, [0.15625, 0.15625, 0.15625]); // 3s² - 2s³ at s = 0.25
         // a slope of 1 per second at both keys over 2 s: a straight line
         const line = [1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1];
-        sampleTrack(track(e, "translation", [0, 2], line, "CUBICSPLINE"), 0.5, out);
+        sampleTrack(track(e, "translation", [0, 2], line, "cubic"), 0.5, out);
         close(out, [0.5, 0.5, 0.5]);
     });
 });

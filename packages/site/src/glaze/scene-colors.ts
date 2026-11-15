@@ -1,4 +1,4 @@
-import {type ColorRgb, type PBRMaterial, type Scene, setColorRgb} from "@repraze/glaze";
+import {type ColorRgb, type PbrMaterial, type Scene, setColorRgb} from "@repraze/glaze";
 import {type ThemeContextValue, useResolvedTheme} from "@repraze/kernelkit/provider";
 import {type AccentName, allModes, createPalette} from "@repraze/termicolor";
 
@@ -77,7 +77,7 @@ export function paintScene(scene: Scene, colors: SceneColors): void {
 }
 
 /** Set a material's base color from a hex. */
-export function tint(material: PBRMaterial, hex: string): void {
+export function tint(material: PbrMaterial, hex: string): void {
     setColorRgb(material.color as ColorRgb, hex);
 }
 
@@ -127,11 +127,11 @@ export function paletteBinder(colors: {current: SceneColors}) {
             writes.push((c) => setColorRgb(light.color, pick(c)));
             return light;
         },
-        material<M extends PBRMaterial>(material: M, pick: ColorPick): M {
+        material<M extends PbrMaterial>(material: M, pick: ColorPick): M {
             writes.push((c) => tint(material, pick(c)));
             return material;
         },
-        emissive<M extends PBRMaterial>(material: M, pick: ColorPick, intensity = 1): M {
+        emissive<M extends PbrMaterial>(material: M, pick: ColorPick, intensity = 1): M {
             material.emissiveIntensity = intensity;
             writes.push((c) => {
                 setColorRgb(material.emissive, pick(c));

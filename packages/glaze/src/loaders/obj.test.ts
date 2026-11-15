@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {describe, test} from "node:test";
 
-import {parseOBJ} from "./obj";
+import {parseObj} from "./obj";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -12,40 +12,40 @@ function near(a: number, b: number): boolean {
 
 // ─── Basic parsing ────────────────────────────────────────────────────────────
 
-describe("parseOBJ — basic", () => {
+describe("parseObj — basic", () => {
     test("returns zero vertices for empty string", () => {
-        const geo = parseOBJ("");
+        const geo = parseObj("");
         assert.equal(geo.vertexCount, 0);
         assert.equal(geo.indexCount, 0);
     });
 
     test("ignores comment lines", () => {
-        const geo = parseOBJ("# this is a comment\n# another comment");
+        const geo = parseObj("# this is a comment\n# another comment");
         assert.equal(geo.vertexCount, 0);
     });
 
     test("ignores blank lines", () => {
-        const geo = parseOBJ("\n   \n\n");
+        const geo = parseObj("\n   \n\n");
         assert.equal(geo.vertexCount, 0);
     });
 
     test("handles Windows CRLF line endings", () => {
         const obj = "v 1 0 0\r\nv 0 1 0\r\nv 0 0 1\r\nvn 0 0 1\r\nvn 0 0 1\r\nvn 0 0 1\r\nf 1//1 2//2 3//3\r\n";
-        const geo = parseOBJ(obj);
+        const geo = parseObj(obj);
         assert.equal(geo.vertexCount, 3);
     });
 
     test("ignores mtllib and usemtl directives", () => {
         const obj =
             "mtllib mat.mtl\nusemtl MyMat\nv 1 0 0\nv 0 1 0\nv 0 0 1\nvn 0 0 1\nvn 0 0 1\nvn 0 0 1\nf 1//1 2//2 3//3\n";
-        const geo = parseOBJ(obj);
+        const geo = parseObj(obj);
         assert.equal(geo.vertexCount, 3);
     });
 });
 
 // ─── Triangle with all attributes ────────────────────────────────────────────
 
-describe("parseOBJ — triangle", () => {
+describe("parseObj — triangle", () => {
     // v 1 0 0 / v 0 1 0 / v 0 0 1, normals pointing up, UVs at corners
     const OBJ = [
         "v 1 0 0",
@@ -61,13 +61,13 @@ describe("parseOBJ — triangle", () => {
     ].join("\n");
 
     test("produces 3 vertices and 3 indices", () => {
-        const geo = parseOBJ(OBJ);
+        const geo = parseObj(OBJ);
         assert.equal(geo.vertexCount, 3);
         assert.equal(geo.indexCount, 3);
     });
 
     test("positions are correct", () => {
-        const geo = parseOBJ(OBJ);
+        const geo = parseObj(OBJ);
         assert.ok(near(geo.positions[0]!, 1), "v0.x"); // (1,0,0)
         assert.ok(near(geo.positions[1]!, 0), "v0.y");
         assert.ok(near(geo.positions[2]!, 0), "v0.z");
@@ -76,14 +76,14 @@ describe("parseOBJ — triangle", () => {
     });
 
     test("normals are correct", () => {
-        const geo = parseOBJ(OBJ);
+        const geo = parseObj(OBJ);
         assert.ok(near(geo.normals[0]!, 0)); // nx
         assert.ok(near(geo.normals[1]!, 1)); // ny
         assert.ok(near(geo.normals[2]!, 0)); // nz
     });
 
     test("UV V-coordinate is flipped (1 - v)", () => {
-        const geo = parseOBJ(OBJ);
+        const geo = parseObj(OBJ);
         // vt 0.0 0.0 → stored as (0.0, 1.0)
         assert.ok(near(geo.uvs[0]!, 0.0), "u0");
         assert.ok(near(geo.uvs[1]!, 1.0), "v0 flipped");
@@ -96,32 +96,32 @@ describe("parseOBJ — triangle", () => {
     });
 
     test("indices reference correct vertices", () => {
-        const geo = parseOBJ(OBJ);
+        const geo = parseObj(OBJ);
         assert.deepEqual(Array.from(geo.indices), [0, 1, 2]);
     });
 });
 
 // ─── Fan triangulation ────────────────────────────────────────────────────────
 
-describe("parseOBJ — quad triangulation", () => {
+describe("parseObj — quad triangulation", () => {
     // A square quad face (4 verts) → 2 triangles = 6 indices
     const OBJ = ["v 0 0 0", "v 1 0 0", "v 1 1 0", "v 0 1 0", "vn 0 0 1", "f 1//1 2//1 3//1 4//1"].join("\n");
 
     test("produces 4 unique vertices and 6 indices (2 triangles)", () => {
-        const geo = parseOBJ(OBJ);
+        const geo = parseObj(OBJ);
         assert.equal(geo.vertexCount, 4);
         assert.equal(geo.indexCount, 6);
     });
 
     test("fan triangulation: indices are [0,1,2, 0,2,3]", () => {
-        const geo = parseOBJ(OBJ);
+        const geo = parseObj(OBJ);
         assert.deepEqual(Array.from(geo.indices), [0, 1, 2, 0, 2, 3]);
     });
 });
 
 // ─── Vertex deduplication ─────────────────────────────────────────────────────
 
-describe("parseOBJ — vertex deduplication", () => {
+describe("parseObj — vertex deduplication", () => {
     test("shares vertex index when pos/uv/norm triplet is the same", () => {
         // Two triangles sharing edge verts 1 and 2
         const obj = [
@@ -133,7 +133,7 @@ describe("parseOBJ — vertex deduplication", () => {
             "f 1//1 2//1 3//1",
             "f 2//1 4//1 3//1",
         ].join("\n");
-        const geo = parseOBJ(obj);
+        const geo = parseObj(obj);
         // Verts 2 and 3 are shared → 4 unique output vertices total
         assert.equal(geo.vertexCount, 4);
         assert.equal(geo.indexCount, 6);
@@ -142,11 +142,11 @@ describe("parseOBJ — vertex deduplication", () => {
 
 // ─── Missing attribute handling ───────────────────────────────────────────────
 
-describe("parseOBJ — missing attributes", () => {
+describe("parseObj — missing attributes", () => {
     test("computes flat normals when no vn present", () => {
         // Triangle in XY plane → normal should be (0,0,±1)
         const obj = ["v 0 0 0", "v 1 0 0", "v 0 1 0", "vt 0 0", "vt 1 0", "vt 0 1", "f 1/1 2/2 3/3"].join("\n");
-        const geo = parseOBJ(obj);
+        const geo = parseObj(obj);
         const nz = Math.abs(geo.normals[2]!);
         assert.ok(nz > 0.99, `expected |nz| ≈ 1, got ${nz}`);
     });
@@ -154,7 +154,7 @@ describe("parseOBJ — missing attributes", () => {
     test("sets (0, 1) UVs when no vt present (f x//n form)", () => {
         // No vt lines → uvIdx=0 → srcUvs empty → u=0, v=1-0=1 (V-flip of zero)
         const obj = ["v 0 0 0", "v 1 0 0", "v 0 1 0", "vn 0 0 1", "f 1//1 2//1 3//1"].join("\n");
-        const geo = parseOBJ(obj);
+        const geo = parseObj(obj);
         assert.equal(geo.uvs.length, 6);
         for (let i = 0; i < 3; i++) {
             assert.equal(geo.uvs[i * 2]!, 0, `u${i}`);
@@ -163,16 +163,16 @@ describe("parseOBJ — missing attributes", () => {
     });
 });
 
-describe("parseOBJ — indices and missing normals", () => {
+describe("parseObj — indices and missing normals", () => {
     test("negative indices count back from the last element read", () => {
-        const g = parseOBJ(`v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nf -3//-1 -2//-1 -1//-1`);
+        const g = parseObj(`v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nf -3//-1 -2//-1 -1//-1`);
         assert.deepEqual(Array.from(g.positions), [0, 0, 0, 1, 0, 0, 0, 1, 0]);
         assert.deepEqual(Array.from(g.normals.subarray(0, 3)), [0, 0, 1]);
     });
 
     test("without normals, shared corners get the area-weighted average of their faces", () => {
         // two triangles folded along the x axis: one in the XY plane, one in the XZ plane
-        const g = parseOBJ(`v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 -1\nf 1 2 3\nf 1 2 4`);
+        const g = parseObj(`v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 -1\nf 1 2 3\nf 1 2 4`);
         const n = (i: number) => Array.from(g.normals.subarray(i * 3, i * 3 + 3));
         // the corner on its own keeps its face's normal; the shared ones lean halfway
         assert.ok(Math.abs(n(2)[2]! - 1) < 1e-6);
@@ -183,7 +183,7 @@ describe("parseOBJ — indices and missing normals", () => {
     });
 
     test("faces without normals in a file that has some", () => {
-        const g = parseOBJ(`v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 1 0 0\nf 1//1 2//1 3//1\nf 1 2 3`);
+        const g = parseObj(`v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 1 0 0\nf 1//1 2//1 3//1\nf 1 2 3`);
         assert.equal(g.positions.length / 3, 6);
         assert.deepEqual(Array.from(g.normals.subarray(9, 12)), [0, 0, 1]); // computed, not (0, 0, 1) by default luck
     });

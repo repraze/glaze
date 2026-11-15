@@ -10,7 +10,7 @@ import {computeTangents, Geometry} from "../geometry/geometry";
  * All faces are triangulated via fan triangulation.
  * Tangents are computed automatically.
  */
-export function parseOBJ(text: string): Geometry {
+export function parseObj(text: string): Geometry {
     const srcPositions: number[] = [];
     const srcNormals: number[] = [];
     const srcUvs: number[] = [];
@@ -138,11 +138,11 @@ export function parseOBJ(text: string): Geometry {
 /**
  * Fetch an OBJ file from a URL and parse it into a Geometry.
  */
-export async function loadOBJFromURL(url: string): Promise<Geometry> {
+export async function loadObj(url: string): Promise<Geometry> {
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`OBJ: failed to fetch '${url}' (${response.status})`);
     }
     const text = await response.text();
-    return parseOBJ(text);
+    return parseObj(text);
 }

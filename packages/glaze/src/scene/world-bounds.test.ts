@@ -4,7 +4,7 @@ import {describe, test} from "node:test";
 import {vec3} from "gl-matrix";
 
 import {createCube} from "../geometry/shapes";
-import {PBRMaterial} from "../material/material";
+import {PbrMaterial} from "../material/material";
 import {box3} from "../math/bounds";
 import {Entity} from "./entity";
 import {Mesh} from "./mesh";
@@ -14,13 +14,13 @@ describe("computeWorldBounds", () => {
     test("unions transformed meshes of a subtree, skipping disabled ones", () => {
         const root = new Entity();
         vec3.set(root.scale, 2, 2, 2);
-        const a = new Mesh(createCube({size: 1}), new PBRMaterial());
+        const a = new Mesh(createCube({size: 1}), new PbrMaterial());
         vec3.set(a.position, 3, 0, 0);
-        const off = new Mesh(createCube({size: 1}), new PBRMaterial());
+        const off = new Mesh(createCube({size: 1}), new PbrMaterial());
         vec3.set(off.position, -50, 0, 0);
         off.enabled = false;
         root.add(a)
-            .add(new Mesh(createCube({size: 1}), new PBRMaterial()))
+            .add(new Mesh(createCube({size: 1}), new PbrMaterial()))
             .add(off);
         const b = computeWorldBounds(root);
         assert.deepEqual(Array.from(b.min), [-1, -1, -1]);

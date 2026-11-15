@@ -5,7 +5,7 @@ import {
     DeferredScenePass,
     DirectionalLight,
     Mesh,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
@@ -206,9 +206,9 @@ export function FirstScene() {
                     scene.add(sun);
 
                     // 3. meshes: geometry + material
-                    const ground = new PBRMaterial({roughness: 0.9});
+                    const ground = new PbrMaterial({roughness: 0.9});
                     scene.add(new Mesh(createPlane({width: 8, height: 8}), ground));
-                    const paint = new PBRMaterial({roughness: 0.35});
+                    const paint = new PbrMaterial({roughness: 0.35});
                     const cube = new Mesh(createCube({size: 1}), paint);
                     vec3.set(cube.position, 0, 1, 0);
                     scene.add(cube);

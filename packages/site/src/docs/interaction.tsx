@@ -9,7 +9,7 @@ import {
     Entity,
     Mesh,
     OrbitControls,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     PointerInput,
     ray,
@@ -71,7 +71,7 @@ export const doc = defineDoc({
                     description:
                         "Per frame in an animated scene: re-picks a still pointer so enter / leave follow what moves under it. Free when nothing hovers.",
                 },
-                {name: "dispose()", type: "void"},
+                {name: "destroy()", type: "void"},
             ],
         },
         {
@@ -197,7 +197,7 @@ renderer.startAnimation(({delta}) => (controls.update(delta), graph));`}
 interface Pickable {
     name: string;
     mesh: Mesh;
-    material: PBRMaterial;
+    material: PbrMaterial;
 }
 
 export function PickDragOrbit() {
@@ -232,7 +232,7 @@ export function PickDragOrbit() {
                     );
                     const floor = new Mesh(
                         createPlane({width: 10, height: 10}),
-                        palette.material(new PBRMaterial({roughness: 0.9}), (c) => c.floor),
+                        palette.material(new PbrMaterial({roughness: 0.9}), (c) => c.floor),
                     );
                     floor.castShadow = false;
                     scene.add(floor);
@@ -244,7 +244,7 @@ export function PickDragOrbit() {
                         z: number,
                         pick: Parameters<typeof palette.material>[1],
                     ): Pickable => {
-                        const material = palette.material(mesh.material as PBRMaterial, pick);
+                        const material = palette.material(mesh.material as PbrMaterial, pick);
                         vec3.set(mesh.position, x, mesh.position[1], z);
                         scene.add(mesh);
                         return {name, mesh, material};
@@ -252,7 +252,7 @@ export function PickDragOrbit() {
                     const items = [
                         make(
                             "Cube",
-                            lift(new Mesh(createCube({size: 0.9}), new PBRMaterial({roughness: 0.4})), 0.45),
+                            lift(new Mesh(createCube({size: 0.9}), new PbrMaterial({roughness: 0.4})), 0.45),
                             -1.6,
                             0.3,
                             (c) => c.accent,
@@ -262,7 +262,7 @@ export function PickDragOrbit() {
                             lift(
                                 new Mesh(
                                     createIcosphere({radius: 0.55, subdivisions: 3}),
-                                    new PBRMaterial({roughness: 0.2, metallic: 0.6}),
+                                    new PbrMaterial({roughness: 0.2, metallic: 0.6}),
                                 ),
                                 0.55,
                             ),
@@ -273,7 +273,7 @@ export function PickDragOrbit() {
                         make(
                             "Torus",
                             lift(
-                                new Mesh(createTorus({radius: 0.45, tube: 0.18}), new PBRMaterial({roughness: 0.3})),
+                                new Mesh(createTorus({radius: 0.45, tube: 0.18}), new PbrMaterial({roughness: 0.3})),
                                 0.63,
                             ),
                             1.6,
@@ -285,7 +285,7 @@ export function PickDragOrbit() {
                             lift(
                                 new Mesh(
                                     createIcosphere({radius: 0.08, subdivisions: 0, flat: true}),
-                                    new PBRMaterial({roughness: 0.1, metallic: 0.8}),
+                                    new PbrMaterial({roughness: 0.1, metallic: 0.8}),
                                 ),
                                 0.08,
                             ),

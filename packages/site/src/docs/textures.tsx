@@ -4,7 +4,7 @@ import {
     DeferredScenePass,
     DirectionalLight,
     Mesh,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
@@ -29,7 +29,7 @@ export const doc = defineDoc({
         {
             title: "From pixels",
             description:
-                "Test patterns generated on the CPU (the dithering lab's) and uploaded with Texture.fromPixels, swapped in as the albedo map. The environments are pixel gradients too.",
+                "Test patterns generated on the CPU (the dithering lab's) and uploaded with Texture.fromPixels, swapped in as the color map. The environments are pixel gradients too.",
             component: FromPixels,
             layout: "full",
         },
@@ -53,7 +53,7 @@ export const doc = defineDoc({
                     description: "Uint8Array of RGBA bytes, row by row, top row first (v = 0).",
                 },
                 {
-                    name: "Texture.fromURL(device, url)",
+                    name: "Texture.fromUrl(device, url)",
                     type: "Promise<Texture>",
                     description: "Fetch and decode an image.",
                 },
@@ -69,7 +69,7 @@ export const doc = defineDoc({
                         "HDR: linear float RGBA stored as half floats, for skies and environments brighter than 1.",
                 },
                 {
-                    name: "Texture.fromHDR(device, url)",
+                    name: "Texture.fromHdr(device, url)",
                     type: "Promise<Texture>",
                     description: "A Radiance .hdr (RGBE) environment, the usual format for HDRIs.",
                 },
@@ -101,7 +101,7 @@ export const doc = defineDoc({
                         "Makes the pixels again on a new device after a device loss, from what the texture was made from (its bytes, image file, or last updateFrom source). Passes call it on their own.",
                 },
                 {
-                    name: "Texture.fromGPUTexture(device, texture, colorSpace?)",
+                    name: "Texture.fromGpuTexture(device, texture, colorSpace?)",
                     type: "Texture",
                     description:
                         "Wraps a GPU texture of your own (rgba8unorm with an sRGB view format, or rgba16float). Not restored after a device loss.",
@@ -127,7 +127,7 @@ function Notes() {
                 scales it.
             </p>
             <Code
-                code={`const sky = await Texture.fromURL(renderer.device, "/sky-2k.jpg");
+                code={`const sky = await Texture.fromUrl(renderer.device, "/sky-2k.jpg");
 scene.environmentMap = sky;
 scene.backgroundMap = sky;
 vec3.set(scene.environmentColor, 0.8, 0.8, 0.8);`}
@@ -145,7 +145,7 @@ export function FromPixels() {
         <DemoStage
             controls={
                 <>
-                    <ControlSegmented label="Albedo map" value={pattern} options={PATTERNS} onChange={setPattern} />
+                    <ControlSegmented label="Color map" value={pattern} options={PATTERNS} onChange={setPattern} />
                     <ControlSelect
                         label="Environment"
                         value={environment}
@@ -179,7 +179,7 @@ export function FromPixels() {
                     scene.add(
                         palette.light(new DirectionalLight({direction: [-0.5, -1, -0.6], intensity: 3}), (c) => c.key),
                     );
-                    const material = palette.material(new PBRMaterial({roughness: 0.5}), (c) => c.accentFill);
+                    const material = palette.material(new PbrMaterial({roughness: 0.5}), (c) => c.accentFill);
                     const cube = new Mesh(createCube({size: 1.3}), material);
                     scene.add(cube);
 
@@ -188,7 +188,7 @@ export function FromPixels() {
                     graph.addPass(new BlitPass({toneMapping: "aces"}), {color}, {canvasSlot: "canvas"});
                     return ({time}) => {
                         palette.apply();
-                        material.albedoMap = patterns.get(live.current.pattern) ?? null;
+                        material.colorMap = patterns.get(live.current.pattern) ?? null;
                         const env = environments.get(live.current.environment) ?? null;
                         scene.environmentMap = env;
                         scene.backgroundMap = env;
@@ -246,8 +246,8 @@ export function FromCanvas() {
                             (c) => c.key,
                         ),
                     );
-                    const material = new PBRMaterial({roughness: 0.6}); // white base: the map is the color
-                    material.albedoMap = texture;
+                    const material = new PbrMaterial({roughness: 0.6}); // white base: the map is the color
+                    material.colorMap = texture;
                     const cube = new Mesh(createCube({size: 1.4}), material);
                     scene.add(cube);
 

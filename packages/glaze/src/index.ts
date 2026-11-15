@@ -38,20 +38,14 @@ export type {
     ScenePointerHandler,
 } from "./input/pointer-input";
 export {PointerInput, SCENE_PICKING_PRIORITY} from "./input/pointer-input";
-export type {
-    GLBPrimitive,
-    GltfMaterialDescriptor,
-    GltfMaterialPlan,
-    GltfTextureSlot,
-    GltfTextureSource,
-} from "./loaders/glb";
-export {createPBRMaterialFromGltf, loadGLBFromURL, parseGLB, planGltfMaterial} from "./loaders/glb";
+export type {GltfMaterialDescriptor, GltfMaterialPlan, GltfTextureSlot, GltfTextureSource} from "./loaders/glb";
+export {createPbrMaterialFromGltf, planGltfMaterial} from "./loaders/glb";
 export type {GltfLoadOptions, GltfModel} from "./loaders/gltf";
 export {loadGltf, parseGltf} from "./loaders/gltf";
-export {loadOBJFromURL, parseOBJ} from "./loaders/obj";
-export {loadSTLFromURL, parseSTL} from "./loaders/stl";
-export type {AlphaMode, PBRMaterialOptions} from "./material/material";
-export {Material, PBRMaterial} from "./material/material";
+export {loadObj, parseObj} from "./loaders/obj";
+export {loadStl, parseStl} from "./loaders/stl";
+export type {AlphaMode, PbrMaterialOptions} from "./material/material";
+export {Material, PbrMaterial} from "./material/material";
 export {
     bounce,
     clamp,

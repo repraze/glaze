@@ -3,20 +3,20 @@ import {describe, test} from "node:test";
 
 import {srgbToLinear} from "../color";
 import type {Texture} from "../texture";
-import {packMaterialUniforms, PBRMaterial} from "./material";
+import {packMaterialUniforms, PbrMaterial} from "./material";
 
 // map resolution compares identities only, so stand-in objects work without a GPU
 const fakeTexture = (name: string) => ({name}) as unknown as Texture;
 
-describe("PBRMaterial — maps", () => {
+describe("PbrMaterial — maps", () => {
     test("no maps: occlusion and metallic-roughness fall back to the white default", () => {
-        const mat = new PBRMaterial();
+        const mat = new PbrMaterial();
         assert.equal(mat.resolvedOcclusionMap, null);
         assert.equal(mat.resolvedMetallicRoughnessMap, null);
     });
 
     test("a packed ORM map feeds both occlusion and metallic-roughness", () => {
-        const mat = new PBRMaterial();
+        const mat = new PbrMaterial();
         const orm = fakeTexture("orm");
         mat.ormMap = orm;
         assert.equal(mat.resolvedOcclusionMap, orm);
@@ -24,7 +24,7 @@ describe("PBRMaterial — maps", () => {
     });
 
     test("separate maps: metallic-roughness alone leaves occlusion at its default", () => {
-        const mat = new PBRMaterial();
+        const mat = new PbrMaterial();
         const mr = fakeTexture("mr");
         mat.metallicRoughnessMap = mr;
         assert.equal(mat.resolvedMetallicRoughnessMap, mr);
@@ -32,7 +32,7 @@ describe("PBRMaterial — maps", () => {
     });
 
     test("separate maps override the matching channels of an ORM map", () => {
-        const mat = new PBRMaterial();
+        const mat = new PbrMaterial();
         const orm = fakeTexture("orm");
         const occlusion = fakeTexture("occlusion");
         mat.ormMap = orm;
@@ -42,9 +42,9 @@ describe("PBRMaterial — maps", () => {
     });
 });
 
-describe("PBRMaterial — uniforms", () => {
+describe("PbrMaterial — uniforms", () => {
     test("defaults", () => {
-        const mat = new PBRMaterial();
+        const mat = new PbrMaterial();
         assert.equal(mat.normalScale, 1);
         assert.equal(mat.occlusionStrength, 1);
         const data = packMaterialUniforms(mat);
@@ -57,7 +57,7 @@ describe("PBRMaterial — uniforms", () => {
     });
 
     test("packs a map's UV transform (translation · rotation · scale) and UV set", () => {
-        const mat = new PBRMaterial();
+        const mat = new PbrMaterial();
         mat.normalMap = {transform: {offset: [0.25, 0.5], scale: [2, 3], rotation: Math.PI / 2, uvSet: 1}} as never;
         const t = Array.from(packMaterialUniforms(mat).subarray(24, 32)); // map 1: normal
         const r = (v: number) => Math.round(v * 1e6) / 1e6 + 0; // + 0: no -0
@@ -65,7 +65,7 @@ describe("PBRMaterial — uniforms", () => {
     });
 
     test("packs factors, normal scale and occlusion strength at their offsets", () => {
-        const mat = new PBRMaterial({
+        const mat = new PbrMaterial({
             color: [0.25, 0.5, 0.75],
             roughness: 0.125,
             metallic: 0.875,

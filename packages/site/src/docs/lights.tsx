@@ -11,7 +11,7 @@ import {
     DirectionalLight,
     Mesh,
     oscillate,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     PointLight,
     RenderGraph,
@@ -283,13 +283,13 @@ export function MovingLights() {
 
                     const floor = new Mesh(
                         createPlane({width: 40, height: 40, widthSegments: 10, heightSegments: 10}),
-                        palette.material(new PBRMaterial({roughness: 0.9}), (c) => c.floor),
+                        palette.material(new PbrMaterial({roughness: 0.9}), (c) => c.floor),
                     );
                     floor.castShadow = false;
                     scene.add(floor);
                     const torus = new Mesh(
                         createTorus({radius: 0.8, tube: 0.25, radialSegments: 16, tubularSegments: 64}),
-                        palette.material(new PBRMaterial({roughness: 0.25, metallic: 0.6}), (c) => c.neutral),
+                        palette.material(new PbrMaterial({roughness: 0.25, metallic: 0.6}), (c) => c.neutral),
                     );
                     vec3.set(torus.position, 0, 1.2, 0);
                     torus.setEuler(Math.PI / 2, 0, 0);
@@ -320,7 +320,7 @@ export function MovingLights() {
                         const light = palette.light(new PointLight({intensity: 18, range: 8}), (c) => c.hues[hue]);
                         const dot = new Mesh(
                             marker,
-                            palette.emissive(new PBRMaterial({color: [0, 0, 0]}), (c) => c.hues[hue]),
+                            palette.emissive(new PbrMaterial({color: [0, 0, 0]}), (c) => c.hues[hue]),
                         );
                         dot.castShadow = dot.receiveShadow = false;
                         light.add(dot);
@@ -335,7 +335,7 @@ export function MovingLights() {
                             radialSegments: 16,
                             openEnded: true,
                         }),
-                        palette.emissive(new PBRMaterial({color: [0, 0, 0]}), (c) => c.key),
+                        palette.emissive(new PbrMaterial({color: [0, 0, 0]}), (c) => c.key),
                     );
                     cone.castShadow = cone.receiveShadow = false;
                     vec3.set(cone.position, 0, -0.25, 0);
@@ -458,13 +458,13 @@ export function SunShadows() {
                     scene.add(
                         new Mesh(
                             createPlane({width: 140, height: 140}),
-                            palette.material(new PBRMaterial({roughness: 0.9}), (c) => c.neutral),
+                            palette.material(new PbrMaterial({roughness: 0.9}), (c) => c.neutral),
                         ),
                     );
                     const pillar = createCube({size: 1});
                     const ball = createIcosphere({radius: 0.5, subdivisions: 2});
-                    const stone = palette.material(new PBRMaterial({roughness: 0.6}), (c) => c.accent);
-                    const glass = palette.material(new PBRMaterial({roughness: 0.3}), (c) => c.hues.blue);
+                    const stone = palette.material(new PbrMaterial({roughness: 0.6}), (c) => c.accent);
+                    const glass = palette.material(new PbrMaterial({roughness: 0.3}), (c) => c.hues.blue);
                     for (let z = 6; z > -60; z -= 3.5) {
                         for (let x = -10; x <= 10; x += 5) {
                             const p = new Mesh(pillar, stone);

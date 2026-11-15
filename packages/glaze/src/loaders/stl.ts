@@ -126,18 +126,18 @@ function parseAsciiSTL(buffer: ArrayBuffer): Geometry {
  * Vertices are unmerged (each triangle has 3 unique vertices), normals come
  * from the file's face normals (or the triangle's, when stored as zero), and UVs are zeroed (STL carries no UV data).
  */
-export function parseSTL(buffer: ArrayBuffer): Geometry {
+export function parseStl(buffer: ArrayBuffer): Geometry {
     return isBinarySTL(buffer) ? parseBinarySTL(buffer) : parseAsciiSTL(buffer);
 }
 
 /**
  * Fetch an STL file from `url` and parse it into a {@link Geometry}.
  */
-export async function loadSTLFromURL(url: string): Promise<Geometry> {
+export async function loadStl(url: string): Promise<Geometry> {
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`STL: failed to fetch '${url}' (${response.status})`);
     }
     const buffer = await response.arrayBuffer();
-    return parseSTL(buffer);
+    return parseStl(buffer);
 }

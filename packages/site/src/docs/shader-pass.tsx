@@ -2,7 +2,7 @@ import {
     DeferredScenePass,
     DirectionalLight,
     Mesh,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
@@ -221,7 +221,7 @@ export function Dithering() {
                     const fill = new DirectionalLight({direction: [-0.6, -0.3, 0.5], intensity: 1.6});
                     scene.add(keyLight).add(fill);
 
-                    const material = new PBRMaterial({roughness: 0.4, metallic: 0.1});
+                    const material = new PbrMaterial({roughness: 0.4, metallic: 0.1});
                     let kind = live.current.shape;
                     let mesh = new Mesh(makeShape(kind, true), material);
                     scene.add(mesh);

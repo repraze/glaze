@@ -81,7 +81,7 @@ export class Renderer {
     /**
      * Called once a new device replaces a lost one, before the next frame. Glaze's own objects carry over; remake
      * what you made on the old device yourself (GPU buffers or textures of your own, an EffectPass's
-     * TextureUniform, a Texture from `fromGPUTexture`).
+     * TextureUniform, a Texture from `fromGpuTexture`).
      */
     onDeviceRestored: ((device: GPUDevice) => void) | null = null;
 

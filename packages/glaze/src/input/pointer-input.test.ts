@@ -5,7 +5,7 @@ import {vec3} from "gl-matrix";
 
 import {OrbitControls} from "../controls/orbit-controls";
 import {createCube} from "../geometry/shapes";
-import {PBRMaterial} from "../material/material";
+import {PbrMaterial} from "../material/material";
 import {PerspectiveCamera} from "../scene/camera";
 import {sphereCollider} from "../scene/collider";
 import {Entity, layer} from "../scene/entity";
@@ -69,7 +69,7 @@ function setup() {
     vec3.set(camera.position, 0, 0, 10);
     scene.add(camera);
     scene.activeCamera = camera;
-    const cube = new Mesh(createCube({size: 1}), new PBRMaterial());
+    const cube = new Mesh(createCube({size: 1}), new PbrMaterial());
     scene.add(cube);
     const canvas = fakeCanvas();
     const input = new PointerInput(canvas.element, {scene});
@@ -107,7 +107,7 @@ describe("PointerInput: scene events", () => {
 
     test("events pass through to hits behind unless stopped", () => {
         const {scene, cube, canvas, input} = setup();
-        const back = new Mesh(createCube({size: 1}), new PBRMaterial());
+        const back = new Mesh(createCube({size: 1}), new PbrMaterial());
         vec3.set(back.position, 0, 0, -3);
         scene.add(back);
         const log: string[] = [];
@@ -126,7 +126,7 @@ describe("PointerInput: scene events", () => {
     test("an ancestor shared by two hits runs once, for the nearest", () => {
         const {scene, cube, canvas, input} = setup();
         const group = new Entity();
-        const back = new Mesh(createCube({size: 1}), new PBRMaterial());
+        const back = new Mesh(createCube({size: 1}), new PbrMaterial());
         vec3.set(back.position, 0, 0, -3);
         scene.remove(cube);
         group.add(cube).add(back);
@@ -155,7 +155,7 @@ describe("PointerInput: scene events", () => {
 
     test("an invisible proxy collider routes events to its owner", () => {
         const {scene, canvas, input} = setup();
-        const small = new Mesh(createCube({size: 0.05}), new PBRMaterial());
+        const small = new Mesh(createCube({size: 0.05}), new PbrMaterial());
         vec3.set(small.position, 3, 0, 0);
         const hitbox = new Entity();
         hitbox.collider = sphereCollider(1.5);
@@ -333,9 +333,9 @@ describe("PointerInput: gestures", () => {
         assert.ok(Math.abs(controls.distance - 5) < 1e-4, "spreading to twice the size halves the distance");
     });
 
-    test("dispose removes every listener", () => {
+    test("destroy removes every listener", () => {
         const {canvas, input} = setup();
-        input.dispose();
+        input.destroy();
         for (const fns of canvas.listeners.values()) {
             assert.equal(fns.length, 0);
         }

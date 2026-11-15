@@ -2,7 +2,7 @@ import {mat4, vec3} from "gl-matrix";
 
 import {COLOR_WGSL, type ColorSpace, srgbToLinear} from "../color";
 import type {Geometry} from "../geometry/geometry";
-import {MATERIAL_BUFFER_SIZE, materialMap, packMaterialUniforms, PBRMaterial} from "../material/material";
+import {MATERIAL_BUFFER_SIZE, materialMap, packMaterialUniforms, PbrMaterial} from "../material/material";
 import {sphere} from "../math/bounds";
 import {isMirrored, reverseDepth} from "../math/transform";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
@@ -120,7 +120,7 @@ ${MATERIAL_UNIFORMS_WGSL}
 @group(0) @binding(0) var<uniform> light: ShadowLightUniforms;
 @group(1) @binding(0) var<uniform> model: ModelUniforms;
 @group(2) @binding(0) var<uniform> mat: MaterialUniforms;
-@group(2) @binding(1) var albedoMap: texture_2d<f32>;
+@group(2) @binding(1) var colorMap: texture_2d<f32>;
 @group(2) @binding(2) var albedoSampler: sampler;
 ${MAP_UV_WGSL}
 
@@ -148,7 +148,7 @@ fn vs_shadow(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>${v.inp
 
 @fragment
 fn fs_shadow(in: ShadowVarying) {
-    let alpha = textureSample(albedoMap, albedoSampler, mapUv(0u, in.uv, in.uv1)).a * mat.albedo.a * in.vertexAlpha;
+    let alpha = textureSample(colorMap, albedoSampler, mapUv(0u, in.uv, in.uv1)).a * mat.albedo.a * in.vertexAlpha;
 ${
     alpha === "mask"
         ? `    if (alpha < mat.alphaCutoff) { discard; }`
@@ -193,7 +193,7 @@ function isMorphed(mesh: Mesh): boolean {
 }
 
 function getGBufferFeatures(
-    mat: PBRMaterial,
+    mat: PbrMaterial,
     skinned = false,
     morphed = false,
     mirrored = false,
@@ -286,7 +286,7 @@ ${MATERIAL_UNIFORMS_WGSL}
 @group(0) @binding(0) var<uniform> camera:     CameraUniforms;
 @group(1) @binding(0) var<uniform> model:      ModelUniforms;
 @group(2) @binding(0) var<uniform> mat:        MaterialUniforms;
-@group(2) @binding(1) var albedoMap:           texture_2d<f32>;
+@group(2) @binding(1) var colorMap:           texture_2d<f32>;
 @group(2) @binding(2) var albedoSampler:       sampler;
 @group(2) @binding(3) var normalMap:           texture_2d<f32>;
 @group(2) @binding(4) var emissiveMap:         texture_2d<f32>;
@@ -460,12 +460,12 @@ ${
 `
 }
     let albedoUv   = mapUv(0u, uv, input.uv1);
-    let texAlbedo4 = textureSample(albedoMap, albedoSampler, albedoUv);
+    let texAlbedo4 = textureSample(colorMap, albedoSampler, albedoUv);
 ${
     f.alpha === "mask"
         ? `    // mip levels average alpha toward the middle, so cutouts thin out and vanish with distance: lift alpha by
     // the mip level sampled (Golus) to keep their coverage
-    let texels = albedoUv * vec2<f32>(textureDimensions(albedoMap));
+    let texels = albedoUv * vec2<f32>(textureDimensions(colorMap));
     let lod    = max(0.5 * log2(max(dot(dpdx(texels), dpdx(texels)), dot(dpdy(texels), dpdy(texels)))), 0.0);
     let alpha  = texAlbedo4.a * (1.0 + lod * 0.25) * mat.albedo.a * input.color.a;
     if (alpha < mat.alphaCutoff) { discard; }`
@@ -1191,7 +1191,7 @@ interface GeometryGPUResources {
     indexCount: number;
 }
 
-/** One per PBRMaterial: its uniforms (and what was last written to them) and its bind group. */
+/** One per PbrMaterial: its uniforms (and what was last written to them) and its bind group. */
 interface MaterialGPUResources {
     buffer: GPUBuffer;
     uniforms: Float32Array;
@@ -1444,7 +1444,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private readonly lightingU32 = new Uint32Array(this.lightingData);
 
     // Per-frame scratch, reused: no allocation per mesh per frame
-    private readonly opaqueDraws: {mesh: Mesh; material: PBRMaterial; features: GBufferFeatures; key: string}[] = [];
+    private readonly opaqueDraws: {mesh: Mesh; material: PbrMaterial; features: GBufferFeatures; key: string}[] = [];
     private readonly blendDraws: {mesh: Mesh; depth: number}[] = [];
     private readonly modelData = new Float32Array(MODEL_UNIFORMS_SIZE / 4);
     private morphPairs = new Float32Array(16);
@@ -1462,7 +1462,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     // Cached GPU resources: vertex data per geometry (shared), uniforms per mesh
     private geometryCache = new Map<Geometry, GeometryGPUResources>();
     private meshCache = new Map<Mesh, MeshGPUResources>();
-    private materialCache = new Map<PBRMaterial, MaterialGPUResources>();
+    private materialCache = new Map<PbrMaterial, MaterialGPUResources>();
     /** Frames rendered: cache entries remember when they were last used. */
     private frame = 0;
 
@@ -1578,7 +1578,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         const forward = w ? vec3.set(this.tmpForward, -w[8]!, -w[9]!, -w[10]!) : vec3.set(this.tmpForward, 0, 0, -1);
         const culling = camera !== null;
         for (const mesh of meshes) {
-            if (!(mesh.material instanceof PBRMaterial)) {
+            if (!(mesh.material instanceof PbrMaterial)) {
                 continue;
             }
             // outside the camera's view: not drawn (its shadow still is, by the shadow passes' own culling)
@@ -1923,7 +1923,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
     /** The shadow pipeline for a caster: depth only when opaque, alpha-tested for mask / blend, skinned or not. */
     private shadowPipelineFor(
-        material: PBRMaterial | null,
+        material: PbrMaterial | null,
         skinned = false,
         morphed = false,
         mirrored = false,
@@ -2184,7 +2184,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             if (!mesh.castShadow || !res) {
                 continue;
             }
-            const material = mesh.material instanceof PBRMaterial ? mesh.material : null;
+            const material = mesh.material instanceof PbrMaterial ? mesh.material : null;
             const extras = res.extrasBuffer !== null && material !== null && material.alphaMode !== "opaque";
             const pipeline = this.shadowPipelineFor(
                 material,
@@ -2548,7 +2548,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
         let bound: GPURenderPipeline | null = null;
         for (const {mesh} of this.blendDraws) {
             const res = this.meshCache.get(mesh);
-            const material = mesh.material as PBRMaterial;
+            const material = mesh.material as PbrMaterial;
             if (!res) {
                 continue;
             }
@@ -3005,12 +3005,12 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
      * A material's uniforms and textures as a bind group. Uniforms are packed and compared once a frame, so
      * changed properties reach the GPU without any call; a changed map rebuilds the bind group.
      */
-    private materialBindGroup(material: PBRMaterial): GPUBindGroup {
+    private materialBindGroup(material: PbrMaterial): GPUBindGroup {
         let res = this.materialCache.get(material);
         if (res === undefined) {
             res = {
                 buffer: this.device.createBuffer({
-                    label: "PBRMaterial",
+                    label: "PbrMaterial",
                     size: MATERIAL_BUFFER_SIZE,
                     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
                 }),
@@ -3052,7 +3052,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             const [albedo, normal, emissive, metallicRoughness, height, occlusion] = res.maps;
             const white = this.defaultWhiteView;
             res.bindGroup = this.device.createBindGroup({
-                label: "PBRMaterial",
+                label: "PbrMaterial",
                 layout: this.materialBindGroupLayout,
                 entries: [
                     {binding: 0, resource: {buffer: res.buffer}},

@@ -29,7 +29,7 @@ import {
     DeferredScenePass,
     DirectionalLight,
     Mesh,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     Renderer,
     RenderGraph,
@@ -44,7 +44,7 @@ camera.position[2] = 4;
 scene.add(camera);
 scene.activeCamera = camera;
 scene.add(new DirectionalLight({direction: [-0.5, -1, -0.6], intensity: 3}));
-const donut = new Mesh(createTorus(), new PBRMaterial({color: colorRgb("#ff9243"), roughness: 0.3}));
+const donut = new Mesh(createTorus(), new PbrMaterial({color: colorRgb("#ff9243"), roughness: 0.3}));
 scene.add(donut);
 
 const graph = new RenderGraph();
@@ -208,23 +208,23 @@ and v runs down. Normal maps are glTF's too: tangent-space +y points to the top 
 ## Materials and textures
 
 ```ts
-const gold = new PBRMaterial({color: colorRgb("#f0c040"), roughness: 0.1, metallic: 1, emissive: [0, 0, 0, 0]});
-gold.albedoMap = Texture.fromPixels(renderer.device, rgbaBytes, 256, 256); // also normalMap, emissiveMap, heightMap
+const gold = new PbrMaterial({color: colorRgb("#f0c040"), roughness: 0.1, metallic: 1, emissive: [0, 0, 0, 0]});
+gold.colorMap = Texture.fromPixels(renderer.device, rgbaBytes, 256, 256); // also normalMap, emissiveMap, heightMap
 gold.roughness = 0.3; // no upload call: the pass compares each material's uniforms once a frame
 ```
 
-`Texture.fromPixels(device, data, w, h)`, `Texture.fromURL(device, url)`, `Texture.fromBlob(device, blob)`, and HDR
-`Texture.fromFloat32(device, rgba, w, h)` / `Texture.fromHDR(device, url)` (Radiance .hdr): each builds a mip chain on
+`Texture.fromPixels(device, data, w, h)`, `Texture.fromUrl(device, url)`, `Texture.fromBlob(device, blob)`, and HDR
+`Texture.fromFloat32(device, rgba, w, h)` / `Texture.fromHdr(device, url)` (Radiance .hdr): each builds a mip chain on
 the GPU (`{mipmaps: false}` to skip). `texture.sampling` (`wrapU`/`wrapV`: repeat, clamp, mirror; `magFilter` /
 `minFilter`: linear, nearest; `anisotropy`, default 8) and `texture.transform` (`offset`, `scale`, `rotation`, `uvSet`
 0 or 1) can change any time; `texture.withSettings({sampling?, transform?})` shares the pixels with other settings.
 `texture.update(device, data)` / `updateFrom(device, imageOrCanvasOrVideo)` replace the pixels (same size) and
 regenerate the mips. A texture keeps its source (bytes, the image file, its last `updateFrom` source) and is made
 again on a new device after a device loss (`texture.restore(device)`, which passes call on their own).
-`Texture.fromGPUTexture(device, gpuTexture)` wraps a texture of your own. An EffectPass `TextureUniform` takes a
+`Texture.fromGpuTexture(device, gpuTexture)` wraps a texture of your own. An EffectPass `TextureUniform` takes a
 Texture or a GPUTexture.
 
-Alpha follows glTF: `opacity` multiplies the albedo map's alpha, and `alphaMode` is `"opaque"` (ignored), `"mask"`
+Alpha follows glTF: `opacity` multiplies the color map's alpha, and `alphaMode` is `"opaque"` (ignored), `"mask"`
 (cut below `alphaCutoff`, default 0.5: leaves, lace) or `"blend"` (see-through: drawn after lighting, farthest
 first, casting partial shadows). `doubleSided: true` draws back faces too, lit from their own side.
 Meshes sharing a material share its GPU buffer and bind group; a material holds no GPU state, so several passes
@@ -245,9 +245,9 @@ KHR_materials_emissive_strength, skins and morph targets are read; a file requir
 meshopt, KTX2) is refused with an error naming it. `computeWorldBounds(entity)` boxes a subtree to frame it.
 
 `parseGLB(buffer)` / `loadGLBFromURL(url)` → `{geometry, material}[]` (flat, transforms baked), with
-`createPBRMaterialFromGltf(device, material, resolveUri?)` (the mapping itself, GPU-free, is
-`planGltfMaterial(material)`). Node transforms of the default scene are baked into the geometry. `parseOBJ(text)` / `loadOBJFromURL(url)`;
-`parseSTL(buffer)` (binary or text STL) / `loadSTLFromURL(url)`.
+`createPbrMaterialFromGltf(device, material, resolveUri?)` (the mapping itself, GPU-free, is
+`planGltfMaterial(material)`). Node transforms of the default scene are baked into the geometry. `parseObj(text)` / `loadObj(url)`;
+`parseStl(buffer)` (binary or text STL) / `loadStl(url)`.
 
 ## Color
 

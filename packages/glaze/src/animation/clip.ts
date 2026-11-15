@@ -10,11 +10,11 @@ export type TrackPath = "translation" | "rotation" | "scale" | "weights";
 
 /**
  * How values change between keyframes (glTF's interpolation modes):
- * - `"LINEAR"`: straight lines; rotations take the shortest arc (slerp).
- * - `"STEP"`: hold each key until the next.
- * - `"CUBICSPLINE"`: Hermite curves; each key stores in-tangent, value, out-tangent.
+ * - `"linear"`: straight lines; rotations take the shortest arc (slerp).
+ * - `"step"`: hold each key until the next.
+ * - `"cubic"`: Hermite (glTF CUBICSPLINE) curves; each key stores in-tangent, value, out-tangent.
  */
-export type Interpolation = "LINEAR" | "STEP" | "CUBICSPLINE";
+export type Interpolation = "linear" | "step" | "cubic";
 
 /** Keyframes for one property of one entity. */
 export interface AnimationTrack {
@@ -47,7 +47,7 @@ export class AnimationClip {
 /** Components per value: 3, 4 for rotations, or the morph target count for weights. */
 export function trackStride(track: Pick<AnimationTrack, "path" | "times" | "values" | "interpolation">): number {
     if (track.path === "weights") {
-        const keys = Math.max(track.times.length, 1) * (track.interpolation === "CUBICSPLINE" ? 3 : 1);
+        const keys = Math.max(track.times.length, 1) * (track.interpolation === "cubic" ? 3 : 1);
         return Math.floor(track.values.length / keys);
     }
     return track.path === "rotation" ? 4 : 3;
@@ -97,14 +97,14 @@ export function sampleTrack(track: AnimationTrack, time: number, out: Float32Arr
     const {times, values, interpolation} = track;
     const n = trackStride(track);
     const rotation = track.path === "rotation";
-    const cubic = interpolation === "CUBICSPLINE";
+    const cubic = interpolation === "cubic";
     const keyStride = cubic ? n * 3 : n;
     const valueAt = cubic ? n : 0; // a cubic key is [in-tangent, value, out-tangent]
     const i = findKey(times, time, hint);
     const last = times.length - 1;
     const t0 = times[i]!;
 
-    if (i >= last || time <= t0 || interpolation === "STEP") {
+    if (i >= last || time <= t0 || interpolation === "step") {
         const at = i * keyStride + valueAt;
         for (let k = 0; k < n; k++) {
             out[k] = values[at + k]!;
@@ -119,7 +119,7 @@ export function sampleTrack(track: AnimationTrack, time: number, out: Float32Arr
     const dt = t1 - t0;
     const s = (time - t0) / dt;
 
-    if (interpolation === "LINEAR") {
+    if (interpolation === "linear") {
         const a = i * keyStride;
         const b = (i + 1) * keyStride;
         if (rotation) {

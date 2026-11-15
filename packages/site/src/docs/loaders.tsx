@@ -7,10 +7,10 @@ import {
     Entity,
     type GltfModel,
     loadGltf,
-    loadOBJFromURL,
+    loadObj,
     Mesh,
-    parseOBJ,
-    PBRMaterial,
+    parseObj,
+    PbrMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
@@ -31,7 +31,7 @@ export const doc = defineDoc({
     title: "Loaders",
     category: "Assets",
     description:
-        "loadGltf turns a glTF 2.0 file (.glb, or .gltf with its buffers and images) into an entity tree: named nodes with their transforms, shared geometry and materials, ready to add to a scene. OBJ and STL parse to Geometry; parseGLB flattens a GLB to primitives.",
+        "loadGltf turns a glTF 2.0 file (.glb, or .gltf with its buffers and images) into an entity tree: named nodes with their transforms, shared geometry and materials, ready to add to a scene. OBJ and STL parse to Geometry.",
     engineFile: "loaders/glb.ts",
     order: 1,
     demos: [
@@ -45,7 +45,7 @@ export const doc = defineDoc({
         {
             title: "OBJ from a file or text",
             description:
-                "loadOBJFromURL on a shipped file, textured with Texture.fromURL: its labels read upright because OBJ's v-up texture coordinates are flipped on load. Or parseOBJ on an inline string: positions and faces only, so the parser computes flat normals and tangents.",
+                "loadObj on a shipped file, textured with Texture.fromUrl: its labels read upright because OBJ's v-up texture coordinates are flipped on load. Or parseObj on an inline string: positions and faces only, so the parser computes flat normals and tangents.",
             component: ObjFromText,
             layout: "full",
         },
@@ -80,15 +80,9 @@ export const doc = defineDoc({
                     name: "entity.name / find(name) / findAll(name) / traverse(fn)",
                     type: "string / Entity | null / Entity[] / void",
                 },
-                {name: "parseGLB(buffer)", type: "GLBPrimitive[]", description: "One entry per mesh primitive."},
                 {
-                    name: "loadGLBFromURL(url)",
-                    type: "Promise<GLBPrimitive[]>",
-                    description: "fetch + parseGLB; throws on HTTP errors.",
-                },
-                {
-                    name: "createPBRMaterialFromGltf(device, descriptor, resolveUri?)",
-                    type: "Promise<PBRMaterial>",
+                    name: "createPbrMaterialFromGltf(device, descriptor, resolveUri?)",
+                    type: "Promise<PbrMaterial>",
                     description:
                         "Factors and maps from the descriptor: base color, normal (with scale), emissive, metallic-roughness, occlusion (with strength).",
                 },
@@ -96,22 +90,21 @@ export const doc = defineDoc({
                     name: "planGltfMaterial(descriptor)",
                     type: "GltfMaterialPlan",
                     description:
-                        "The same mapping without a GPU: PBRMaterial options and which image goes in which map.",
+                        "The same mapping without a GPU: PbrMaterial options and which image goes in which map.",
                 },
-                {name: "GLBPrimitive", type: "{geometry; material: GltfMaterialDescriptor | null}"},
             ],
         },
         {
             component: "OBJ and STL",
             rows: [
                 {
-                    name: "parseOBJ(text)",
+                    name: "parseObj(text)",
                     type: "Geometry",
                     description: "v, vt, vn, f; polygons fan-triangulated; tangents computed.",
                 },
-                {name: "loadOBJFromURL(url)", type: "Promise<Geometry>"},
-                {name: "parseSTL(buffer)", type: "Geometry", description: "Binary or ASCII; face normals, no UVs."},
-                {name: "loadSTLFromURL(url)", type: "Promise<Geometry>"},
+                {name: "loadObj(url)", type: "Promise<Geometry>"},
+                {name: "parseStl(buffer)", type: "Geometry", description: "Binary or ASCII; face normals, no UVs."},
+                {name: "loadStl(url)", type: "Promise<Geometry>"},
             ],
         },
     ],
@@ -131,11 +124,11 @@ function MaterialsNotes() {
         <section id="materials-from-gltf" className="flex scroll-mt-24 flex-col gap-3">
             <h2 className="font-mono text-xl font-semibold">Materials from glTF</h2>
             <p className="text-sm text-muted-foreground">
-                Parsing needs no GPU, so it can run in a worker or a test. Textures referenced by URI resolve against
-                the model&apos;s folder through <code className="font-mono text-foreground">resolveUri</code>; embedded
-                images decode from the binary chunk or a data URI. loadGltf keeps the node tree (names, translation,
-                rotation, scale); a node whose mesh has one primitive is that Mesh, otherwise it holds one Mesh per
-                primitive. parseGLB instead bakes the default scene&apos;s transforms into flat primitives.
+                planGltfMaterial needs no GPU, so it can run in a worker or a test. Textures referenced by URI resolve
+                against the model&apos;s folder through <code className="font-mono text-foreground">resolveUri</code>;
+                embedded images decode from the binary chunk or a data URI. loadGltf keeps the node tree (names,
+                translation, rotation, scale); a node whose mesh has one primitive is that Mesh, otherwise it holds one
+                Mesh per primitive.
             </p>
             <p className="text-sm text-muted-foreground">
                 The metallic-roughness texture supplies roughness (green) and metallic (blue) only. Occlusion comes from
@@ -426,8 +419,8 @@ export function ObjFromText() {
                 setup={async ({renderer, orbitControls}) => {
                     const folder = `${MODELS_URL}${TEXTURE_COORDINATE_TEST.folder}/`;
                     const [squares, texture] = await Promise.all([
-                        loadOBJFromURL(`${folder}TextureCoordinateTest.obj`),
-                        Texture.fromURL(renderer.device, `${folder}TextureCoordinateTest.png`),
+                        loadObj(`${folder}TextureCoordinateTest.obj`),
+                        Texture.fromUrl(renderer.device, `${folder}TextureCoordinateTest.png`),
                     ]);
                     const scene = new Scene();
                     const palette = paletteBinder(colors);
@@ -446,11 +439,11 @@ export function ObjFromText() {
                         ),
                     );
                     const gem = new Mesh(
-                        parseOBJ(GEM_OBJ),
-                        palette.material(new PBRMaterial({roughness: 0.15, metallic: 0.3}), (c) => c.hues.purple),
+                        parseObj(GEM_OBJ),
+                        palette.material(new PbrMaterial({roughness: 0.15, metallic: 0.3}), (c) => c.hues.purple),
                     );
-                    const labelled = new PBRMaterial({roughness: 0.7}); // white base: the image is the color
-                    labelled.albedoMap = texture;
+                    const labelled = new PbrMaterial({roughness: 0.7}); // white base: the image is the color
+                    labelled.colorMap = texture;
                     const card = new Mesh(squares, labelled);
                     let shown: Mesh | null = null;
 

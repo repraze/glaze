@@ -6,7 +6,7 @@ import {
     DirectionalLight,
     Mesh,
     OrthographicCamera,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
@@ -157,12 +157,12 @@ export function Projection() {
                     scene.add(
                         new Mesh(
                             createPlane({width: 12, height: 12}),
-                            palette.material(new PBRMaterial({roughness: 0.9}), (c) => c.floor),
+                            palette.material(new PbrMaterial({roughness: 0.9}), (c) => c.floor),
                         ),
                     );
                     const pillar = createCube({size: 0.6});
-                    const orange = palette.material(new PBRMaterial({roughness: 0.4}), (c) => c.accent);
-                    const grey = palette.material(new PBRMaterial({roughness: 0.5}), (c) => c.neutral);
+                    const orange = palette.material(new PbrMaterial({roughness: 0.4}), (c) => c.accent);
+                    const grey = palette.material(new PbrMaterial({roughness: 0.5}), (c) => c.neutral);
                     for (let x = -2; x <= 2; x++) {
                         for (let z = -2; z <= 2; z++) {
                             const mesh = new Mesh(pillar, (x + z) % 2 === 0 ? orange : grey);

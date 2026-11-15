@@ -1,8 +1,7 @@
-import {mat3, mat4, type quat, vec3} from "gl-matrix";
+import {mat4, type quat, type vec3} from "gl-matrix";
 
 import {type ColorSpace, linearToSrgb} from "../color";
-import {computeTangents, Geometry} from "../geometry/geometry";
-import {PBRMaterial, type PBRMaterialOptions} from "../material/material";
+import {PbrMaterial, type PbrMaterialOptions} from "../material/material";
 import {Texture, type TextureSampling, type UvTransform} from "../texture";
 
 // ─── GLTF types (minimal subset) ─────────────────────────────────────────────
@@ -269,7 +268,7 @@ function sameSettings(a: GltfTextureSettings | undefined, b: GltfTextureSettings
 
 /**
  * GPU-free material descriptor extracted from a GLTF primitive.
- * Scalar defaults follow the GLTF 2.0 spec. Factors are as stored in the file (linear). {@link parseGLB}
+ * Scalar defaults follow the GLTF 2.0 spec. Factors are as stored in the file (linear). {@link extractMaterial}
  * always fills the optional fields; they are optional so hand-built descriptors stay valid.
  *
  * Texture sources are shared by identity: two slots that reference the same image (the common packed
@@ -307,13 +306,6 @@ export interface GltfMaterialDescriptor {
     alphaCutoff?: number;
     /** Back faces rendered too (default false). */
     doubleSided?: boolean;
-}
-
-/** One mesh primitive returned by {@link parseGLB}. */
-export interface GLBPrimitive {
-    geometry: Geometry;
-    /** Null when the primitive has no material in the GLTF JSON. */
-    material: GltfMaterialDescriptor | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -766,158 +758,13 @@ export function nodeMatrix(node: GltfNode): mat4 {
     );
 }
 
-/** Every (mesh, world matrix) pair of the default scene; every mesh at identity when the file has no scene. */
-function meshInstances(json: GltfJson): {mesh: GltfMesh; matrix: mat4 | null}[] {
-    const nodes = json.nodes ?? [];
-    const roots = json.scenes?.[json.scene ?? 0]?.nodes;
-    if (!roots || nodes.length === 0) {
-        return (json.meshes ?? []).map((mesh) => ({mesh, matrix: null}));
-    }
-    const out: {mesh: GltfMesh; matrix: mat4 | null}[] = [];
-    const visit = (index: number, parent: mat4, depth: number) => {
-        const node = nodes[index];
-        if (!node || depth > 256) {
-            return;
-        }
-        const world = mat4.multiply(mat4.create(), parent, nodeMatrix(node));
-        const mesh = node.mesh !== undefined ? json.meshes?.[node.mesh] : undefined;
-        if (mesh) {
-            out.push({mesh, matrix: isIdentity(world) ? null : world});
-        }
-        for (const child of node.children ?? []) {
-            visit(child, world, depth + 1);
-        }
-    };
-    for (const root of roots) {
-        visit(root, mat4.create(), 0);
-    }
-    return out;
-}
-
-function isIdentity(m: mat4): boolean {
-    return mat4.exactEquals(m, mat4.create());
-}
-
 /**
- * Bake a node's world matrix into vertex data (new arrays: accessor data can be shared between instances).
- * A mirroring matrix flips the triangle winding and the tangent handedness.
- */
-function bakeTransform(
-    matrix: mat4,
-    positions: Float32Array,
-    normals: Float32Array,
-    tangents: Float32Array | null,
-    indices: Uint32Array,
-): {positions: Float32Array; normals: Float32Array; tangents: Float32Array | null; indices: Uint32Array} {
-    const normalMatrix = mat3.normalFromMat4(mat3.create(), matrix) ?? mat3.fromMat4(mat3.create(), matrix);
-    const linear = mat3.fromMat4(mat3.create(), matrix);
-    const mirrored = mat3.determinant(linear) < 0;
-    const v = vec3.create();
-
-    const outPositions = new Float32Array(positions.length);
-    for (let i = 0; i < positions.length; i += 3) {
-        vec3.set(v, positions[i]!, positions[i + 1]!, positions[i + 2]!);
-        vec3.transformMat4(v, v, matrix);
-        outPositions.set(v as Float32Array, i);
-    }
-    const outNormals = new Float32Array(normals.length);
-    for (let i = 0; i < normals.length; i += 3) {
-        vec3.set(v, normals[i]!, normals[i + 1]!, normals[i + 2]!);
-        vec3.normalize(v, vec3.transformMat3(v, v, normalMatrix));
-        outNormals.set(v as Float32Array, i);
-    }
-    let outTangents: Float32Array | null = null;
-    if (tangents) {
-        outTangents = new Float32Array(tangents.length);
-        for (let i = 0; i < tangents.length; i += 4) {
-            vec3.set(v, tangents[i]!, tangents[i + 1]!, tangents[i + 2]!);
-            vec3.normalize(v, vec3.transformMat3(v, v, linear));
-            outTangents.set(v as Float32Array, i);
-            outTangents[i + 3] = mirrored ? -tangents[i + 3]! : tangents[i + 3]!;
-        }
-    }
-    let outIndices = indices;
-    if (mirrored) {
-        outIndices = new Uint32Array(indices.length);
-        for (let i = 0; i + 2 < indices.length; i += 3) {
-            outIndices[i] = indices[i]!;
-            outIndices[i + 1] = indices[i + 2]!;
-            outIndices[i + 2] = indices[i + 1]!;
-        }
-    }
-    return {positions: outPositions, normals: outNormals, tangents: outTangents, indices: outIndices};
-}
-
-// ─── Public API ───────────────────────────────────────────────────────────────
-
-/**
- * Parse a GLB (Binary GLTF 2.0) buffer and return one {@link GLBPrimitive} per
- * mesh primitive, each carrying a {@link Geometry} and an optional
- * {@link GltfMaterialDescriptor}.
- *
- * Primitives come from the default scene's node tree with each node's world transform baked into the
- * vertex data (a file without scenes or nodes yields every mesh untransformed). A mesh used by several
- * nodes appears once per node.
- *
- * Tangents are read from the TANGENT attribute when present, otherwise computed.
- * The material descriptor is `null` when the primitive has no material index.
- */
-export function parseGLB(buffer: ArrayBuffer): GLBPrimitive[] {
-    const {json, buffers} = parseGlbContainer(buffer);
-    const primitives: GLBPrimitive[] = [];
-    const imageCache = new Map<number, GltfTextureSource | null>();
-
-    for (const {mesh, matrix} of meshInstances(json)) {
-        for (const prim of mesh.primitives) {
-            const data = readPrimitive(json, buffers, prim);
-            if (data === null) {
-                continue;
-            }
-            let {positions, normals, tangents, indices} = data;
-            const {uvs} = data;
-
-            if (matrix) {
-                ({positions, normals, tangents, indices} = bakeTransform(
-                    matrix,
-                    positions,
-                    normals,
-                    tangents,
-                    indices,
-                ));
-            }
-
-            tangents ??= computeTangents(positions, normals, uvs, indices, positions.length / 3);
-
-            const geometry = new Geometry({positions, normals, uvs, indices, tangents});
-            const material =
-                prim.material !== undefined ? extractMaterial(json, buffers, prim.material, imageCache) : null;
-
-            primitives.push({geometry, material});
-        }
-    }
-
-    return primitives;
-}
-
-/**
- * Fetch a GLB file from a URL and parse it into {@link GLBPrimitive} instances.
- */
-export async function loadGLBFromURL(url: string): Promise<GLBPrimitive[]> {
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`GLB: failed to fetch '${url}' (${response.status})`);
-    }
-    const buffer = await response.arrayBuffer();
-    return parseGLB(buffer);
-}
-
-/**
- * How a {@link GltfMaterialDescriptor} maps onto a {@link PBRMaterial}: scalar options and which texture source
- * goes in which map. GPU-free; {@link createPBRMaterialFromGltf} loads the textures and applies it.
+ * How a {@link GltfMaterialDescriptor} maps onto a {@link PbrMaterial}: scalar options and which texture source
+ * goes in which map. GPU-free; {@link createPbrMaterialFromGltf} loads the textures and applies it.
  */
 export interface GltfMaterialPlan {
-    options: Required<Omit<PBRMaterialOptions, "shadowSide">>;
-    albedoMap: GltfTextureSource | null;
+    options: Required<Omit<PbrMaterialOptions, "shadowSide">>;
+    colorMap: GltfTextureSource | null;
     normalMap: GltfTextureSource | null;
     emissiveMap: GltfTextureSource | null;
     /** Set when occlusion and metallic-roughness share one image (R=occlusion, G=roughness, B=metallic). */
@@ -931,7 +778,7 @@ export interface GltfMaterialPlan {
     /** Sampling and transform per map that isn't plain (repeat, linear, TEXCOORD_0, untransformed). */
     settings: Partial<
         Record<
-            "albedoMap" | "normalMap" | "emissiveMap" | "ormMap" | "metallicRoughnessMap" | "occlusionMap",
+            "colorMap" | "normalMap" | "emissiveMap" | "ormMap" | "metallicRoughnessMap" | "occlusionMap",
             GltfTextureSettings
         >
     >;
@@ -948,13 +795,13 @@ function sameImage(a: GltfTextureSource, b: GltfTextureSource): boolean {
 }
 
 /**
- * Map a glTF material onto PBRMaterial inputs, per the glTF 2.0 metallic-roughness model:
+ * Map a glTF material onto PbrMaterial inputs, per the glTF 2.0 metallic-roughness model:
  *
  * - base color = baseColorFactor × baseColorTexture; emissive = emissiveFactor × strength × emissiveTexture;
  *   factors are converted from glTF's linear values to sRGB, the space Glaze's colors and textures live in.
  * - roughness = roughnessFactor × texture G, metallic = metallicFactor × texture B (R is never read as occlusion).
  * - occlusion comes from occlusionTexture.R scaled by its strength, and is 1 without one. When occlusion and
- *   metallic-roughness are the same image, it becomes one packed {@link PBRMaterial.ormMap}.
+ *   metallic-roughness are the same image, it becomes one packed {@link PbrMaterial.ormMap}.
  * - normal map XY is scaled by normalTexture.scale.
  *
  * - each texture keeps its sampler's wrap and filter modes, its UV set (TEXCOORD_0 or 1) and its
@@ -992,14 +839,14 @@ export function planGltfMaterial(descriptor: GltfMaterialDescriptor): GltfMateri
     };
 
     const maps = {
-        albedoMap: usable("baseColor", descriptor.baseColorTexture),
+        colorMap: usable("baseColor", descriptor.baseColorTexture),
         normalMap: usable("normal", descriptor.normalTexture),
         emissiveMap: usable("emissive", descriptor.emissiveTexture),
         ormMap: packed ? occlusion : null,
         metallicRoughnessMap: packed ? null : metallicRoughness,
         occlusionMap: packed ? null : occlusion,
     };
-    keep("albedoMap", ts.baseColor, maps.albedoMap);
+    keep("colorMap", ts.baseColor, maps.colorMap);
     keep("normalMap", ts.normal, maps.normalMap);
     keep("emissiveMap", ts.emissive, maps.emissiveMap);
     keep("ormMap", ts.occlusion, maps.ormMap);
@@ -1030,24 +877,24 @@ export function planGltfMaterial(descriptor: GltfMaterialDescriptor): GltfMateri
 }
 
 /**
- * Build a {@link PBRMaterial} from a {@link GltfMaterialDescriptor} (see {@link planGltfMaterial} for the mapping).
+ * Build a {@link PbrMaterial} from a {@link GltfMaterialDescriptor} (see {@link planGltfMaterial} for the mapping).
  *
  * @param device      WebGPU device used to create textures.
- * @param descriptor  Material descriptor from {@link parseGLB}.
+ * @param descriptor  Material descriptor from {@link extractMaterial}.
  * @param resolveUri  Maps a relative URI (from the GLTF file) to a URL that can
  *                    be fetched. Defaults to the identity (URI used as-is), which
  *                    works when the GLB is served from the same directory.
  * @param loaded      Texture cache keyed by source; share it between a model's materials.
  */
-export async function createPBRMaterialFromGltf(
+export async function createPbrMaterialFromGltf(
     device: GPUDevice,
     descriptor: GltfMaterialDescriptor,
     resolveUri: (uri: string) => string = (uri) => uri,
     /** Shares GPU textures across materials: pass the same map for every material of a model. */
     loaded: Map<GltfTextureSource, Promise<Texture>> = new Map(),
-): Promise<PBRMaterial> {
+): Promise<PbrMaterial> {
     const plan = planGltfMaterial(descriptor);
-    const mat = new PBRMaterial(plan.options);
+    const mat = new PbrMaterial(plan.options);
 
     // one GPU texture per image, however many slots (and materials) use it
     // color maps are sRGB, the rest data (that only changes how mip levels average: both views exist)
@@ -1062,7 +909,7 @@ export async function createPBRMaterialFromGltf(
         if (!texture) {
             texture =
                 source.type === "uri"
-                    ? Texture.fromURL(device, resolveUri(source.uri), {colorSpace})
+                    ? Texture.fromUrl(device, resolveUri(source.uri), {colorSpace})
                     : Texture.fromBlob(device, new Blob([source.data], {type: source.mimeType}), {colorSpace});
             loaded.set(source, texture);
         }
@@ -1078,9 +925,9 @@ export async function createPBRMaterialFromGltf(
         const s = plan.settings[slot];
         return t !== null && s !== undefined ? t.withSettings(s) : t;
     };
-    [mat.albedoMap, mat.normalMap, mat.emissiveMap, mat.ormMap, mat.metallicRoughnessMap, mat.occlusionMap] =
+    [mat.colorMap, mat.normalMap, mat.emissiveMap, mat.ormMap, mat.metallicRoughnessMap, mat.occlusionMap] =
         await Promise.all([
-            withSettings("albedoMap", loadTex(plan.albedoMap, "srgb")),
+            withSettings("colorMap", loadTex(plan.colorMap, "srgb")),
             withSettings("normalMap", loadTex(plan.normalMap)),
             withSettings("emissiveMap", loadTex(plan.emissiveMap, "srgb")),
             withSettings("ormMap", loadTex(plan.ormMap)),

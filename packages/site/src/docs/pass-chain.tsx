@@ -10,7 +10,7 @@ import {
     type PassInputSlot,
     type PassOutputSlot,
     type PassRenderContext,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     RenderGraph,
     Scene,
@@ -232,12 +232,12 @@ export function ChainDemo() {
                     scene.activeCamera = camera;
                     const sun = new DirectionalLight({direction: [-0.5, -1, -0.4], intensity: 4, castShadow: true});
                     scene.add(sun);
-                    const ground = new PBRMaterial({roughness: 0.9});
+                    const ground = new PbrMaterial({roughness: 0.9});
                     scene.add(new Mesh(createPlane({width: 10, height: 10}), ground));
                     const paints = [
-                        new PBRMaterial({roughness: 0.4}),
-                        new PBRMaterial({roughness: 0.4}),
-                        new PBRMaterial({roughness: 0.4}),
+                        new PbrMaterial({roughness: 0.4}),
+                        new PbrMaterial({roughness: 0.4}),
+                        new PbrMaterial({roughness: 0.4}),
                     ];
                     const balls = paints.map((paint, i) => {
                         const ball = new Mesh(createIcosphere({radius: 0.6, subdivisions: 1, flat: true}), paint);

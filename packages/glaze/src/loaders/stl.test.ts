@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {describe, test} from "node:test";
 
-import {parseSTL} from "./stl";
+import {parseStl} from "./stl";
 
 /** One binary facet with a zero normal, optionally padded past its declared size. */
 function binary(padding = 0, header = ""): ArrayBuffer {
@@ -14,15 +14,15 @@ function binary(padding = 0, header = ""): ArrayBuffer {
     return buffer;
 }
 
-describe("parseSTL", () => {
+describe("parseStl", () => {
     test("binary: a zero facet normal becomes the triangle's", () => {
-        const g = parseSTL(binary());
+        const g = parseStl(binary());
         assert.deepEqual(Array.from(g.normals.subarray(0, 3)), [0, 0, 1]);
     });
 
     test("binary with padding, and with a header that starts with 'solid'", () => {
-        assert.equal(parseSTL(binary(16)).positions.length, 9);
-        assert.equal(parseSTL(binary(0, "solid exported by a CAD tool")).positions.length, 9);
+        assert.equal(parseStl(binary(16)).positions.length, 9);
+        assert.equal(parseStl(binary(0, "solid exported by a CAD tool")).positions.length, 9);
     });
 
     test("ASCII", () => {
@@ -35,7 +35,7 @@ vertex 1 0 0
 endloop
 endfacet
 endsolid t`;
-        const g = parseSTL(new TextEncoder().encode(text).buffer as ArrayBuffer);
+        const g = parseStl(new TextEncoder().encode(text).buffer as ArrayBuffer);
         assert.equal(g.positions.length, 9);
         assert.deepEqual(Array.from(g.normals.subarray(0, 3)), [0, 0, -1]);
     });

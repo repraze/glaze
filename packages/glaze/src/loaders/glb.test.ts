@@ -2,7 +2,34 @@ import assert from "node:assert/strict";
 import {describe, test} from "node:test";
 
 import {linearToSrgb} from "../color";
-import {type GltfMaterialDescriptor, parseGLB, planGltfMaterial} from "./glb";
+import {Geometry} from "../geometry/geometry";
+import {
+    extractMaterial,
+    type GltfMaterialDescriptor,
+    type GltfTextureSource,
+    parseGlbContainer,
+    planGltfMaterial,
+    readPrimitive,
+} from "./glb";
+
+/** Every primitive of every mesh, untransformed: the GLB container, primitive and material readers together. */
+function readGlb(buffer: ArrayBuffer) {
+    const {json, buffers} = parseGlbContainer(buffer);
+    const images = new Map<number, GltfTextureSource | null>();
+    const out: {geometry: Geometry; material: GltfMaterialDescriptor | null}[] = [];
+    for (const mesh of json.meshes ?? []) {
+        for (const prim of mesh.primitives) {
+            const data = readPrimitive(json, buffers, prim);
+            if (data !== null) {
+                const material =
+                    prim.material !== undefined ? extractMaterial(json, buffers, prim.material, images) : null;
+                const {positions, normals, uvs, indices} = data;
+                out.push({geometry: new Geometry({positions, normals, uvs, indices}), material});
+            }
+        }
+    }
+    return out;
+}
 
 // ─── Test binary builder ──────────────────────────────────────────────────────
 
@@ -55,11 +82,11 @@ function makeTriangleGLB(extra?: object): ArrayBuffer {
 
 // ─── Header validation ────────────────────────────────────────────────────────
 
-describe("parseGLB — header", () => {
+describe("GLB reading — header", () => {
     test("throws on wrong magic number", () => {
         const buf = new ArrayBuffer(12);
         new DataView(buf).setUint32(0, 0xdeadbeef, true);
-        assert.throws(() => parseGLB(buf), /invalid magic/i);
+        assert.throws(() => readGlb(buf), /invalid magic/i);
     });
 
     test("throws on unsupported version", () => {
@@ -67,7 +94,7 @@ describe("parseGLB — header", () => {
         const dv = new DataView(buf);
         dv.setUint32(0, 0x46546c67, true); // correct magic
         dv.setUint32(4, 1, true); // version 1 (unsupported)
-        assert.throws(() => parseGLB(buf), /unsupported version/i);
+        assert.throws(() => readGlb(buf), /unsupported version/i);
     });
 
     test("throws when first chunk is not JSON", () => {
@@ -78,21 +105,21 @@ describe("parseGLB — header", () => {
         dv.setUint32(8, 20, true);
         dv.setUint32(12, 0, true);
         dv.setUint32(16, 0x004e4942, true); // BIN type instead of JSON
-        assert.throws(() => parseGLB(buf), /not JSON/i);
+        assert.throws(() => readGlb(buf), /not JSON/i);
     });
 });
 
 // ─── Geometry extraction ──────────────────────────────────────────────────────
 
-describe("parseGLB — geometry", () => {
+describe("GLB reading — geometry", () => {
     test("returns empty array for GLB with no meshes", () => {
         const glb = makeGLB({accessors: [], bufferViews: [], buffers: [], meshes: []});
-        assert.deepEqual(parseGLB(glb), []);
+        assert.deepEqual(readGlb(glb), []);
     });
 
     test("parses triangle positions correctly", () => {
         const glb = makeTriangleGLB();
-        const result = parseGLB(glb);
+        const result = readGlb(glb);
         assert.equal(result.length, 1);
         const geo = result[0]!.geometry;
         assert.equal(geo.vertexCount, 3);
@@ -103,7 +130,7 @@ describe("parseGLB — geometry", () => {
 
     test("generates sequential indices when no index buffer", () => {
         const glb = makeTriangleGLB();
-        const geo = parseGLB(glb)[0]!.geometry;
+        const geo = readGlb(glb)[0]!.geometry;
         assert.equal(geo.indexCount, 3);
         assert.deepEqual(Array.from(geo.indices), [0, 1, 2]);
     });
@@ -127,14 +154,14 @@ describe("parseGLB — geometry", () => {
             buffers: [{byteLength: bin.byteLength}],
             meshes: [{primitives: [{attributes: {POSITION: 1}, indices: 0}]}],
         };
-        const geo = parseGLB(makeGLB(json, bin))[0]!.geometry;
+        const geo = readGlb(makeGLB(json, bin))[0]!.geometry;
         assert.equal(geo.indexCount, 3);
         // no NORMAL: flat shaded, so each corner is its own vertex, read in the index buffer's order
         assert.deepEqual(Array.from(geo.positions), [0, 0, 1, 0, 1, 0, 1, 0, 0]);
     });
 
     test("computes flat normals when the NORMAL accessor is absent (glTF spec)", () => {
-        const geo = parseGLB(makeTriangleGLB())[0]!.geometry;
+        const geo = readGlb(makeTriangleGLB())[0]!.geometry;
         assert.equal(geo.normals.length, 9); // 3 vertices × 3
         for (let i = 0; i < 9; i += 3) {
             assert.ok(Math.abs(Math.hypot(geo.normals[i]!, geo.normals[i + 1]!, geo.normals[i + 2]!) - 1) < 1e-6);
@@ -142,7 +169,7 @@ describe("parseGLB — geometry", () => {
     });
 
     test("fills zero UVs when TEXCOORD_0 absent", () => {
-        const geo = parseGLB(makeTriangleGLB())[0]!.geometry;
+        const geo = readGlb(makeTriangleGLB())[0]!.geometry;
         assert.equal(geo.uvs.length, 6); // 3 vertices × 2
         assert.ok(geo.uvs.every((v) => v === 0));
     });
@@ -151,14 +178,14 @@ describe("parseGLB — geometry", () => {
         const glb = makeTriangleGLB({
             meshes: [{primitives: [{attributes: {POSITION: 0}, mode: 1 /* LINES */}]}],
         });
-        assert.deepEqual(parseGLB(glb), []);
+        assert.deepEqual(readGlb(glb), []);
     });
 
     test("skips primitive when POSITION attribute missing", () => {
         const glb = makeGLB({
             meshes: [{primitives: [{attributes: {}}]}],
         });
-        assert.deepEqual(parseGLB(glb), []);
+        assert.deepEqual(readGlb(glb), []);
     });
 
     test("handles multiple primitives in one mesh", () => {
@@ -169,16 +196,16 @@ describe("parseGLB — geometry", () => {
             buffers: [{byteLength: 36}],
             meshes: [{primitives: [{attributes: {POSITION: 0}}, {attributes: {POSITION: 0}}]}],
         };
-        const result = parseGLB(makeGLB(json, new Uint8Array(positions.buffer)));
+        const result = readGlb(makeGLB(json, new Uint8Array(positions.buffer)));
         assert.equal(result.length, 2);
     });
 });
 
 // ─── Material extraction ──────────────────────────────────────────────────────
 
-describe("parseGLB — material", () => {
+describe("GLB reading — material", () => {
     test("material is null when primitive has no material index", () => {
-        const result = parseGLB(makeTriangleGLB());
+        const result = readGlb(makeTriangleGLB());
         assert.equal(result[0]!.material, null);
     });
 
@@ -188,7 +215,7 @@ describe("parseGLB — material", () => {
         const glb = makeTriangleGLB({
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
-        const mat = parseGLB(glb)[0]!.material;
+        const mat = readGlb(glb)[0]!.material;
         assert.notEqual(mat, null);
         assert.deepEqual(mat!.baseColorFactor, [1, 1, 1, 1]);
     });
@@ -198,7 +225,7 @@ describe("parseGLB — material", () => {
             materials: [{name: "duck-skin"}],
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
-        assert.equal(parseGLB(glb)[0]!.material!.name, "duck-skin");
+        assert.equal(readGlb(glb)[0]!.material!.name, "duck-skin");
     });
 
     test("extracts baseColorFactor", () => {
@@ -206,7 +233,7 @@ describe("parseGLB — material", () => {
             materials: [{pbrMetallicRoughness: {baseColorFactor: [0.8, 0.6, 0.4, 1.0]}}],
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
-        assert.deepEqual(parseGLB(glb)[0]!.material!.baseColorFactor, [0.8, 0.6, 0.4, 1.0]);
+        assert.deepEqual(readGlb(glb)[0]!.material!.baseColorFactor, [0.8, 0.6, 0.4, 1.0]);
     });
 
     test("extracts metallicFactor and roughnessFactor", () => {
@@ -214,7 +241,7 @@ describe("parseGLB — material", () => {
             materials: [{pbrMetallicRoughness: {metallicFactor: 0.0, roughnessFactor: 0.7}}],
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
-        const mat = parseGLB(glb)[0]!.material!;
+        const mat = readGlb(glb)[0]!.material!;
         assert.equal(mat.metallicFactor, 0.0);
         assert.equal(mat.roughnessFactor, 0.7);
     });
@@ -224,7 +251,7 @@ describe("parseGLB — material", () => {
             materials: [{}],
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
-        const mat = parseGLB(glb)[0]!.material!;
+        const mat = readGlb(glb)[0]!.material!;
         assert.equal(mat.metallicFactor, 1.0);
         assert.equal(mat.roughnessFactor, 1.0);
     });
@@ -234,7 +261,7 @@ describe("parseGLB — material", () => {
             materials: [{emissiveFactor: [0.1, 0.2, 0.3]}],
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
-        assert.deepEqual(parseGLB(glb)[0]!.material!.emissiveFactor, [0.1, 0.2, 0.3]);
+        assert.deepEqual(readGlb(glb)[0]!.material!.emissiveFactor, [0.1, 0.2, 0.3]);
     });
 
     test("defaults emissiveFactor to [0,0,0]", () => {
@@ -242,7 +269,7 @@ describe("parseGLB — material", () => {
             materials: [{}],
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
-        assert.deepEqual(parseGLB(glb)[0]!.material!.emissiveFactor, [0, 0, 0]);
+        assert.deepEqual(readGlb(glb)[0]!.material!.emissiveFactor, [0, 0, 0]);
     });
 
     test("null texture slots when no textures referenced", () => {
@@ -250,7 +277,7 @@ describe("parseGLB — material", () => {
             materials: [{}],
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
-        const mat = parseGLB(glb)[0]!.material!;
+        const mat = readGlb(glb)[0]!.material!;
         assert.equal(mat.baseColorTexture, null);
         assert.equal(mat.normalTexture, null);
         assert.equal(mat.emissiveTexture, null);
@@ -265,7 +292,7 @@ describe("parseGLB — material", () => {
             materials: [{pbrMetallicRoughness: {baseColorTexture: {index: 0}}}],
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         });
-        const src = parseGLB(glb)[0]!.material!.baseColorTexture;
+        const src = readGlb(glb)[0]!.material!.baseColorTexture;
         assert.ok(src !== null);
         assert.equal(src!.type, "uri");
         assert.equal((src as {type: "uri"; uri: string}).uri, "DuckCM.png");
@@ -291,7 +318,7 @@ describe("parseGLB — material", () => {
             buffers: [{byteLength: bin.byteLength}],
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         };
-        const src = parseGLB(makeGLB(json, bin))[0]!.material!.baseColorTexture!;
+        const src = readGlb(makeGLB(json, bin))[0]!.material!.baseColorTexture!;
         assert.equal(src.type, "embedded");
         const emb = src as {type: "embedded"; data: Uint8Array; mimeType: string};
         assert.equal(emb.mimeType, "image/png");
@@ -319,7 +346,7 @@ describe("parseGLB — material", () => {
             meshes: [{primitives: [{attributes: {POSITION: 0}, material: 0}]}],
         };
         const glbBuf = makeGLB(json, bin);
-        const src = parseGLB(glbBuf)[0]!.material!.baseColorTexture!;
+        const src = readGlb(glbBuf)[0]!.material!.baseColorTexture!;
         const emb = src as {type: "embedded"; data: Uint8Array; mimeType: string};
         // data should not share an ArrayBuffer with glbBuf
         assert.notEqual(emb.data.buffer, glbBuf);
@@ -330,7 +357,7 @@ describe("parseGLB — material", () => {
 
 /** A triangle whose material uses `material`, over three URI images a.png, b.png, c.png. */
 function materialGLB(material: object, textures: object[] = [{source: 0}, {source: 1}, {source: 2}]) {
-    return parseGLB(
+    return readGlb(
         makeTriangleGLB({
             images: [{uri: "a.png"}, {uri: "b.png"}, {uri: "c.png"}],
             textures,
@@ -342,7 +369,7 @@ function materialGLB(material: object, textures: object[] = [{source: 0}, {sourc
 
 const uri = (source: unknown) => (source as {uri: string} | null)?.uri ?? null;
 
-describe("parseGLB — material scalars", () => {
+describe("GLB reading — material scalars", () => {
     test("reads normal scale, occlusion strength and emissive strength", () => {
         const m = materialGLB({
             normalTexture: {index: 0, scale: 0.5},
@@ -451,7 +478,7 @@ describe("planGltfMaterial", () => {
             },
             normalTexture: descriptor.baseColorTexture,
         });
-        assert.deepEqual(plan.settings.albedoMap?.transform, {
+        assert.deepEqual(plan.settings.colorMap?.transform, {
             uvSet: 0,
             offset: [0.5, 0],
             scale: [2, 2],
@@ -498,7 +525,7 @@ describe("planGltfMaterial", () => {
             doubleSided: false,
         });
         for (const map of [
-            plan.albedoMap,
+            plan.colorMap,
             plan.normalMap,
             plan.emissiveMap,
             plan.ormMap,
@@ -525,44 +552,5 @@ describe("planGltfMaterial", () => {
         const plan = planGltfMaterial(descriptor);
         assert.equal(uri(plan.metallicRoughnessMap), "mr.png");
         assert.equal(plan.options.normalScale, 1);
-    });
-});
-
-// ─── Node transforms ──────────────────────────────────────────────────────────
-
-describe("parseGLB — nodes", () => {
-    const withNodes = (nodes: object[], scenes: object[] = [{nodes: [0]}]) =>
-        parseGLB(makeTriangleGLB({nodes, scenes, scene: 0}));
-
-    test("bakes a node's translation and scale into positions", () => {
-        const geo = withNodes([{mesh: 0, translation: [10, 0, 0], scale: [2, 2, 2]}])[0]!.geometry;
-        assert.deepEqual(Array.from(geo.positions), [12, 0, 0, 10, 2, 0, 10, 0, 2]);
-    });
-
-    test("composes parent and child transforms", () => {
-        const geo = withNodes([
-            {children: [1], translation: [0, 5, 0]},
-            {mesh: 0, translation: [1, 0, 0]},
-        ])[0]!.geometry;
-        assert.deepEqual(Array.from(geo.positions.slice(0, 3)), [2, 5, 0]);
-    });
-
-    test("one primitive per node that uses a mesh", () => {
-        const result = withNodes([{children: [1, 2]}, {mesh: 0}, {mesh: 0, translation: [0, 0, 3]}]);
-        assert.equal(result.length, 2);
-        assert.equal(result[1]!.geometry.positions[2], 3);
-        // the untransformed instance is unaffected by the transformed one
-        assert.equal(result[0]!.geometry.positions[2], 0);
-    });
-
-    test("a mirroring transform reverses the winding", () => {
-        const geo = withNodes([{mesh: 0, scale: [-1, 1, 1]}])[0]!.geometry;
-        assert.deepEqual(Array.from(geo.indices), [0, 2, 1]);
-        assert.equal(geo.positions[0], -1);
-    });
-
-    test("nodes outside the default scene are not drawn", () => {
-        const result = withNodes([{mesh: 0}, {mesh: 0}], [{nodes: [1]}]);
-        assert.equal(result.length, 1);
     });
 });

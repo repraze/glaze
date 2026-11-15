@@ -4,7 +4,7 @@ import {describe, test} from "node:test";
 import {mat4, vec3, vec4} from "gl-matrix";
 
 import {Geometry} from "../geometry/geometry";
-import {PBRMaterial} from "../material/material";
+import {PbrMaterial} from "../material/material";
 import {Entity} from "./entity";
 import {Skin, SkinnedMesh} from "./skin";
 
@@ -27,7 +27,7 @@ function setup() {
         joints: new Uint16Array([1, 0, 0, 0]),
         weights: new Float32Array([1, 0, 0, 0]),
     });
-    const mesh = new SkinnedMesh(geometry, new PBRMaterial(), new Skin([root, tip], ibm));
+    const mesh = new SkinnedMesh(geometry, new PbrMaterial(), new Skin([root, tip], ibm));
     return {root, tip, mesh};
 }
 

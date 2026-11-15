@@ -5,7 +5,7 @@ import {
     DirectionalLight,
     Mesh,
     oscillate,
-    PBRMaterial,
+    PbrMaterial,
     PerspectiveCamera,
     PointLight,
     RenderGraph,
@@ -160,7 +160,7 @@ function MaterialsSlide() {
             {pick: (c: typeof colors.current) => c.neutral, roughness: 0.45, metallic: 1},
         ];
         const balls = looks.map(({pick, ...look}, i) => {
-            const ball = new Mesh(sphere, palette.material(new PBRMaterial(look), pick));
+            const ball = new Mesh(sphere, palette.material(new PbrMaterial(look), pick));
             ball.position[0] = (i - 1) * 1.45;
             scene.add(ball);
             return ball;
@@ -197,13 +197,13 @@ function LightsSlide() {
         scene.activeCamera = camera;
         const floor = new Mesh(
             makeShape("plane"),
-            palette.material(new PBRMaterial({roughness: 0.9}), (c) => c.floor),
+            palette.material(new PbrMaterial({roughness: 0.9}), (c) => c.floor),
         );
         floor.scale[0] = floor.scale[2] = 6;
         scene.add(floor);
         const torus = new Mesh(
             makeShape("torus"),
-            palette.material(new PBRMaterial({roughness: 0.25, metallic: 0.6}), (c) => c.neutral),
+            palette.material(new PbrMaterial({roughness: 0.25, metallic: 0.6}), (c) => c.neutral),
         );
         torus.position[1] = 1.1;
         torus.setEuler(Math.PI / 2, 0, 0);
@@ -258,7 +258,7 @@ function GBufferSlide() {
         const mesh = new Mesh(
             makeShape("torus"),
             palette.emissive(
-                palette.material(new PBRMaterial({roughness: 0.4, metallic: 0.3}), (c) => c.accent),
+                palette.material(new PbrMaterial({roughness: 0.4, metallic: 0.3}), (c) => c.accent),
                 (c) => c.hues.purple,
                 0.4,
             ),
@@ -310,7 +310,7 @@ function DitherSlide() {
         scene.add(palette.light(new DirectionalLight({direction: [-0.6, -0.3, 0.5], intensity: 1.6}), (c) => c.fill));
         const mesh = new Mesh(
             makeShape("icosphere", true),
-            palette.material(new PBRMaterial({roughness: 0.4}), (c) => c.accent),
+            palette.material(new PbrMaterial({roughness: 0.4}), (c) => c.accent),
         );
         scene.add(mesh);
         const post = new ShaderPass({
