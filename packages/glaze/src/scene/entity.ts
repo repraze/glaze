@@ -11,9 +11,6 @@ export function layer(n: number): number {
     return (1 << n) >>> 0;
 }
 
-export type Vec3 = [number, number, number];
-export type Quat = [number, number, number, number];
-
 const WORLD_UP: ReadonlyVec3 = vec3.fromValues(0, 1, 0);
 const ORIGIN: ReadonlyVec3 = vec3.fromValues(0, 0, 0);
 // Stand-in up vectors when the look direction is parallel to `up`.

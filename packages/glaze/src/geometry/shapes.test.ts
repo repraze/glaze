@@ -117,7 +117,7 @@ describe("computeTangents", () => {
         const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
         const uvs = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
         const indices = new Uint32Array([0, 2, 1, 1, 2, 3]);
-        const t = computeTangents(positions, normals, uvs, indices, 4);
+        const t = computeTangents({positions, normals, uvs, indices});
         for (let i = 0; i < 4; i++) {
             assert.deepEqual(Array.from(t.slice(i * 4, i * 4 + 3)), [1, 0, 0], "tangent along +u = +x");
             // cross((0,0,1), (1,0,0)) = (0,1,0): with w = +1 the bitangent is +y, the image's top
@@ -130,7 +130,7 @@ describe("computeTangents", () => {
         const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
         const uvs = new Float32Array([1, 0, 0, 0, 1, 1, 0, 1]);
         const indices = new Uint32Array([0, 2, 1, 1, 2, 3]);
-        const t = computeTangents(positions, normals, uvs, indices, 4);
+        const t = computeTangents({positions, normals, uvs, indices});
         assert.equal(t[0], -1); // tangent along +u = -x
         assert.equal(t[3], -1); // cross(N, T) = -y, so w = -1 keeps the bitangent at +y
     });
@@ -160,7 +160,7 @@ describe("computeTangents across a mirrored UV seam", () => {
         const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
         const uvs = new Float32Array([0, 1, 0, 0, 1, 1, 1, 1]);
         const indices = new Uint32Array([0, 2, 1, 0, 1, 3]);
-        const t = computeTangents(positions, normals, uvs, indices, 4);
+        const t = computeTangents({positions, normals, uvs, indices});
         for (const v of [0, 1]) {
             assert.ok(Math.abs(Math.hypot(t[v * 4]!, t[v * 4 + 1]!, t[v * 4 + 2]!) - 1) < 1e-5, `vertex ${v}`);
         }

@@ -55,13 +55,19 @@ export const doc = defineDoc({
         {
             component: "TextureUniform",
             rows: [
-                {name: "filter", type: '"nearest" | "linear"', default: '"nearest"', description: "Sampler filtering."},
+                {
+                    name: "new TextureUniform(texture?, {filter?})",
+                    type: "TextureUniform",
+                    description: "A texture bound by name in an EffectPass, with its own sampler.",
+                },
                 {
                     name: "texture",
-                    type: "GPUTexture | null",
+                    type: "Texture | GPUTexture | null",
                     default: "null",
-                    description: "Set after loading; the pass skips drawing until every texture is set.",
+                    description:
+                        "Set after loading; the pass skips drawing until every texture is set. A Texture comes back by itself after a device loss.",
                 },
+                {name: "filter", type: "FilterMode", default: '"nearest"', description: "Sampler filtering."},
             ],
         },
         {
@@ -83,13 +89,13 @@ export const doc = defineDoc({
                 },
                 {
                     name: "clearColor",
-                    type: "GPUColorDict",
-                    default: "{0, 0, 0, 0}",
+                    type: "ColorRgba",
+                    default: "[0, 0, 0, 0]",
                     description: "Cleared before drawing.",
                 },
                 {
                     name: "inputFilter",
-                    type: '"linear" | "nearest"',
+                    type: "FilterMode",
                     default: '"linear"',
                     description: "Filter for graph inputs.",
                 },
@@ -214,7 +220,7 @@ export function ExternalTexture() {
                                     return vec4<f32>(mix(effect.base, effect.tint, v), 1.0);
                                 }`,
                             uniforms: {tint, base},
-                            textures: {pattern: new TextureUniform(mode, texture)},
+                            textures: {pattern: new TextureUniform(texture, {filter: mode})},
                         });
                     const passes = {nearest: passFor("nearest"), linear: passFor("linear")};
                     return () => {

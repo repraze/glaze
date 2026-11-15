@@ -763,7 +763,21 @@ export function nodeMatrix(node: GltfNode): mat4 {
  * goes in which map. GPU-free; {@link createPbrMaterialFromGltf} loads the textures and applies it.
  */
 export interface GltfMaterialPlan {
-    options: Required<Omit<PbrMaterialOptions, "shadowSide">>;
+    /** The scalar options (the maps are the fields below; glTF has no height map or shadow side). */
+    options: Required<
+        Omit<
+            PbrMaterialOptions,
+            | "shadowSide"
+            | "colorMap"
+            | "normalMap"
+            | "emissiveMap"
+            | "ormMap"
+            | "metallicRoughnessMap"
+            | "occlusionMap"
+            | "heightMap"
+            | "heightScale"
+        >
+    >;
     colorMap: GltfTextureSource | null;
     normalMap: GltfTextureSource | null;
     emissiveMap: GltfTextureSource | null;

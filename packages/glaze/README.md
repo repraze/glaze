@@ -136,7 +136,7 @@ Injected into every fragment shader (don't redeclare them):
 ```ts
 const tint = Uniform.vec3([1, 0.57, 0.26]);
 const speed = Uniform.f32(1);
-const pattern = new TextureUniform("nearest"); // set pattern.texture = gpuTexture once loaded
+const pattern = new TextureUniform(null, {filter: "nearest"}); // set pattern.texture once loaded
 
 const pass = new EffectPass({
     fragmentShader: `… effect.tint, effect.speed, textureSample(pattern, pattern_sampler, uv) …`,
@@ -200,7 +200,7 @@ updated by the scene pass each frame. The active camera need not be in the tree.
 (`colors`: linear RGBA vertex colors; `uvs1`: a second UV set). After editing its arrays in place, call
 `geometry.markChanged()`: bounds are recomputed and the data is uploaded again. Factories that all take `flat?: boolean` (per-face
 normals): `createCube`, `createPlane`, `createQuad`, `createSphere`, `createIcosphere`, `createCylinder`,
-`createCone`, `createTorus`. `computeTangents(positions, normals, uvs, indices, vertexCount)` for normal maps.
+`createCone`, `createTorus`. `computeTangents({positions, normals, uvs, indices})` for normal maps.
 
 UVs follow glTF everywhere (shapes, GLB, OBJ, which flips `vt`): (0, 0) is the image's top-left, its first row,
 and v runs down. Normal maps are glTF's too: tangent-space +y points to the top of the image.
@@ -208,8 +208,12 @@ and v runs down. Normal maps are glTF's too: tangent-space +y points to the top 
 ## Materials and textures
 
 ```ts
-const gold = new PbrMaterial({color: colorRgb("#f0c040"), roughness: 0.1, metallic: 1, emissive: [0, 0, 0, 0]});
-gold.colorMap = Texture.fromPixels(renderer.device, rgbaBytes, 256, 256); // also normalMap, emissiveMap, heightMap
+const gold = new PbrMaterial({
+    color: colorRgb("#f0c040"),
+    roughness: 0.1,
+    metallic: 1,
+    colorMap: Texture.fromPixels(renderer.device, rgbaBytes, 256, 256), // also normalMap, emissiveMap, heightMap...
+});
 gold.roughness = 0.3; // no upload call: the pass compares each material's uniforms once a frame
 ```
 
@@ -218,7 +222,7 @@ gold.roughness = 0.3; // no upload call: the pass compares each material's unifo
 the GPU (`{mipmaps: false}` to skip). `texture.sampling` (`wrapU`/`wrapV`: repeat, clamp, mirror; `magFilter` /
 `minFilter`: linear, nearest; `anisotropy`, default 8) and `texture.transform` (`offset`, `scale`, `rotation`, `uvSet`
 0 or 1) can change any time; `texture.withSettings({sampling?, transform?})` shares the pixels with other settings.
-`texture.update(device, data)` / `updateFrom(device, imageOrCanvasOrVideo)` replace the pixels (same size) and
+`texture.update(data)` / `updateFrom(imageOrCanvasOrVideo)` replace the pixels (same size) and
 regenerate the mips. A texture keeps its source (bytes, the image file, its last `updateFrom` source) and is made
 again on a new device after a device loss (`texture.restore(device)`, which passes call on their own).
 `Texture.fromGpuTexture(device, gpuTexture)` wraps a texture of your own. An EffectPass `TextureUniform` takes a
@@ -339,13 +343,13 @@ transformed box), `getCenter`, `getSize`, `containsPoint`, `intersectsBox`, `isE
 `fromNdc`, `transformMat4` (keeps the direction unnormalised, so local-space `t` equals world-space `t`),
 `intersectBox`, `intersectSphere`, `intersectTriangle(r, a, b, c, cullBackFace?, barycentric?)`.
 `geometry.boundingBox` / `boundingSphere` are cached; call `geometry.markChanged()` after editing positions.
-`sphere.inFrustum(center, radius, viewProjection)` culls; `decompose(m, position, rotation, scale)` and `isMirrored(m)`
+`sphere.inFrustum(sphere, viewProjection)` culls; `decompose(m, position, rotation, scale)` and `isMirrored(m)`
 handle mirroring matrices.
 
 ## Helpers
 
-`lerp`, `clamp`, `smoothstep`, `smootherstep`, `easeIn`, `easeOut`, `easeInOut`, `pingpong`, `oscillate`,
-`bounce` for animation.
+`lerp`, `clamp`, `smoothstep(edge0, edge1, x)` and `smootherstep` (as in WGSL), `easeIn` / `easeOut` / `easeInOut`
+(`t`, optional exponent), `pingpong`, `oscillate`, `bounce` for animation.
 
 ## Develop
 

@@ -1,4 +1,4 @@
-import {vec3} from "gl-matrix";
+import {type ReadonlyVec3, vec3} from "gl-matrix";
 
 import type {ColorRgb} from "../color";
 import {ALL_LAYERS, Entity} from "./entity";
@@ -90,7 +90,7 @@ export abstract class Light extends Entity {
 
 export interface DirectionalLightOptions extends Omit<LightOptions, "shadow"> {
     /** Initial direction the light travels (sets the rotation through `lookAlong`). */
-    direction?: [number, number, number];
+    direction?: ReadonlyVec3;
     /** Shadow settings to override; the rest keep their defaults. */
     shadow?: Partial<DirectionalShadowSettings>;
 }
@@ -151,7 +151,7 @@ export class PointLight extends Light {
 
 export interface SpotLightOptions extends LightOptions {
     /** Initial direction the cone points (sets the rotation through `lookAlong`). */
-    direction?: [number, number, number];
+    direction?: ReadonlyVec3;
     /** Half-angle (radians) of the fully lit core. Kept between 0 and `outerAngle`. */
     innerAngle?: number;
     /** Half-angle (radians) where the light reaches 0. Kept below 89°. */

@@ -10,15 +10,15 @@ export function clamp(v: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, v));
 }
 
-/** Smooth Hermite interpolation — clamps t to [0, 1]. */
-export function smoothstep(t: number): number {
-    const c = clamp(t, 0, 1);
+/** 0 at `edge0`, 1 at `edge1`, a smooth Hermite curve between (as WGSL's and GLSL's smoothstep). Clamped. */
+export function smoothstep(edge0: number, edge1: number, x: number): number {
+    const c = clamp((x - edge0) / (edge1 - edge0), 0, 1);
     return c * c * (3 - 2 * c);
 }
 
-/** Smoother Hermite with zero first and second derivatives at endpoints — clamps t to [0, 1]. */
-export function smootherstep(t: number): number {
-    const c = clamp(t, 0, 1);
+/** As {@link smoothstep}, with zero first and second derivatives at both edges (Perlin's). Clamped. */
+export function smootherstep(edge0: number, edge1: number, x: number): number {
+    const c = clamp((x - edge0) / (edge1 - edge0), 0, 1);
     return c * c * c * (c * (c * 6 - 15) + 10);
 }
 
@@ -32,10 +32,10 @@ export function easeOut(t: number, exp = 2): number {
     return 1 - Math.pow(1 - clamp(t, 0, 1), exp);
 }
 
-/** Cubic ease-in-out. Clamps t to [0, 1]. */
-export function easeInOut(t: number): number {
+/** Power ease-in then ease-out, meeting at 0.5. exp defaults to 3 (cubic). Clamps t to [0, 1]. */
+export function easeInOut(t: number, exp = 3): number {
     const c = clamp(t, 0, 1);
-    return c < 0.5 ? 4 * c * c * c : 1 - Math.pow(-2 * c + 2, 3) / 2;
+    return c < 0.5 ? Math.pow(2 * c, exp) / 2 : 1 - Math.pow(2 - 2 * c, exp) / 2;
 }
 
 // ── Oscillation ───────────────────────────────────────────────────────────────

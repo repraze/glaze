@@ -169,15 +169,7 @@ async function buildModel(
                           ...(data.morphTargets.length > 0 ? {morphTargets: data.morphTargets} : {}),
                           ...(data.colors ? {colors: data.colors} : {}),
                           ...(data.uvs1 ? {uvs1: data.uvs1} : {}),
-                          tangents:
-                              data.tangents ??
-                              computeTangents(
-                                  data.positions,
-                                  data.normals,
-                                  data.uvs,
-                                  data.indices,
-                                  data.positions.length / 3,
-                              ),
+                          tangents: data.tangents ?? computeTangents(data),
                       }),
             );
         }

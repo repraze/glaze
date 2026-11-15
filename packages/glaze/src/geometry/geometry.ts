@@ -240,13 +240,13 @@ export class Geometry {
  * top of the image (-v, since v runs down). A normal map's green channel is therefore "up" in the image
  * (the OpenGL / glTF normal-map convention), and w is +1 for an unmirrored mapping.
  */
-export function computeTangents(
-    positions: Float32Array,
-    normals: Float32Array,
-    uvs: Float32Array,
-    indices: Uint32Array,
-    vertexCount: number,
-): Float32Array {
+export function computeTangents({
+    positions,
+    normals,
+    uvs,
+    indices,
+}: Pick<GeometryOptions, "positions" | "normals" | "uvs" | "indices">): Float32Array {
+    const vertexCount = positions.length / 3;
     // Sums per vertex, kept apart by the UV winding's handedness: where mirrored UVs meet, a shared vertex gets
     // triangles of both, whose tangents would cancel. It takes the side that dominates instead.
     const tan1 = new Float32Array(vertexCount * 3);

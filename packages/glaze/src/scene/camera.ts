@@ -5,12 +5,15 @@ import {ALL_LAYERS, Entity} from "./entity";
 
 const tmpWorld = mat4.create();
 const tmpInvProj = mat4.create();
+const tmpProj = mat4.create();
+const tmpView = mat4.create();
 
 export abstract class Camera extends Entity {
     /** The layers this camera renders: a mesh shows when `mesh.layers & camera.visibleLayers` is non-zero. */
     visibleLayers: number = ALL_LAYERS;
 
-    abstract getProjectionMatrix(aspect: number): mat4;
+    /** The projection for a viewport `aspect` (width / height) wide, into `out` (a new matrix if omitted). */
+    abstract getProjectionMatrix(aspect: number, out?: mat4): mat4;
 
     /**
      * The world-space ray through a point in normalised device coordinates (x right, y up, -1..1), from the near
@@ -18,23 +21,21 @@ export abstract class Camera extends Entity {
      */
     getRay(out: Ray, ndcX: number, ndcY: number, aspect: number): Ray {
         // inverse(P · V) = world · inverse(P), and V is the inverse of the world matrix.
-        const invProj = mat4.invert(tmpInvProj, this.getProjectionMatrix(aspect));
+        const invProj = mat4.invert(tmpInvProj, this.getProjectionMatrix(aspect, tmpProj));
         if (invProj === null) {
             return ray.copy(out, {origin: this.getWorldPosition(), direction: this.getWorldDirection()});
         }
         return ray.fromNdc(out, mat4.multiply(tmpInvProj, this.computeWorldMatrix(tmpWorld), invProj), ndcX, ndcY);
     }
 
-    getViewMatrix(): mat4 {
-        const view = mat4.create();
-        mat4.invert(view, this.worldMatrix);
-        return view;
+    /** World to camera space, from the last scene traversal's world matrix, into `out` (new if omitted). */
+    getViewMatrix(out: mat4 = mat4.create()): mat4 {
+        return mat4.invert(out, this.worldMatrix) ?? mat4.identity(out);
     }
 
-    getViewProjectionMatrix(aspect: number): mat4 {
-        const vp = mat4.create();
-        mat4.multiply(vp, this.getProjectionMatrix(aspect), this.getViewMatrix());
-        return vp;
+    /** Projection · view, into `out` (new if omitted). */
+    getViewProjectionMatrix(aspect: number, out: mat4 = mat4.create()): mat4 {
+        return mat4.multiply(out, this.getProjectionMatrix(aspect, tmpProj), this.getViewMatrix(tmpView));
     }
 }
 
@@ -56,10 +57,8 @@ export class PerspectiveCamera extends Camera {
         this.far = far;
     }
 
-    getProjectionMatrix(aspect: number): mat4 {
-        const proj = mat4.create();
-        mat4.perspectiveZO(proj, this.fov, aspect, this.near, this.far); // WebGPU clip depth is 0..1
-        return proj;
+    getProjectionMatrix(aspect: number, out: mat4 = mat4.create()): mat4 {
+        return mat4.perspectiveZO(out, this.fov, aspect, this.near, this.far); // WebGPU clip depth is 0..1
     }
 }
 
@@ -70,6 +69,8 @@ export interface OrthographicCameraOptions {
     bottom?: number;
     near?: number;
     far?: number;
+    /** Magnification (default 1): see {@link OrthographicCamera.zoom}. */
+    zoom?: number;
 }
 
 export class OrthographicCamera extends Camera {
@@ -80,10 +81,19 @@ export class OrthographicCamera extends Camera {
     near: number;
     far: number;
     /** Magnification: the box's extents are divided by it (2 shows half as much). Default 1. */
-    zoom = 1;
+    zoom: number;
 
-    constructor({left = -1, right = 1, top = 1, bottom = -1, near = 0.1, far = 1000}: OrthographicCameraOptions = {}) {
+    constructor({
+        left = -1,
+        right = 1,
+        top = 1,
+        bottom = -1,
+        near = 0.1,
+        far = 1000,
+        zoom = 1,
+    }: OrthographicCameraOptions = {}) {
         super();
+        this.zoom = zoom;
         this.left = left;
         this.right = right;
         this.top = top;
@@ -92,15 +102,13 @@ export class OrthographicCamera extends Camera {
         this.far = far;
     }
 
-    getProjectionMatrix(_aspect: number): mat4 {
-        const proj = mat4.create();
+    getProjectionMatrix(_aspect: number, out: mat4 = mat4.create()): mat4 {
         // zoom scales the box about its center
         const z = this.zoom > 0 ? this.zoom : 1;
         const cx = (this.left + this.right) / 2;
         const cy = (this.top + this.bottom) / 2;
         const hw = (this.right - this.left) / (2 * z);
         const hh = (this.top - this.bottom) / (2 * z);
-        mat4.orthoZO(proj, cx - hw, cx + hw, cy - hh, cy + hh, this.near, this.far);
-        return proj;
+        return mat4.orthoZO(out, cx - hw, cx + hw, cy - hh, cy + hh, this.near, this.far);
     }
 }

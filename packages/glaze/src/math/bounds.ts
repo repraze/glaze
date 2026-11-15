@@ -225,8 +225,9 @@ export const sphere = {
      * False when the sphere is entirely outside the frustum of a view-projection matrix (WebGPU's 0..1 depth):
      * for culling. Conservative near the frustum's corners (it may say true for a sphere just outside one).
      */
-    inFrustum(center: ReadonlyVec3, radius: number, m: ReadonlyMat4): boolean {
-        const x = center[0], y = center[1], z = center[2]; // prettier-ignore
+    inFrustum(s: ReadonlySphere, m: ReadonlyMat4): boolean {
+        const x = s.center[0], y = s.center[1], z = s.center[2]; // prettier-ignore
+        const radius = s.radius;
         // rows of m (column-major): r0 = (m0 m4 m8 m12), ...; planes after Gribb & Hartmann
         for (let p = 0; p < 6; p++) {
             const row = p >> 1; // 0: x, 1: y, 2: z

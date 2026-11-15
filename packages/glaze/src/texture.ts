@@ -153,11 +153,12 @@ export class Texture {
      * the mip levels. Every material and pass using the texture sees the new pixels on the next frame. The data is
      * kept (as half floats for HDR) to make the texture again after a device loss.
      */
-    update(device: GPUDevice, data: Uint8Array | Float32Array): this {
+    update(data: Uint8Array | Float32Array): this {
         const source: PixelSource = this.hdr
             ? {kind: "half", data: halfPixels(data, this.width * this.height * 4)}
             : {kind: "bytes", data: data as Uint8Array};
-        this.write(device, source);
+        // on a lost device this writes nothing, but the data is kept: restore makes the texture from it
+        this.write(this.pixels.device, source);
         return this;
     }
 
@@ -166,11 +167,11 @@ export class Texture {
      * frame), and regenerates the mip levels. After a device loss, the texture is made again from this source as
      * it is then (an ImageBitmap must stay open for that).
      */
-    updateFrom(device: GPUDevice, source: GPUCopyExternalImageSource): this {
+    updateFrom(source: GPUCopyExternalImageSource): this {
         if (this.hdr) {
             throw new Error("Texture.updateFrom: HDR textures take float data (update)");
         }
-        this.write(device, {kind: "image", source});
+        this.write(this.pixels.device, {kind: "image", source});
         return this;
     }
 

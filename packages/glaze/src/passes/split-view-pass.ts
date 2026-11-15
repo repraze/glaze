@@ -49,8 +49,10 @@ export interface ViewportRect {
     x: number;
     /** Top edge, 0 = canvas top, 1 = canvas bottom. */
     y: number;
-    w: number;
-    h: number;
+    /** Width, as a fraction of the canvas width. */
+    width: number;
+    /** Height, as a fraction of the canvas height. */
+    height: number;
 }
 
 export interface SplitViewSlot {
@@ -173,8 +175,8 @@ export class SplitViewPass extends Pass {
 
             const x = Math.floor(slot.rect.x * cw);
             const y = Math.floor(slot.rect.y * ch);
-            const w = Math.max(1, Math.floor(slot.rect.w * cw));
-            const h = Math.max(1, Math.floor(slot.rect.h * ch));
+            const w = Math.max(1, Math.floor(slot.rect.width * cw));
+            const h = Math.max(1, Math.floor(slot.rect.height * ch));
 
             pass.setPipeline(slot.colorSpace === "linear-srgb" ? this.encodePipeline : this.pipeline);
             pass.setViewport(x, y, w, h, 0, 1);

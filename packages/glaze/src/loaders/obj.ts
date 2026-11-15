@@ -130,7 +130,7 @@ export function parseObj(text: string): Geometry {
     const normals = new Float32Array(outNormals);
     const uvs = new Float32Array(outUvs);
     const indices = new Uint32Array(outIndices);
-    const tangents = computeTangents(positions, normals, uvs, indices, positions.length / 3);
+    const tangents = computeTangents({positions, normals, uvs, indices});
 
     return new Geometry({positions, normals, uvs, indices, tangents});
 }

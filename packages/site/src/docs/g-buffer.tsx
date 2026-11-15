@@ -86,7 +86,7 @@ export const doc = defineDoc({
                 },
                 {
                     name: "rect",
-                    type: "{x, y, w, h}",
+                    type: "{x, y, width, height}",
                     description: "Normalised 0-1, from the top-left corner (Unity's Camera.rect convention).",
                 },
             ],
@@ -169,10 +169,14 @@ export function Viewer() {
                     const split = new SplitViewPass({
                         slots: [
                             // albedo and emissive are light (encoded for the screen), normals and material data
-                            {input: "albedo", rect: {x: 0, y: 0, w: 0.5, h: 0.5}, colorSpace: "linear-srgb"},
-                            {input: "normal", rect: {x: 0.5, y: 0, w: 0.5, h: 0.5}},
-                            {input: "material", rect: {x: 0, y: 0.5, w: 0.5, h: 0.5}},
-                            {input: "emissive", rect: {x: 0.5, y: 0.5, w: 0.5, h: 0.5}, colorSpace: "linear-srgb"},
+                            {input: "albedo", rect: {x: 0, y: 0, width: 0.5, height: 0.5}, colorSpace: "linear-srgb"},
+                            {input: "normal", rect: {x: 0.5, y: 0, width: 0.5, height: 0.5}},
+                            {input: "material", rect: {x: 0, y: 0.5, width: 0.5, height: 0.5}},
+                            {
+                                input: "emissive",
+                                rect: {x: 0.5, y: 0.5, width: 0.5, height: 0.5},
+                                colorSpace: "linear-srgb",
+                            },
                         ],
                     });
                     const graph = new RenderGraph();

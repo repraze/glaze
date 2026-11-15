@@ -66,12 +66,12 @@ export const doc = defineDoc({
             component: "Camera",
             rows: [
                 {
-                    name: "getProjectionMatrix(aspect)",
+                    name: "getProjectionMatrix(aspect, out?)",
                     type: "mat4",
-                    description: "Aspect is width / height of the output.",
+                    description: "Aspect is width / height of the output. Into out, or a new matrix.",
                 },
-                {name: "getViewMatrix()", type: "mat4", description: "Inverse of the world matrix."},
-                {name: "getViewProjectionMatrix(aspect)", type: "mat4"},
+                {name: "getViewMatrix(out?)", type: "mat4", description: "Inverse of the world matrix."},
+                {name: "getViewProjectionMatrix(aspect, out?)", type: "mat4"},
                 {
                     name: "getRay(out, ndcX, ndcY, aspect)",
                     type: "Ray",

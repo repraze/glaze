@@ -1,8 +1,9 @@
-import {COLOR_WGSL} from "../color";
+import {COLOR_WGSL, type ColorRgba} from "../color";
 import type {PassInputSlot, PassOutputSlot, PassOutputSpec, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
-import {Texture} from "../texture";
+import {type FilterMode, Texture} from "../texture";
 import type {TextureUniform, Uniform} from "../uniform";
+import type {ShaderPassInputSlot} from "./shader-pass";
 
 // ─── WGSL boilerplate ─────────────────────────────────────────────────────────
 
@@ -40,11 +41,6 @@ const GLOBALS_BUFFER_SIZE = 16;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface EffectPassInputSlot {
-    name: string;
-    depth?: boolean;
-}
-
 export interface EffectPassOptions<Out extends string = string> {
     /**
      * Only the @fragment fn fs_main(in: QuadInput).
@@ -59,7 +55,7 @@ export interface EffectPassOptions<Out extends string = string> {
      * Render-graph input textures wired via graph.addPass(pass, {name: handle}).
      * Auto-declares: inputSampler + named texture bindings. Access as {name} / inputSampler.
      */
-    inputs?: EffectPassInputSlot[];
+    inputs?: ShaderPassInputSlot[];
     /**
      * Named per-frame uniforms — auto-generates EffectUniform struct. Access in shader as effect.{key}.
      * Update by setting uniform.value each frame.
@@ -71,12 +67,12 @@ export interface EffectPassOptions<Out extends string = string> {
      */
     textures?: Record<string, TextureUniform>;
     /** Clear color (default: transparent 0,0,0,0). */
-    clearColor?: {r: number; g: number; b: number; a: number};
+    clearColor?: ColorRgba;
     /**
      * Sampler filter mode for render-graph inputs (default: "linear").
      * Use "nearest" when input texels map 1:1 to output cells (e.g., a per-cell noise texture).
      */
-    inputFilter?: "linear" | "nearest";
+    inputFilter?: FilterMode;
 }
 
 // ─── EffectPass ───────────────────────────────────────────────────────────────
@@ -86,7 +82,7 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
     readonly outputSlots: PassOutputSlot<Out>[];
 
     private readonly opts: EffectPassOptions;
-    private readonly inputDefs: EffectPassInputSlot[];
+    private readonly inputDefs: ShaderPassInputSlot[];
     private readonly uniformEntries: [string, Uniform][];
     private readonly textureEntries: [string, TextureUniform][];
 
@@ -471,7 +467,8 @@ export class EffectPass<const Out extends string = string> extends Pass<Out> {
     // ─── Output helpers ────────────────────────────────────────────────────────
 
     private resolveOutputTargets(ctx: PassRenderContext): GPURenderPassColorAttachment[] {
-        const clearValue = this.opts.clearColor ?? {r: 0, g: 0, b: 0, a: 0};
+        const c = this.opts.clearColor ?? [0, 0, 0, 0];
+        const clearValue = {r: c[0], g: c[1], b: c[2], a: c[3]};
         const views =
             this.outputSlots.length > 0
                 ? this.outputSlots.map((s) => {

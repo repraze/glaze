@@ -1,6 +1,7 @@
 import {COLOR_WGSL, type ColorSpace} from "../color";
 import type {PassInputSlot, PassOutputSlot, PassRenderContext} from "../pass";
 import {Pass} from "../pass";
+import type {FilterMode} from "../texture";
 
 // ─── WGSL ─────────────────────────────────────────────────────────────────────
 
@@ -170,7 +171,7 @@ export interface BlitPassOptions {
      * `"nearest"` (default) keeps hard pixels; `"linear"` blends them, and averages a supersampled input
      * (renderScale 2) down to the canvas.
      */
-    filter?: "nearest" | "linear";
+    filter?: FilterMode;
     /**
      * Adds a little noise after the sRGB encode (default true), so smooth gradients don't band in 8 bits. Only when
      * this pass does the encode (not for an `"srgb"` input or an `-srgb` canvas).
@@ -199,7 +200,7 @@ export class BlitPass extends Pass {
     exposure: number;
     /** See {@link BlitPassOptions.dither}. */
     dither: boolean;
-    private readonly filter: "nearest" | "linear";
+    private readonly filter: FilterMode;
     private lastDither: boolean | null = null;
 
     private readonly inputName: string;

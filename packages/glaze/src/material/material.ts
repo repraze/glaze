@@ -32,6 +32,22 @@ export interface PbrMaterialOptions {
     doubleSided?: boolean;
     /** Which faces cast shadows; default: "both" when doubleSided, else "front". See {@link ShadowSide}. */
     shadowSide?: ShadowSide;
+    /** Base color texture (sRGB), multiplied by {@link color}. */
+    colorMap?: Texture | null;
+    /** Tangent-space normal map. */
+    normalMap?: Texture | null;
+    /** Emission texture (sRGB), multiplied by {@link emissive}. */
+    emissiveMap?: Texture | null;
+    /** Packed occlusion (R), roughness (G), metallic (B). */
+    ormMap?: Texture | null;
+    /** Roughness (G) and metallic (B), glTF's layout; overrides ormMap's G and B. */
+    metallicRoughnessMap?: Texture | null;
+    /** Ambient occlusion (R); overrides ormMap's R. */
+    occlusionMap?: Texture | null;
+    /** Height (R) for parallax occlusion mapping. */
+    heightMap?: Texture | null;
+    /** Parallax depth of the height map in UV units; 0 (default) turns it off. */
+    heightScale?: number;
 }
 
 /**
@@ -161,28 +177,28 @@ export class PbrMaterial extends Material {
     emissive: ColorRgb;
     emissiveIntensity: number;
 
-    colorMap: Texture | null = null;
-    normalMap: Texture | null = null;
-    emissiveMap: Texture | null = null;
+    colorMap: Texture | null;
+    normalMap: Texture | null;
+    emissiveMap: Texture | null;
     /**
      * Packed occlusion-roughness-metallic: R=occlusion, G=roughness, B=metallic (glTF's packed layout).
      * Supplies both the occlusion and the metallic-roughness inputs unless a separate map overrides one.
      */
-    ormMap: Texture | null = null;
+    ormMap: Texture | null;
     /**
      * glTF metallic-roughness map: G=roughness, B=metallic (R is ignored). Overrides {@link ormMap}'s G and B.
      * Multiplied by {@link roughness} and {@link metallic}.
      */
-    metallicRoughnessMap: Texture | null = null;
+    metallicRoughnessMap: Texture | null;
     /** Ambient occlusion in R (1 = unoccluded). Overrides {@link ormMap}'s R; scaled by {@link occlusionStrength}. */
-    occlusionMap: Texture | null = null;
+    occlusionMap: Texture | null;
     /** 0 ignores the occlusion map, 1 applies it fully. */
     occlusionStrength: number;
     /** Scales the normal map's tangent-space XY; 1 = as authored, 0 = flat. */
     normalScale: number;
     /** R=height (0=low, 1=high). Used for parallax occlusion mapping when heightScale > 0. */
-    heightMap: Texture | null = null;
-    heightScale: number = 0;
+    heightMap: Texture | null;
+    heightScale: number;
     /** Multiplies the color map's alpha. */
     opacity: number;
     alphaMode: AlphaMode;
@@ -204,6 +220,14 @@ export class PbrMaterial extends Material {
         alphaCutoff = 0.5,
         doubleSided = false,
         shadowSide,
+        colorMap = null,
+        normalMap = null,
+        emissiveMap = null,
+        ormMap = null,
+        metallicRoughnessMap = null,
+        occlusionMap = null,
+        heightMap = null,
+        heightScale = 0,
     }: PbrMaterialOptions = {}) {
         super();
         this.color = color;
@@ -218,6 +242,14 @@ export class PbrMaterial extends Material {
         this.alphaCutoff = alphaCutoff;
         this.doubleSided = doubleSided;
         this.shadowSide = shadowSide ?? null;
+        this.colorMap = colorMap;
+        this.normalMap = normalMap;
+        this.emissiveMap = emissiveMap;
+        this.ormMap = ormMap;
+        this.metallicRoughnessMap = metallicRoughnessMap;
+        this.occlusionMap = occlusionMap;
+        this.heightMap = heightMap;
+        this.heightScale = heightScale;
     }
 
     /** The texture sampled for roughness (G) and metallic (B): {@link metallicRoughnessMap}, else {@link ormMap}. */

@@ -1,4 +1,4 @@
-import type {Texture} from "./texture";
+import type {FilterMode, Texture} from "./texture";
 
 // ─── Uniform interface (type namespace) ───────────────────────────────────────
 
@@ -184,9 +184,10 @@ export const Uniform = {
  */
 export class TextureUniform {
     texture: GPUTexture | Texture | null;
-    filter: "nearest" | "linear";
-    constructor(filter: "nearest" | "linear" = "nearest", texture: GPUTexture | Texture | null = null) {
-        this.filter = filter;
+    /** How it is sampled (default "nearest"). */
+    filter: FilterMode;
+    constructor(texture: GPUTexture | Texture | null = null, {filter = "nearest"}: {filter?: FilterMode} = {}) {
         this.texture = texture;
+        this.filter = filter;
     }
 }

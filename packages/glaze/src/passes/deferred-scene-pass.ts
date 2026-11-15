@@ -1382,6 +1382,9 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     // Lighting uniforms
     private lightingBuffer!: GPUBuffer;
     private readonly currentInvVP = mat4.create();
+    private readonly tmpView = mat4.create();
+    private readonly tmpProj = mat4.create();
+    private readonly tmpCamPos = vec3.create();
 
     // Default material texture resources
     private defaultWhiteTex!: GPUTexture;
@@ -1451,6 +1454,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     private meshesCreated = 0;
     private readonly normalMatrix = mat4.create();
     private readonly tmpCenter = vec3.create();
+    /** The bounds of the mesh being culled: its center is tmpCenter. */
+    private readonly tmpSphere = {center: this.tmpCenter, radius: 0};
     private readonly tmpEye = vec3.create();
     private readonly cameraData = new Float32Array(208 / 4);
     private readonly warnedLights = new Set<string>();
@@ -1582,8 +1587,8 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 continue;
             }
             // outside the camera's view: not drawn (its shadow still is, by the shadow passes' own culling)
-            const radius = this.meshBounds(mesh, this.tmpCenter);
-            if (culling && mesh.frustumCulled && !sphere.inFrustum(this.tmpCenter, radius, this.viewProjection)) {
+            this.tmpSphere.radius = this.meshBounds(mesh, this.tmpCenter);
+            if (culling && mesh.frustumCulled && !sphere.inFrustum(this.tmpSphere, this.viewProjection)) {
                 continue;
             }
             if (mesh.material.alphaMode === "blend") {
@@ -2381,7 +2386,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 // only casters this face (a frustum out to the light's range) can see
                 const face = faceMatrices[f]!;
                 drawShadowMeshes(pass, this.pointShadowFaceBGs[slot]!, pointLights[i]!.shadow.layers, (caster) =>
-                    sphere.inFrustum(caster.center, caster.radius, face),
+                    sphere.inFrustum(caster, face),
                 );
                 pass.end();
             }
@@ -2404,7 +2409,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
                 },
             });
             drawShadowMeshes(pass, this.spotShadowLightBGs[i]!, spotLights[i]!.shadow.layers, (caster) =>
-                sphere.inFrustum(caster.center, caster.radius, lsMatrix),
+                sphere.inFrustum(caster, lsMatrix),
             );
             pass.end();
         }
@@ -2579,13 +2584,12 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
 
     private uploadCameraUniforms(camera: Camera | null, width: number, height: number): void {
         const aspect = width / height;
-        const viewMatrix = camera ? camera.getViewMatrix() : mat4.create();
-        const projMatrix = camera ? camera.getProjectionMatrix(aspect) : mat4.create();
-        const vpMatrix = camera ? camera.getViewProjectionMatrix(aspect) : mat4.create();
-        const camPos = camera ? mat4.getTranslation(vec3.create(), camera.worldMatrix) : vec3.create();
+        const viewMatrix = camera ? camera.getViewMatrix(this.tmpView) : mat4.identity(this.tmpView);
+        const projMatrix = camera ? camera.getProjectionMatrix(aspect, this.tmpProj) : mat4.identity(this.tmpProj);
+        const vpMatrix = mat4.multiply(this.viewProjection, projMatrix, viewMatrix);
+        const camPos = camera ? mat4.getTranslation(this.tmpCamPos, camera.worldMatrix) : vec3.zero(this.tmpCamPos);
 
         mat4.invert(this.currentInvVP, vpMatrix);
-        mat4.copy(this.viewProjection, vpMatrix);
 
         const data = this.cameraData;
         data.set(viewMatrix, 0);

@@ -42,21 +42,26 @@ describe("clamp", () => {
 // ── smoothstep ────────────────────────────────────────────────────────────────
 
 describe("smoothstep", () => {
-    test("returns 0 at t=0", () => assert.equal(smoothstep(0), 0));
-    test("returns 1 at t=1", () => assert.equal(smoothstep(1), 1));
-    test("returns 0.5 at t=0.5", () => assert.equal(smoothstep(0.5), 0.5));
-    test("clamps below 0", () => assert.equal(smoothstep(-1), 0));
-    test("clamps above 1", () => assert.equal(smoothstep(2), 1));
+    test("returns 0 at t=0", () => assert.equal(smoothstep(0, 1, 0), 0));
+    test("returns 1 at t=1", () => assert.equal(smoothstep(0, 1, 1), 1));
+    test("returns 0.5 at t=0.5", () => assert.equal(smoothstep(0, 1, 0.5), 0.5));
+    test("maps its edges like WGSL's smoothstep", () => {
+        assert.equal(smoothstep(2, 4, 3), 0.5);
+        assert.equal(smoothstep(2, 4, 1), 0);
+        assert.equal(smoothstep(4, 2, 3.5), smoothstep(0, 1, 0.25)); // reversed edges run backwards
+    });
+    test("clamps below 0", () => assert.equal(smoothstep(0, 1, -1), 0));
+    test("clamps above 1", () => assert.equal(smoothstep(0, 1, 2), 1));
     test("is monotonically increasing", () => {
         for (let i = 0; i < 99; i++) {
-            const a = smoothstep(i / 100);
-            const b = smoothstep((i + 1) / 100);
+            const a = smoothstep(0, 1, i / 100);
+            const b = smoothstep(0, 1, (i + 1) / 100);
             assert.ok(b >= a, `not monotonic at ${i}/100`);
         }
     });
     test("has zero derivative at endpoints (S-curve)", () => {
-        const d0 = (smoothstep(1e-5) - smoothstep(0)) / 1e-5;
-        const d1 = (smoothstep(1) - smoothstep(1 - 1e-5)) / 1e-5;
+        const d0 = (smoothstep(0, 1, 1e-5) - smoothstep(0, 1, 0)) / 1e-5;
+        const d1 = (smoothstep(0, 1, 1) - smoothstep(0, 1, 1 - 1e-5)) / 1e-5;
         assert.ok(near(d0, 0, 1e-3), `derivative near 0 should be ~0, got ${d0}`);
         assert.ok(near(d1, 0, 1e-3), `derivative near 1 should be ~0, got ${d1}`);
     });
@@ -65,15 +70,15 @@ describe("smoothstep", () => {
 // ── smootherstep ──────────────────────────────────────────────────────────────
 
 describe("smootherstep", () => {
-    test("returns 0 at t=0", () => assert.equal(smootherstep(0), 0));
-    test("returns 1 at t=1", () => assert.equal(smootherstep(1), 1));
-    test("returns 0.5 at t=0.5", () => assert.equal(smootherstep(0.5), 0.5));
-    test("clamps below 0", () => assert.equal(smootherstep(-1), 0));
-    test("clamps above 1", () => assert.equal(smootherstep(2), 1));
+    test("returns 0 at t=0", () => assert.equal(smootherstep(0, 1, 0), 0));
+    test("returns 1 at t=1", () => assert.equal(smootherstep(0, 1, 1), 1));
+    test("returns 0.5 at t=0.5", () => assert.equal(smootherstep(0, 1, 0.5), 0.5));
+    test("clamps below 0", () => assert.equal(smootherstep(0, 1, -1), 0));
+    test("clamps above 1", () => assert.equal(smootherstep(0, 1, 2), 1));
     test("is monotonically increasing", () => {
         for (let i = 0; i < 99; i++) {
-            const a = smootherstep(i / 100);
-            const b = smootherstep((i + 1) / 100);
+            const a = smootherstep(0, 1, i / 100);
+            const b = smootherstep(0, 1, (i + 1) / 100);
             assert.ok(b >= a, `not monotonic at ${i}/100`);
         }
     });
@@ -110,6 +115,7 @@ describe("easeOut", () => {
 // ── easeInOut ─────────────────────────────────────────────────────────────────
 
 describe("easeInOut", () => {
+    test("takes an exponent: 2 is quadratic", () => assert.ok(Math.abs(easeInOut(0.25, 2) - 0.125) < 1e-12));
     test("returns 0 at t=0", () => assert.equal(easeInOut(0), 0));
     test("returns 1 at t=1", () => assert.equal(easeInOut(1), 1));
     test("returns 0.5 at t=0.5 (symmetric)", () => assert.ok(near(easeInOut(0.5), 0.5)));

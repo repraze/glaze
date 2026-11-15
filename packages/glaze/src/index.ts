@@ -69,7 +69,7 @@ export type {BlitPassOptions, ToneMapping} from "./passes/blit-pass";
 export {BlitPass} from "./passes/blit-pass";
 export type {DeferredSceneOutput, DeferredScenePassOptions} from "./passes/deferred-scene-pass";
 export {DeferredScenePass} from "./passes/deferred-scene-pass";
-export type {EffectPassInputSlot, EffectPassOptions} from "./passes/effect-pass";
+export type {EffectPassOptions} from "./passes/effect-pass";
 export {EffectPass} from "./passes/effect-pass";
 export type {ShaderPassInputSlot, ShaderPassOptions} from "./passes/shader-pass";
 export {ShaderPass} from "./passes/shader-pass";

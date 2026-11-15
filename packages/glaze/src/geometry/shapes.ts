@@ -20,7 +20,7 @@ function toGeometry(raw: RawGeometry): Geometry {
     const normals = new Float32Array(raw.normals);
     const uvs = new Float32Array(raw.uvs);
     const indices = new Uint32Array(raw.indices);
-    const tangents = computeTangents(positions, normals, uvs, indices, positions.length / 3);
+    const tangents = computeTangents({positions, normals, uvs, indices});
     return new Geometry({positions, normals, uvs, indices, tangents});
 }
 

@@ -107,7 +107,7 @@ export const doc = defineDoc({
                         "After editing the arrays in place: bounds are recomputed and renderers upload the data again.",
                 },
                 {
-                    name: "computeTangents(positions, normals, uvs, indices, vertexCount)",
+                    name: "computeTangents({positions, normals, uvs, indices})",
                     type: "Float32Array",
                     description: "Builds tangents (the OBJ loader does it for you).",
                 },
@@ -129,7 +129,7 @@ function Notes() {
 
 const geometry = new Geometry({positions, normals, uvs, indices});
 // with a normal map, give it tangents
-const tangents = computeTangents(positions, normals, uvs, indices, positions.length / 3);
+const tangents = computeTangents({positions, normals, uvs, indices});
 const mapped = new Geometry({positions, normals, uvs, indices, tangents});`}
             />
         </section>

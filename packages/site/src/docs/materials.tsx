@@ -124,6 +124,11 @@ export const doc = defineDoc({
         {
             component: "PbrMaterial",
             rows: [
+                {
+                    name: "new PbrMaterial(options?)",
+                    type: "PbrMaterial",
+                    description: "Every field below can be given in the options too, maps included.",
+                },
                 {name: "colorMap", type: "Texture | null", default: "null", description: "sRGB-looking base color."},
                 {
                     name: "normalMap",
