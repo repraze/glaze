@@ -282,7 +282,7 @@ export function Clockwork() {
                                 direction: [-0.4, -0.9, -0.5],
                                 intensity: 3,
                                 castShadow: true,
-                                shadow: {softness: 2},
+                                shadow: {angularSize: 2},
                             }),
                             (c) => c.key,
                         ),

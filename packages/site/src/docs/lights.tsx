@@ -73,11 +73,17 @@ export const doc = defineDoc({
                 },
                 {name: "enabled", type: "boolean", default: "true", description: "From Entity: off removes the light."},
                 {
-                    name: "shadow.softness",
+                    name: "shadow.angularSize",
                     type: "number",
-                    default: "0.05 (point, spot) · 1 (sun)",
+                    default: "1",
                     description:
-                        "The light's size: its radius in world units, or the sun's angular diameter in degrees. Shadows harden at contact and blur with distance. 0: hard.",
+                        "Directional lights: the sun's angular diameter in degrees (the real sun is about 0.5). Shadows harden at contact and blur with distance. 0: hard.",
+                },
+                {
+                    name: "shadow.radius",
+                    type: "number",
+                    default: "0.05",
+                    description: "Point and spot lights: the light's radius in world units, with the same effect.",
                 },
                 {
                     name: "shadow.samples",
@@ -222,7 +228,7 @@ bulb.add(new Mesh(smallSphere, glowMaterial)); // a marker that follows the ligh
                     code={`const sun = new DirectionalLight({
     direction: [-0.5, -0.6, -0.4],
     castShadow: true,
-    shadow: {cascades: 4, maxDistance: 60, softness: 1.5}, // the rest keep their defaults
+    shadow: {cascades: 4, maxDistance: 60, angularSize: 1.5}, // the rest keep their defaults
 });
 sun.shadow.samples = 8; // any time: cheaper soft edges
 
@@ -490,7 +496,7 @@ export function SunShadows() {
                         palette.apply();
                         const cfg = live.current;
                         sun.shadow.cascades = Number(cfg.cascades);
-                        sun.shadow.softness = cfg.softness;
+                        sun.shadow.angularSize = cfg.softness;
                         sun.shadow.samples = Number(cfg.samples);
                         sun.shadow.maxDistance = cfg.maxDistance;
                         sun.shadow.cascadeBlend = cfg.blend;

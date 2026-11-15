@@ -88,7 +88,10 @@ export type {
     DirectionalLightOptions,
     DirectionalShadowSettings,
     LightOptions,
+    LocalShadowSettings,
+    PointLightOptions,
     ShadowSettings,
+    SpotLightOptions,
 } from "./scene/light";
 export {DirectionalLight, Light, lightReach, PointLight, SpotLight} from "./scene/light";
 export {Mesh} from "./scene/mesh";

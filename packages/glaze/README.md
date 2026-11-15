@@ -190,7 +190,9 @@ the world transform fresh from the parent chain.
 
 Lights take `{color, intensity, castShadow, shadow}`. Point and spot lights fall off with the square of the
 distance (intensity is the light at 1 unit, glTF's candela) and fade to 0 at `range` (default Infinity: where they
-drop below ~1/250). Directional and spot lights shine along their −Z: the `direction`
+drop below ~1/250). Shadow softness follows the light's size: `shadow.angularSize` (degrees) for a
+directional light, `shadow.radius` (world units) for point and spot lights, which also have `shadow.near`.
+Directional and spot lights shine along their −Z: the `direction`
 option sets the initial aim, `lookAt` re-aims them, and a parent's rotation turns them. Children inherit their parent's transform; world matrices are
 updated by the scene pass each frame. The active camera need not be in the tree.
 

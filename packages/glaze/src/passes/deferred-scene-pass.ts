@@ -2695,7 +2695,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
             const sh = l.shadow;
             f32[base + 8] = state.firstLayer;
             f32[base + 9] = state.count;
-            f32[base + 10] = Math.tan(((sh.softness / 2) * Math.PI) / 180); // angular diameter in degrees
+            f32[base + 10] = Math.tan(((sh.angularSize / 2) * Math.PI) / 180); // angular diameter in degrees
             f32[base + 11] = Math.max(1, Math.round(sh.samples));
             f32[base + 12] = sh.normalBias;
             f32[base + 13] = sh.bias;
@@ -2786,7 +2786,7 @@ export class DeferredScenePass extends Pass<DeferredSceneOutput> {
     /** A spot or point light's shadow settings: shadow (radius, samples, near, far) then shadowBias. */
     private packPerspectiveShadow(f32: Float32Array, at: number, light: PointLight | SpotLight): void {
         const sh = light.shadow;
-        f32[at + 0] = sh.softness;
+        f32[at + 0] = sh.radius;
         f32[at + 1] = Math.max(1, Math.round(sh.samples));
         f32[at + 2] = shadowNear(light);
         f32[at + 3] = shadowFar(light);
